@@ -1138,6 +1138,9 @@ impl CodeEditorView {
                         comments.pending_comment = PendingComment::Closed;
                     });
                 });
+                // Reclaim focus so the now-hidden CommentEditor's
+                // RichTextEditorView doesn't hold stale focus.
+                ctx.focus_self();
                 ctx.notify();
             }
             CommentEditorEvent::DeleteComment { id } => {

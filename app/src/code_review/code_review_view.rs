@@ -397,6 +397,7 @@ pub enum CodeReviewAction {
     OpenCreatePrDialog,
     ViewPr(String),
     PublishBranch,
+    SubmitComments,
 }
 
 pub struct FileState {
@@ -7346,6 +7347,10 @@ impl TypedActionView for CodeReviewView {
                     button.set_active(self.git_operations_menu_open, ctx);
                 });
                 ctx.notify();
+            }
+            CodeReviewAction::SubmitComments => {
+                self.handle_submit_review_with_comments(ctx);
+                ctx.focus_self();
             }
         }
     }
