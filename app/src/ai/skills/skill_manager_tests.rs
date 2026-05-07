@@ -1410,6 +1410,29 @@ fn removing_remote_home_skills_preserves_project_skills_below_home() {
         });
     });
 }
+
+#[test]
+fn modify_spinner_verbs_bundled_skill_is_schema_independent() {
+    assert!(matches!(
+        activation_for_bundled_skill("modify-spinner-verbs", Path::new("/missing/resources")),
+        BundledSkillActivation::Always
+    ));
+}
+
+#[test]
+fn modify_spinner_verbs_bundled_skill_has_routing_metadata() {
+    let skill_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("resources/bundled/skills/modify-spinner-verbs/SKILL.md");
+    let skill = parse_bundled_skill(&skill_path).unwrap();
+
+    assert_eq!(skill.name, "modify-spinner-verbs");
+    assert!(skill.description.contains("spinner verbs"));
+    assert!(skill.description.contains("Medieval"));
+    assert!(skill.content.contains("custom_warping_verbs"));
+    assert!(skill.content.contains("Interrogating the lesser lords"));
+}
 // ============================================================================
 // Tests for best_supported_provider
 // ============================================================================
