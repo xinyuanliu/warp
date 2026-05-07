@@ -112,6 +112,7 @@ use crate::view_components::{
 };
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 
+
 /// Identifies which subpage of the AI settings the user is viewing.
 /// When `None`, the page shows all widgets (legacy/full view).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1406,13 +1407,12 @@ impl AISettingsPageView {
                     // empty (Default), always update so the settings page
                     // reflects changes made via natural language or other
                     // external sources.
-                    me.spinner_verb_mode = if was_editing_custom
-                        && new_spinner_verb_mode == SpinnerVerbMode::Custom
-                    {
-                        SpinnerVerbMode::Custom
-                    } else {
-                        new_spinner_verb_mode
-                    };
+                    me.spinner_verb_mode =
+                        if was_editing_custom && new_spinner_verb_mode == SpinnerVerbMode::Custom {
+                            SpinnerVerbMode::Custom
+                        } else {
+                            new_spinner_verb_mode
+                        };
                     if !was_editing_custom && new_spinner_verb_mode == SpinnerVerbMode::Custom {
                         let editor_text = custom_warping_verbs.join(", ");
                         if me.custom_warping_verb_editor.as_ref(ctx).buffer_text(ctx) != editor_text
