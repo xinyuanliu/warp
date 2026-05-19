@@ -515,7 +515,6 @@ fn test_common_config_routes_to_repos_sharing_common_git_dir() {
 }
 
 #[test]
-#[ignore = "flaky test: CODE-1492"]
 fn test_commit_related_files_excluded_from_update_lists() {
     VirtualFS::test("commit_files_excluded", |dirs, mut vfs| {
         log::info!("Start setting up test vfs");
@@ -575,23 +574,22 @@ fn test_commit_related_files_excluded_from_update_lists() {
             std::fs::write(&branch_file_path, "def456abc123").expect("Updating branch ref failed");
             log::info!("Wrote files: regular_file.txt, .git/HEAD, .git/refs/heads/main");
 
-            // Receive the update with timeout and retry
-            let update = loop {
-                futures::select! {
-                    update = futures::FutureExt::fuse(update_rx.next()) => {
-                        match update {
-                            Some(update) => {
-                                log::info!("Received update");
-                                break update;
-                            }
-                            None => {
-                                panic!("Update channel closed unexpectedly");
-                            }
+            // Receive the update with a bounded timeout so the test fails
+            // clearly instead of hanging if the watcher event is missed.
+            let update = futures::select! {
+                update = futures::FutureExt::fuse(update_rx.next()) => {
+                    match update {
+                        Some(update) => {
+                            log::info!("Received update");
+                            update
+                        }
+                        None => {
+                            panic!("Update channel closed unexpectedly");
                         }
                     }
-                    _ = futures::FutureExt::fuse(Timer::after(Duration::from_secs(5))) => {
-                        log::warn!("Waiting for update timed out after 5s, retrying...");
-                    }
+                }
+                _ = futures::FutureExt::fuse(Timer::after(Duration::from_secs(5))) => {
+                    panic!("Timed out waiting for repository update after modifying regular and git commit files");
                 }
             };
 
