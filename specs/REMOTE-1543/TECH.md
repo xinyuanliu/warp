@@ -35,6 +35,8 @@ All regular queue entry points converge on `QueuedQueryModel::append`:
 
 `QueuedPromptsPanelView` intentionally owns only queue-panel concerns:
 - It renders the queue header, expanded rows, hover controls, inline edit editor, and drag handles (`app/src/ai/blocklist/queued_prompts_panel.rs (485-841)`).
+- Static rows render bounded multiline previews: prompt text is character-trimmed before rendering, then constrained to a compact maximum height so queued prompts remain readable without letting one row dominate the panel (`app/src/ai/blocklist/queued_prompts_panel.rs (722-812)`).
+- Edit mode reuses the multiline editor pattern used elsewhere in the client (`EditorOptions` with autogrow + soft wrap), constrains the editor to the same visual height as the static preview, and wraps it in a clipped outlined scroll surface with a scrollbar so larger edits stay bounded inside the row (`app/src/ai/blocklist/queued_prompts_panel.rs (594-612, 722-832)`).
 - It mutates queue state through model methods such as `enter_edit_mode`, `remove_by_id`, `commit_edit`, `cancel_edit`, `reorder`, and `set_collapsed` (`app/src/ai/blocklist/queued_prompts_panel.rs (157-374)`).
 - It emits higher-level `QueuedPromptsPanelEvent`s when the host view must coordinate with input focus or buffer placement (`app/src/ai/blocklist/queued_prompts_panel.rs (82-112)`).
 

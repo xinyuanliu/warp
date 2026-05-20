@@ -10,13 +10,14 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use warp_core::features::FeatureFlag;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragAxis,
-    Draggable, DraggableState, Empty, Expanded, Fill, Flex, Hoverable, MouseStateHandle,
-    ParentElement, Radius, SavePosition, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig},
+    Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DragAxis, Draggable, DraggableState, Empty, Expanded, Fill, Flex,
+    Hoverable, MouseStateHandle, ParentElement, Radius, SavePosition, ScrollbarWidth, Text,
+    DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
 use warpui::{
     AppContext, BlurContext, Element, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
     TypedActionView, View, ViewContext, ViewHandle,
@@ -25,11 +26,17 @@ use warpui::{
 use crate::ai::blocklist::context_model::BlocklistAIContextModel;
 use crate::ai::blocklist::{QueuedQueryEvent, QueuedQueryId, QueuedQueryModel};
 use crate::appearance::Appearance;
-use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey,
+    PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, TextOptions,
+};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::ui_components::icons::Icon;
+use crate::util::truncation::truncate_from_end;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+
+const MAX_PROMPT_LINES: f32 = 5.;
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -86,6 +93,7 @@ pub struct QueuedPromptsPanelView {
     /// Reusable editor for whichever row is currently in edit mode.
     /// Created once and reused across edit sessions to avoid view churn.
     edit_editor: ViewHandle<EditorView>,
+    edit_editor_scroll_state: ClippedScrollStateHandle,
     /// Mouse state for the header row, used to highlight on hover.
     header_mouse_state: MouseStateHandle,
     /// Per-row hover/button/drag state keyed by `QueuedQueryId`.
@@ -166,6 +174,7 @@ impl QueuedPromptsPanelView {
             queued_query_model,
             ai_context_model,
             edit_editor,
+            edit_editor_scroll_state: Default::default(),
             header_mouse_state: MouseStateHandle::default(),
             row_states: HashMap::new(),
             dragging_query_id: None,
@@ -572,6 +581,7 @@ impl View for QueuedPromptsPanelView {
                     is_in_edit_mode,
                     is_being_dragged,
                     edit_editor: &self.edit_editor,
+                    edit_editor_scroll_state: &self.edit_editor_scroll_state,
                     row_state,
                     appearance,
                 });
@@ -595,11 +605,16 @@ fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandl
     let appearance = Appearance::as_ref(ctx);
     let text_options = TextOptions::ui_text(Some(appearance.ui_font_size()), appearance);
     ctx.add_typed_action_view(|ctx| {
-        let options = SingleLineEditorOptions {
+        let options = EditorOptions {
+            autogrow: true,
+            soft_wrap: true,
             text: text_options,
+            propagate_and_no_op_escape_key: PropagateAndNoOpEscapeKey::PropagateFirst,
+            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
+            propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::AtBoundary,
             ..Default::default()
         };
-        EditorView::single_line(options, ctx)
+        EditorView::new(options, ctx)
     })
 }
 
@@ -706,6 +721,7 @@ struct RenderRowProps<'a> {
     is_in_edit_mode: bool,
     is_being_dragged: bool,
     edit_editor: &'a ViewHandle<EditorView>,
+    edit_editor_scroll_state: &'a ClippedScrollStateHandle,
     row_state: QueuedPromptRowState,
     appearance: &'a Appearance,
 }
@@ -719,6 +735,7 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
         is_in_edit_mode,
         is_being_dragged,
         edit_editor,
+        edit_editor_scroll_state,
         row_state,
         appearance,
     } = props;
@@ -730,7 +747,10 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
     let ui_font_family = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
     let editor_line_height = ui_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO;
+    let max_prompt_height = editor_line_height * MAX_PROMPT_LINES;
+    let preview_text = truncate_from_end(&text, 200);
     let editor_handle = edit_editor.clone();
+    let editor_scroll_state = edit_editor_scroll_state.clone();
 
     let QueuedPromptRowState {
         mouse_state,
@@ -741,15 +761,38 @@ fn render_row(props: RenderRowProps<'_>) -> Box<dyn Element> {
 
     let row_inner = Hoverable::new(mouse_state, move |state| {
         let prompt_text_or_editor: Box<dyn Element> = if is_in_edit_mode {
-            ConstrainedBox::new(ChildView::new(&editor_handle).finish())
-                .with_height(editor_line_height)
-                .finish()
+            let editor_scrollable = NewScrollable::vertical(
+                SingleAxisConfig::Clipped {
+                    handle: editor_scroll_state.clone(),
+                    child: ChildView::new(&editor_handle).finish(),
+                },
+                theme.nonactive_ui_detail().into(),
+                theme.active_ui_detail().into(),
+                Fill::None,
+            )
+            .with_vertical_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Auto, false))
+            .with_propagate_mousewheel_if_not_handled(true)
+            .finish();
+
+            ConstrainedBox::new(
+                Container::new(Clipped::new(editor_scrollable).finish())
+                    .with_border(Border::all(1.).with_border_fill(theme.outline()))
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                    .with_horizontal_padding(4.)
+                    .finish(),
+            )
+            .with_max_height(max_prompt_height)
+            .finish()
         } else {
-            Text::new_inline(text.clone(), ui_font_family, ui_font_size)
-                .with_color(foreground_color)
-                .with_selectable(false)
-                .with_clip(ClipConfig::ellipsis())
-                .finish()
+            ConstrainedBox::new(
+                Text::new(preview_text.clone(), ui_font_family, ui_font_size)
+                    .with_color(foreground_color)
+                    .soft_wrap(false)
+                    .with_selectable(false)
+                    .finish(),
+            )
+            .with_max_height(max_prompt_height)
+            .finish()
         };
 
         let drag_handle: Box<dyn Element> = ConstrainedBox::new(

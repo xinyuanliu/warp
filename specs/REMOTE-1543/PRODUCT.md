@@ -34,14 +34,14 @@ Re-queueing replaces the previous prompt, the user can't reorder or edit what's 
 ### Queue rows
 12. Each queue row shows, left to right:
    - A drag handle icon (six-dot grid).
-   - The prompt text (single-line, truncated with ellipsis when it overflows the row).
+   - A compact multiline prompt preview, capped by both displayed height and character count so long prompts stay scannable in the queue.
    - On hover: a pencil (edit) and a trash (delete) icon-button, right-aligned.
 13. Hovering a row reveals the edit/delete icons. Moving the cursor off the row hides them.
 14. Every row in the queued-prompts panel is a regular user-managed queued prompt, so the row interactions in (12)–(13) apply uniformly to every visible panel row.
 15. Rows render in queue order from top (next to fire) to bottom (last to fire).
 ### Edit interaction
-16. Clicking the pencil icon on a row replaces the row's static text with an inline single-line editor pre-filled with the current prompt text and selects the entire prompt, identical to the tab-rename interaction.
-17. Pressing Enter commits the edit (the row's prompt is replaced with the editor contents) and exits edit mode. An empty edit restores the original prompt text and exits edit mode.
+16. Clicking the pencil icon on a row replaces the row's static preview with an inline multiline editor pre-filled with the current prompt text and selects the entire prompt.
+17. The editor is visually outlined while editing, grows until it reaches the same visual line cap as the static row preview, then scrolls internally with a visible scrollbar. Pressing Enter commits the edit (the row's prompt is replaced with the editor contents) and exits edit mode. An empty edit restores the original prompt text and exits edit mode.
 18. Pressing Escape cancels the edit and restores the original prompt text. Clicking outside the row, including focusing the main input, commits the current editor text.
 19. While a row is in edit mode, that row's drag handle is inert (the row cannot be reordered until the edit is committed or cancelled). Other rows can still be dragged.
 20. Only one row can be in edit mode at a time. Clicking the pencil on a different row exits edit mode on the previous row without changing that row's last committed text, then enters edit mode on the new one.
