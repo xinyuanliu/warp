@@ -5,6 +5,7 @@ use ::local_control::{
     ErrorResponseEnvelope, InstanceId, InstanceRecord, RegisteredInstance, RequestEnvelope,
     ResponseEnvelope, PROTOCOL_VERSION,
 };
+use ::local_control::protocol::{PaneTarget, TabTarget, TargetSelector, WindowTarget};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -13,7 +14,9 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::json;
 use warp_core::channel::ChannelState;
-use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity, TypedActionView};
+
+use crate::workspace::{Workspace, WorkspaceAction};
 
 #[derive(Clone)]
 struct ControlServerState {
@@ -197,6 +200,10 @@ impl LocalControlBridge {
                     }),
                 )
             }
+            ActionKind::TabCreate => match self.create_terminal_tab(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
             ActionKind::SettingList => ResponseEnvelope::ok(
                 request.request_id,
                 json!({
@@ -215,6 +222,58 @@ impl LocalControlBridge {
                 ),
             ),
         }
+    }
+
+    fn create_terminal_tab(
+        &mut self,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        validate_tab_create_target(target)?;
+        let window_id = ctx.windows().active_window().ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::InvalidSelector,
+                "tab.create requires an active Warp window",
+            )
+        })?;
+        let workspace = ctx
+            .views_of_type::<Workspace>(window_id)
+            .and_then(|workspaces| workspaces.into_iter().next())
+            .ok_or_else(|| {
+                ControlError::new(
+                    ErrorCode::InvalidSelector,
+                    "tab.create could not resolve an active workspace",
+                )
+            })?;
+        let (previous_tab_count, tab_count, active_tab_index) =
+            workspace.update(ctx, |workspace, ctx| {
+                let previous_tab_count = workspace.tab_count();
+                workspace.handle_action(
+                    &WorkspaceAction::AddTerminalTab {
+                        hide_homepage: false,
+                    },
+                    ctx,
+                );
+                (
+                    previous_tab_count,
+                    workspace.tab_count(),
+                    workspace.active_tab_index(),
+                )
+            });
+        Ok(json!({
+            "action": ActionKind::TabCreate.as_str(),
+            "created": true,
+            "instance_id": self.instance_id.as_ref().map(|id| id.0.as_str()),
+            "window": {
+                "selector": "active",
+                "id": window_id.to_string(),
+            },
+            "tab": {
+                "previous_count": previous_tab_count,
+                "count": tab_count,
+                "active_index": active_tab_index,
+            },
+        }))
     }
 }
 
@@ -269,6 +328,28 @@ async fn handle_control_request(
     (status, Json(response)).into_response()
 }
 
+fn validate_tab_create_target(target: &TargetSelector) -> Result<(), ControlError> {
+    if !matches!(target.window.as_ref(), None | Some(WindowTarget::Active)) {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            "tab.create only supports the active window selector",
+        ));
+    }
+    if !matches!(target.tab.as_ref(), None | Some(TabTarget::Active)) {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            "tab.create does not accept a concrete tab selector",
+        ));
+    }
+    if !matches!(target.pane.as_ref(), None | Some(PaneTarget::Active)) {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            "tab.create does not accept a concrete pane selector",
+        ));
+    }
+    Ok(())
+}
+
 fn capabilities() -> Vec<ActionKind> {
     vec![
         ActionKind::AppPing,
@@ -321,3 +402,7 @@ fn capabilities() -> Vec<ActionKind> {
         ActionKind::SettingToggle,
     ]
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
