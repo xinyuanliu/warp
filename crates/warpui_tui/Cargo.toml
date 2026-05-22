@@ -7,4 +7,5 @@ publish.workspace = true
 license = "MIT"
 
 [dependencies]
+crossterm.workspace = true
 warpui_core.workspace = true

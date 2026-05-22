@@ -1,5 +1,7 @@
+use warpui_core::{AppContext, Event};
+
 use crate::elements::TuiElement;
-use crate::{TuiBuffer, TuiConstraint, TuiRect, TuiSize};
+use crate::{TuiBuffer, TuiConstraint, TuiEventContext, TuiRect, TuiSize};
 
 pub struct TuiContainer {
     child: Box<dyn TuiElement>,
@@ -90,5 +92,14 @@ impl TuiElement for TuiContainer {
 
     fn cursor_position(&self, area: TuiRect) -> Option<(u16, u16)> {
         self.child.cursor_position(self.child_area(area))
+    }
+
+    fn dispatch_event(
+        &mut self,
+        event: &Event,
+        ctx: &mut TuiEventContext,
+        app: &AppContext,
+    ) -> bool {
+        self.child.dispatch_event(event, ctx, app)
     }
 }

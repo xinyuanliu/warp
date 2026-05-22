@@ -1,14 +1,15 @@
 mod column;
 mod container;
+mod event_handler;
 mod text;
 
 pub use column::TuiColumn;
 pub use container::TuiContainer;
+pub use event_handler::TuiEventHandler;
 pub use text::TuiText;
+use warpui_core::{AppContext, Event};
 
-use warpui_core::Event;
-
-use crate::{TuiBuffer, TuiConstraint, TuiRect, TuiSize};
+use crate::{TuiBuffer, TuiConstraint, TuiEventContext, TuiRect, TuiSize};
 
 pub trait TuiElement {
     fn layout(&mut self, constraint: TuiConstraint) -> TuiSize;
@@ -21,7 +22,12 @@ pub trait TuiElement {
         None
     }
 
-    fn dispatch_event(&mut self, _event: &Event) -> bool {
+    fn dispatch_event(
+        &mut self,
+        _event: &Event,
+        _ctx: &mut TuiEventContext,
+        _app: &AppContext,
+    ) -> bool {
         false
     }
 }

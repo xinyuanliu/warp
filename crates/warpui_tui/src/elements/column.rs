@@ -1,5 +1,7 @@
+use warpui_core::{AppContext, Event};
+
 use crate::elements::TuiElement;
-use crate::{TuiBuffer, TuiConstraint, TuiRect, TuiSize};
+use crate::{TuiBuffer, TuiConstraint, TuiEventContext, TuiRect, TuiSize};
 
 pub struct TuiColumn {
     children: Vec<Box<dyn TuiElement>>,
@@ -72,5 +74,17 @@ impl TuiElement for TuiColumn {
             y = y.saturating_add(child_height);
         }
         None
+    }
+
+    fn dispatch_event(
+        &mut self,
+        event: &Event,
+        ctx: &mut TuiEventContext,
+        app: &AppContext,
+    ) -> bool {
+        self.children
+            .iter_mut()
+            .rev()
+            .any(|child| child.dispatch_event(event, ctx, app))
     }
 }

@@ -15457,6 +15457,7 @@ dependencies = [
 name = "warpui_tui"
 version = "0.1.0"
 dependencies = [
+ "crossterm",
  "warpui_core",
 ]
 
