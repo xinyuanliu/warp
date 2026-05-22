@@ -2,7 +2,8 @@ use ::local_control::protocol::{
     PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector, WindowTarget,
 };
 
-use super::validate_tab_create_target;
+use super::{capabilities, validate_tab_create_target};
+use ::local_control::protocol::ActionKind;
 use ::local_control::ErrorCode;
 
 #[test]
@@ -48,4 +49,9 @@ fn tab_create_rejects_concrete_targets() {
     })
     .expect_err("concrete pane target is rejected");
     assert_eq!(err.code, ErrorCode::InvalidSelector);
+}
+
+#[test]
+fn capabilities_only_advertises_tab_create() {
+    assert_eq!(capabilities(), vec![ActionKind::TabCreate]);
 }

@@ -333,6 +333,8 @@ pub enum ErrorCode {
     AmbiguousSelector,
     TransportUnavailable,
     BridgeUnavailable,
+    LocalControlDisabled,
+    InsufficientPermissions,
     UnsupportedAction,
     Internal,
 }
