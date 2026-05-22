@@ -165,3 +165,63 @@ Non-goals:
    - The command returns a structured success or failure payload suitable for human-readable and JSON output.
    The first slice should include the minimum health/introspection commands needed to discover a running instance and exercise `tab.create`.
 34. Follow-up PRs should fill out the remaining catalog in parallelizable groups once the protocol, discovery model, target resolution, error model, `tab.create` action path, and standalone `warpctrl` packaging shape have been validated by the first slice.
+35. The protocol transport should be designed so that the default target is localhost but the CLI can be extended in the future to target remote URLs (e.g., a Warp instance on another machine or a hosted control endpoint). This is not in scope for the first implementation but should not be precluded by the architecture.
+## Action classification and permission model
+Agents (Oz cloud agents, local agent mode, and third-party automation) are expected to be major consumers of the warpctrl CLI alongside human developers. The action catalog must support differentiated permission policies for human callers versus agent callers, and must clearly classify every action by its risk profile so that Warp can enforce appropriate guardrails at both the protocol and product level.
+### Classification tiers
+Every action in the catalog belongs to exactly one of the following tiers, from least to most sensitive:
+1. **Read-only / metadata.** Actions that return app-level structural information without exposing terminal content. These are safe for any caller and should never require elevated permission.
+   - Instance discovery and health: `instance list`, `app active`, `app version`, `app ping`.
+   - Layout enumeration: `window list`, `tab list`, `pane list`, `session list`.
+   - Appearance/settings reads that return configuration values but not user data: `theme list`, `setting list`, `setting get`.
+2. **Read-only / terminal data.** Actions that return content from a user's terminal sessions, command history, pane output buffers, or input editor state. These expose potentially sensitive user data and must be gated separately from structural metadata reads.
+   - Reading pane output or scrollback content (when implemented).
+   - Reading the current input buffer contents.
+   - Reading command history or session replay data.
+   Even though these are read-only, they cross a privacy boundary that metadata reads do not. An agent that can enumerate tabs should not automatically be able to read terminal output.
+3. **Mutating / non-destructive.** Actions that change app state in ways that are visible but reversible or low-risk. They do not destroy user data or execute arbitrary commands.
+   - Layout mutations: `tab create`, `tab activate`, `tab move`, `tab rename`, `window create`, `window focus`, `pane split`, `pane focus`, `pane navigate`, `pane maximize`, `pane resize`.
+   - Appearance mutations: `theme set`, `font-size increase/decrease/reset`, `zoom increase/decrease/reset`.
+   - Settings writes for allowlisted non-destructive settings: `setting set`, `setting toggle`.
+   - Panel/surface toggles: settings open, command palette, Warp Drive toggle, AI assistant toggle, etc.
+4. **Mutating / destructive or high-risk.** Actions that destroy user state, close active work, or execute arbitrary content in a terminal session. These require the strongest permission gates and explicit review before agent use.
+   - Closing targets: `tab close`, `window close`, `pane close`.
+   - Terminal input injection: `input insert`, `input replace`, `input clear`.
+   - Command execution in a session (when implemented).
+   - Input mode switching between terminal and agent modes.
+   Any action that can cause data loss (closing an unsaved session) or execute arbitrary code (injecting and running a shell command) belongs here regardless of how simple the API looks.
+### Permission policies
+The protocol and product should support per-caller permission policies keyed to these tiers:
+- **Human interactive use** defaults to full access across all tiers, gated only by local authentication (the bearer token).
+- **Agent use** should default to read-only metadata access and require explicit opt-in for each higher tier. The product should support:
+  - A baseline "read-only metadata" grant that lets agents discover and enumerate without accessing terminal content or mutating state.
+  - A "read terminal data" grant that additionally permits reading pane output, input buffers, and session content.
+  - A "mutate non-destructive" grant that additionally permits layout and appearance changes.
+  - A "mutate destructive" grant that additionally permits closing targets, injecting input, and executing commands.
+- The permission model should be expressible in the protocol (e.g., a capability or scope field in the authentication material) so that the app bridge can enforce it server-side, not just client-side.
+- When an agent attempts an action above its granted tier, the bridge should return a structured `insufficient_permissions` error that identifies the required tier, rather than silently downgrading or returning a generic failure.
+### Future entity extensibility: files and Warp Drive objects
+The selector and action model should be designed to accommodate entity types beyond the current window/tab/pane/session hierarchy. Two important future entity families are **local files** and **Warp Drive objects** (workflows, notebooks, environment variables, prompts). Neither is in scope for the first implementation, but the protocol should not preclude them.
+**Files.** Warp already supports file opening via deep links and the built-in editor. A future `file` namespace could support:
+- `warpctrl file open <path>` — open a file in a Warp editor tab, equivalent to clicking a file link.
+- `warpctrl file open <path> --line <n>` — open at a specific line.
+- `warpctrl file list` — list files currently open in editor tabs across the instance.
+File selectors would use filesystem paths (absolute or relative to the working directory of the target pane/session). Unlike window/tab/pane selectors, file selectors are not opaque IDs — they are user-visible paths. The protocol should support a `file` field in the target selector that accepts a path string, distinct from the opaque ID selectors used for windows, tabs, and panes.
+**Warp Drive objects.** Warp Drive stores typed objects (workflows, notebooks, environment variable sets, prompts) that users can reference, execute, and share. A future `drive` namespace could support:
+- `warpctrl drive list --type workflow` — list Warp Drive objects by type.
+- `warpctrl drive get <id>` — retrieve a specific Drive object by its opaque ID or by name/path.
+- `warpctrl drive run <workflow-id>` — execute a workflow in a target session, equivalent to invoking it from the command palette.
+- `warpctrl drive insert <notebook-id>` — insert a notebook's runnable commands into the active input.
+Drive object selectors should support both opaque IDs (for automation stability) and human-friendly name/path lookups (for interactive use). The type field (`workflow`, `notebook`, `env_var`, `prompt`) acts as a namespace filter. Drive actions that execute content in a terminal session (e.g., running a workflow) inherit the destructive/high-risk tier from the action classification model.
+**Design constraints for both:**
+- File and Drive selectors are orthogonal to the window/tab/pane hierarchy — a file open action targets an instance (which window to open in), not a specific pane. A Drive workflow execution targets a session (which pane to run in).
+- The `TargetSelector` type in the protocol should be extensible with optional fields for these new selector families without breaking existing requests that omit them.
+- The action classification tiers apply: listing Drive objects is tier 1 (metadata), reading Drive object content is tier 1 or 2 depending on whether it contains user data, executing a Drive workflow is tier 4 (destructive/high-risk).
+### Settings: protocol-first
+Settings reads and writes should go through the local-control protocol like other actions, not bypass it via direct file manipulation.
+- `warpctrl setting get <key>`, `warpctrl setting set <key> <value>`, and `warpctrl setting toggle <key>` send requests to the running Warp instance through the standard authenticated control endpoint.
+- The app bridge validates the key against the allowlist and the value against the expected type before applying the change.
+- This keeps authorization enforcement consistent: the same permission tier checks and caller-type policies apply to settings mutations as to any other action, rather than creating a second unguarded path through the filesystem.
+- The app owns the write to the settings file and any side effects (e.g., theme reload, layout reflow) as a single atomic operation, avoiding races between a CLI file write and the app's file watcher.
+- If a future need arises for offline settings manipulation (no running Warp process), a separate file-based path can be added later with its own validation, but it should not be the default.
+- The action classification still applies: settings reads are tier 1 (metadata), settings writes are tier 3 (non-destructive mutation).

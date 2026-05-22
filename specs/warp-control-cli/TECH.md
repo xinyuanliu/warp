@@ -89,17 +89,62 @@ Recommended local trust model:
 - Health metadata exposed without credentials, if needed for stale-record pruning, must not reveal mutating capabilities or sensitive target state.
 This keeps the protocol local and scriptable without creating an ambient browser-to-localhost control surface.
 ### 4. App-side request bridge onto the UI/application context
-The HTTP handler should not mutate Warp models directly from the server runtime thread. Introduce a control bridge that safely hands requests back to app-owned execution context and waits for a typed response.
-Recommended shape:
-- `LocalControlModel` or equivalent singleton created during app initialization.
-- An async request channel shared with the control router.
-- Each inbound HTTP request:
-  1. Authenticates.
-  2. Deserializes and validates the protocol request.
-  3. Sends a typed work item plus oneshot response handle to the app-side control model.
-  4. Awaits the result and serializes the response envelope.
-- The app-side control model resolves selectors and executes the allowlisted action on the correct app context/view model boundary.
-This mirrors existing external-intent handling in `app/src/uri/mod.rs` but returns structured results rather than fire-and-forget behavior.
+The HTTP handler runs on a Tokio runtime thread owned by the local-control server. It cannot directly access or mutate Warp's UI models, views, or app context because all WarpUI state is single-threaded and owned by the main app event loop. The bridge solves this by sending a closure from the Tokio handler thread to the main thread, executing it in the model's context, and returning the result to the waiting HTTP handler.
+#### Thread model
+- **Tokio runtime thread (HTTP handler):** Owns the Axum router, receives HTTP requests, authenticates, deserializes the `RequestEnvelope`. Cannot touch `AppContext`, views, or models.
+- **Main app thread:** Owns all WarpUI entities (`App`, `AppContext`, views, models). All UI state reads and mutations must happen here.
+- **Bridge:** Transfers a typed closure from the Tokio thread to the main thread, executes it with `&mut ModelContext`, and sends the return value back.
+#### Implementation: `ModelSpawner`
+The bridge uses WarpUI's `ModelSpawner<T>` mechanism, which is the standard way for background threads to schedule work on a model's main-thread context:
+1. During app initialization, a `LocalControlBridge` singleton model is created. The model's `ModelContext::spawner()` method returns a `ModelSpawner<LocalControlBridge>` — a cloneable, `Send` handle that can enqueue closures from any thread.
+2. The `ModelSpawner` is stored in the Axum router's shared state (`ControlServerState`), making it available to every HTTP handler.
+3. When an HTTP request arrives, the handler calls `spawner.spawn(|bridge, ctx| { ... }).await`:
+   - `spawn` sends a boxed `FnOnce(&mut LocalControlBridge, &mut ModelContext<LocalControlBridge>) -> R` closure through an `async_channel` to the main thread's task-callback loop.
+   - The main thread dequeues the closure, constructs a fresh `ModelContext` for the bridge model, and calls the closure.
+   - Inside the closure, the bridge has full access to `ModelContext`, which derefs to `AppContext`. This means it can call `ctx.windows()`, `ctx.views_of_type::<Workspace>(window_id)`, `workspace.update(ctx, ...)`, and any other main-thread API.
+   - The closure returns a typed result (e.g., `ResponseEnvelope`), which is sent back to the Tokio thread via a `oneshot` channel.
+4. The HTTP handler awaits the oneshot result and serializes it as the HTTP response.
+#### Concrete flow for `tab.create`
+```
+HTTP handler (Tokio thread)
+  │
+  ├─ verify auth token
+  ├─ deserialize RequestEnvelope
+  ├─ call bridge_spawner.spawn(move |bridge, ctx| {
+  │      bridge.handle_request(request, ctx)  // runs on main thread
+  │  }).await
+  │
+  └─ serialize ResponseEnvelope as JSON
+
+LocalControlBridge::handle_request (main thread)
+  │
+  ├─ match request.action.kind
+  │   └─ ActionKind::TabCreate
+  │       ├─ validate_tab_create_target(&request.target)
+  │       ├─ ctx.windows().active_window()
+  │       │   └─ fallback: ctx.windows().ordered_window_ids().first()
+  │       ├─ ctx.views_of_type::<Workspace>(window_id)
+  │       └─ workspace.update(ctx, |workspace, ctx| {
+  │             workspace.handle_action(
+  │                 &WorkspaceAction::AddTerminalTab { hide_homepage: false },
+  │                 ctx,
+  │             )
+  │           })
+  │
+  └─ return ResponseEnvelope::ok(request_id, json!({ ... }))
+```
+#### Why this pattern
+- **Thread safety.** WarpUI's entity/view system is not `Send` or `Sync`. The only safe way to interact with it from a background thread is through `ModelSpawner`, which serializes access through the main event loop.
+- **Synchronous result.** Unlike fire-and-forget patterns (e.g., URI intent dispatch in `app/src/uri/mod.rs`), the `spawn` call returns a concrete `Result<R, ModelDropped>`, so the HTTP handler can produce a structured success or error response.
+- **Reuses existing infrastructure.** `ModelSpawner` is already used throughout the codebase for background-to-main-thread communication (e.g., async file I/O results, network responses). No new concurrency primitive is needed.
+- **Action dispatch reuses existing app behavior.** The bridge calls `workspace.handle_action(&WorkspaceAction::AddTerminalTab { ... }, ctx)` — the exact same method the UI keybinding system uses. This ensures the control CLI produces identical behavior to the corresponding user action, including side effects like tab count updates, focus changes, and event emissions.
+#### Adding new action handlers
+To add a new action to the bridge:
+1. Add a variant to `ActionKind` in `crates/local_control/src/protocol.rs`.
+2. Add a match arm in `LocalControlBridge::handle_request` in `app/src/local_control/mod.rs`.
+3. Inside the match arm, use `ctx` (which is a `&mut ModelContext<LocalControlBridge>` that derefs to `&mut AppContext`) to resolve selectors and dispatch the action onto existing app types.
+4. Return a `ResponseEnvelope::ok(...)` or `ResponseEnvelope::error(...)` with the result.
+The bridge closure has access to the full `AppContext` API surface, including `ctx.windows()`, `ctx.window_ids()`, `ctx.views_of_type::<T>(window_id)`, `handle.update(ctx, ...)`, and `handle.read(ctx, ...)`. This makes it straightforward to wire new actions to existing UI behavior without introducing new concurrency concerns.
 ### 5. Target resolution model
 Implement target resolution as a reusable component rather than scattering lookup logic across handlers.
 Recommended resolution order:
@@ -154,7 +199,15 @@ After the first slice validates discovery, auth, selector resolution, CLI syntax
 - Add a handler.
 - Add validation/tests.
 - Add CLI surface/tests.
-### 9. CLI packaging and release shape
+### 9. CLI parsing and output libraries
+The `warpctrl` CLI must use the same argument parsing and output libraries as the existing Oz CLI so that conventions, derive patterns, and shell-completion generation remain consistent across both binaries.
+- **clap** (with the `derive` feature) for argument parsing, subcommand trees, and help generation. Both binaries share the `warp_cli` crate, so parser types defined there are reused directly.
+- **serde** / **serde_json** for JSON request/response serialization and for `--output-format json` output.
+- **clap_complete** for shell completion generation, reusing the same infrastructure the Oz CLI uses.
+- The `OutputFormat` enum (`Pretty`, `Json`, `Ndjson`, `Text`) is shared from `warp_cli::agent::OutputFormat` so human-readable vs. machine-readable output follows the same conventions.
+- New subcommand types for `warpctrl` live in `warp_cli::local_control` and follow the same `#[derive(Parser)]` / `#[derive(Subcommand)]` / `#[derive(Args)]` patterns used by the Oz CLI's top-level `Args` and `CliCommand` types.
+Do not introduce alternative parsing libraries (e.g., `structopt`, `argh`) or alternative serialization approaches. Keeping one set of libraries across both CLIs reduces dependency weight, ensures consistent `--help` formatting, and lets contributors move between the two surfaces without learning a different stack.
+### 10. CLI packaging and release shape
 The shipped product shape should be a separate bundled `warpctrl` CLI binary that reuses shared CLI/protocol crates but does not depend on launching the GUI binary in command mode. Follow the Oz CLI release model as closely as practical:
 - macOS:
   - Add a standalone control CLI artifact path next to the existing Oz standalone CLI artifact flow.
