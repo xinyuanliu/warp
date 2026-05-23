@@ -12,19 +12,21 @@ use ::local_control::protocol::{
     PaneNavigateParams, PaneResizeParams, PaneSelector, PaneSplitParams, PaneTarget,
     SessionSelector, SessionTarget, SettingSetParams, SettingToggleParams, SizeAdjustment,
     TabActivateParams, TabActivationTarget, TabCloseParams, TabCloseScope, TabMoveParams,
-    TabRenameParams, TabSelector, TabTarget, TargetSelector, ThemeSetParams, WindowCloseParams,
-    WindowCreateParams, WindowFocusParams, WindowSelector, WindowTarget,
+    TabMutationResult, TabRenameParams, TabSelector, TabTarget, TargetSelector, ThemeSetParams,
+    WindowCloseParams, WindowCreateParams, WindowFocusParams, WindowSelector, WindowTarget,
 };
 use ::local_control::{
     ErrorCode, InstanceId, InvocationContext, PermissionCategory, RequestEnvelope,
 };
 use chrono::Duration;
+use lsp::LspManagerModel;
 use settings::Setting as _;
 use std::fs;
 use std::path::Path;
 use warp_core::features::FeatureFlag;
 use warp_core::session_id::SessionId;
-use warpui::{App, SingletonEntity};
+use warpui::platform::WindowStyle;
+use warpui::{App, SingletonEntity, TypedActionView};
 
 use super::allow_input_run_policy_for_test;
 use super::{
@@ -42,26 +44,53 @@ use super::{
     validate_terminal_read_target, validate_window_create_target, workspace_action_for_surface,
     LocalControlBridge,
 };
+use crate::ai::facts::manager::AIFactManager;
+use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
+use crate::appearance::AppearanceManager;
 use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
+use crate::autoupdate::{AutoupdateState, RelaunchModel};
+use crate::cloud_object::model::{
+    actions::ObjectActions, persistence::CloudModel, view::CloudViewModel,
+};
 use crate::cloud_object::Owner;
+#[cfg(enable_crash_recovery)]
+use crate::crash_recovery::CrashRecovery;
+use crate::default_terminal::DefaultTerminal;
 use crate::drive::folders::{CloudFolder, CloudFolderModel};
 use crate::env_vars::{
     CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVar, EnvVarCollection,
 };
+use crate::gpu_state::GPUState;
+use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::projects::ProjectManagementModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
+use crate::remote_server::manager::RemoteServerManager;
+use crate::root_view::NewWorkspaceSource;
 use crate::server::ids::{ClientId, SyncId};
 use crate::settings::{
     AllowInsideWarpControl, AllowInsideWarpReadOnly, AllowInsideWarpReadWrite,
     AllowOutsideWarpControl, AllowOutsideWarpReadOnly, AllowOutsideWarpReadWrite,
     LocalControlSettings,
 };
+use crate::settings_view::pane_manager::SettingsPaneManager;
+use crate::settings_view::DisplayCount;
+#[cfg(feature = "local_tty")]
+use crate::terminal::available_shells;
 use crate::terminal::model::TerminalModel;
+use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::workflows::{workflow::Workflow, CloudWorkflow, CloudWorkflowModel};
-use crate::workspace::WorkspaceAction;
+use crate::workspace::{
+    bonus_grant_notification_model::BonusGrantNotificationModel,
+    cross_window_tab_drag::CrossWindowTabDrag, ToastStack as WorkspaceToastStack, Workspace,
+    WorkspaceAction,
+};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::GlobalResourceHandles;
+use ai::project_context::model::ProjectContextModel;
 
 fn settings_with_values(
     inside_enabled: bool,
@@ -176,6 +205,67 @@ fn request_with_target(action: ActionKind, target: TargetSelector) -> RequestEnv
     let mut request = RequestEnvelope::new(Action::new(action));
     request.target = target;
     request
+}
+
+fn action_for_app_state_mutation(action: ActionKind) -> Action {
+    match action {
+        ActionKind::TabActivate => Action::new(action),
+        ActionKind::TabMove => Action::with_params(
+            action,
+            TabMoveParams {
+                direction: HorizontalDirection::Left,
+            },
+        )
+        .expect("tab.move params serialize"),
+        ActionKind::TabClose => Action::new(action),
+        ActionKind::PaneSplit => Action::with_params(
+            action,
+            PaneSplitParams {
+                direction: PaneDirection::Right,
+                profile: None,
+            },
+        )
+        .expect("pane.split params serialize"),
+        ActionKind::PaneFocus => Action::new(action),
+        ActionKind::PaneNavigate => Action::with_params(
+            action,
+            PaneNavigateParams {
+                direction: PaneDirection::Left,
+            },
+        )
+        .expect("pane.navigate params serialize"),
+        ActionKind::PaneClose => Action::new(action),
+        ActionKind::PaneMaximize => Action::new(action),
+        ActionKind::PaneResize => Action::with_params(
+            action,
+            PaneResizeParams {
+                direction: PaneDirection::Right,
+                amount: Some(1),
+            },
+        )
+        .expect("pane.resize params serialize"),
+        _ => panic!("unexpected app-state mutation action"),
+    }
+}
+
+fn request_with_action_and_target(action: Action, target: TargetSelector) -> RequestEnvelope {
+    let mut request = RequestEnvelope::new(action);
+    request.target = target;
+    request
+}
+
+fn owned_app_state_actions() -> [ActionKind; 9] {
+    [
+        ActionKind::TabActivate,
+        ActionKind::TabMove,
+        ActionKind::TabClose,
+        ActionKind::PaneSplit,
+        ActionKind::PaneFocus,
+        ActionKind::PaneNavigate,
+        ActionKind::PaneClose,
+        ActionKind::PaneMaximize,
+        ActionKind::PaneResize,
+    ]
 }
 
 fn initialize_drive_app(app: &mut App, logged_in: bool) {
@@ -350,6 +440,374 @@ fn with_local_control_bridge(
 }
 
 #[test]
+fn tab_move_success_moves_target_tab_right() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let (window_id, workspace) = initialize_app_with_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::AddTerminalTab {
+                    hide_homepage: false,
+                },
+                ctx,
+            );
+        });
+        let original_order = workspace.read(&app, |workspace, _| {
+            workspace
+                .tab_views()
+                .map(|pane_group| pane_group.id())
+                .collect::<Vec<_>>()
+        });
+        let request = request_with_action_and_target(
+            Action::with_params(
+                ActionKind::TabMove,
+                TabMoveParams {
+                    direction: HorizontalDirection::Right,
+                },
+            )
+            .expect("tab.move params serialize"),
+            TargetSelector {
+                tab: Some(TabTarget::Index { index: 0 }),
+                ..window_target(window_id)
+            },
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response =
+                bridge.handle_request(request, authenticated_grant(ActionKind::TabMove, ctx), ctx);
+            let result: TabMutationResult = serde_json::from_value(ok_response_data(response))
+                .expect("tab mutation result decodes");
+            let new_order = workspace.read(ctx, |workspace, _| {
+                workspace
+                    .tab_views()
+                    .map(|pane_group| pane_group.id())
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(new_order[1], original_order[0]);
+            assert_eq!(result.tab_id, original_order[0].to_string());
+            assert_eq!(result.window_id, window_id.to_string());
+        });
+    });
+}
+
+#[test]
+fn pane_split_and_focus_success_updates_target_pane() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let (window_id, workspace) = initialize_app_with_workspace(&mut app);
+        let split_request = request_with_action_and_target(
+            Action::with_params(
+                ActionKind::PaneSplit,
+                PaneSplitParams {
+                    direction: PaneDirection::Right,
+                    profile: None,
+                },
+            )
+            .expect("pane.split params serialize"),
+            window_target(window_id),
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response = bridge.handle_request(
+                split_request,
+                authenticated_grant(ActionKind::PaneSplit, ctx),
+                ctx,
+            );
+            let split_result: ::local_control::protocol::PaneMutationResult =
+                serde_json::from_value(ok_response_data(response))
+                    .expect("pane mutation result decodes");
+            let pane_group = workspace.read(ctx, |workspace, _| {
+                workspace.active_tab_pane_group().clone()
+            });
+            let pane_ids = pane_group.read(ctx, |pane_group, _| pane_group.visible_pane_ids());
+            assert_eq!(pane_ids.len(), 2);
+            assert!(pane_ids
+                .iter()
+                .any(|pane_id| pane_id.to_string() == split_result.pane_id));
+
+            let target_pane_id = pane_ids[0];
+            let focus_request = request_with_target(
+                ActionKind::PaneFocus,
+                TargetSelector {
+                    pane: Some(PaneTarget::Index { index: 0 }),
+                    ..window_target(window_id)
+                },
+            );
+            let response = bridge.handle_request(
+                focus_request,
+                authenticated_grant(ActionKind::PaneFocus, ctx),
+                ctx,
+            );
+            let focus_result: ::local_control::protocol::PaneMutationResult =
+                serde_json::from_value(ok_response_data(response))
+                    .expect("pane mutation result decodes");
+            let focused_pane_id =
+                pane_group.read(ctx, |pane_group, ctx| pane_group.focused_pane_id(ctx));
+            assert_eq!(focused_pane_id, target_pane_id);
+            assert_eq!(focus_result.pane_id, target_pane_id.to_string());
+            assert_eq!(focus_result.tab_id, split_result.tab_id);
+        });
+    });
+}
+
+#[test]
+fn owned_app_state_actions_require_mutate_app_state_permission() {
+    let settings_without_app_state_mutation =
+        settings_with_values(true, true, true, true, false, false);
+
+    for action in owned_app_state_actions() {
+        assert_eq!(
+            action.metadata().implementation_status,
+            ::local_control::ActionImplementationStatus::Implemented
+        );
+        assert_eq!(
+            action.metadata().permission_category,
+            PermissionCategory::MutateAppState
+        );
+        assert!(action.metadata().requires_authenticated_user);
+        let err = ensure_settings_allow_action(
+            &settings_without_app_state_mutation,
+            InvocationContext::InsideWarp,
+            action,
+        )
+        .expect_err("app-state mutation permission is disabled");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+}
+
+#[test]
+fn tab_app_state_mutations_reject_stale_tab_ids() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let (window_id, _) = initialize_app_with_workspace(&mut app);
+        for action in [
+            ActionKind::TabActivate,
+            ActionKind::TabMove,
+            ActionKind::TabClose,
+        ] {
+            let request = request_with_action_and_target(
+                action_for_app_state_mutation(action),
+                TargetSelector {
+                    tab: Some(TabTarget::Id {
+                        id: TabSelector("stale-tab".to_owned()),
+                    }),
+                    ..window_target(window_id)
+                },
+            );
+            LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+                let response =
+                    bridge.handle_request(request, authenticated_grant(action, ctx), ctx);
+                assert_eq!(response_error_code(response), ErrorCode::StaleTarget);
+            });
+        }
+    });
+}
+
+#[test]
+fn pane_app_state_mutations_reject_stale_pane_ids() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let (window_id, _) = initialize_app_with_workspace(&mut app);
+        for action in [
+            ActionKind::PaneSplit,
+            ActionKind::PaneFocus,
+            ActionKind::PaneNavigate,
+            ActionKind::PaneClose,
+            ActionKind::PaneMaximize,
+            ActionKind::PaneResize,
+        ] {
+            let request = request_with_action_and_target(
+                action_for_app_state_mutation(action),
+                TargetSelector {
+                    pane: Some(PaneTarget::Id {
+                        id: PaneSelector("stale-pane".to_owned()),
+                    }),
+                    ..window_target(window_id)
+                },
+            );
+            LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+                let response =
+                    bridge.handle_request(request, authenticated_grant(action, ctx), ctx);
+                assert_eq!(response_error_code(response), ErrorCode::StaleTarget);
+            });
+        }
+    });
+}
+
+#[test]
+fn app_state_mutations_report_target_state_conflicts() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let (window_id, _) = initialize_app_with_workspace(&mut app);
+        let cases = vec![
+            request_with_action_and_target(
+                Action::with_params(
+                    ActionKind::TabMove,
+                    TabMoveParams {
+                        direction: HorizontalDirection::Left,
+                    },
+                )
+                .expect("tab.move params serialize"),
+                TargetSelector {
+                    tab: Some(TabTarget::Index { index: 0 }),
+                    ..window_target(window_id)
+                },
+            ),
+            request_with_action_and_target(
+                Action::with_params(
+                    ActionKind::TabClose,
+                    TabCloseParams {
+                        scope: TabCloseScope::Others,
+                        force: false,
+                    },
+                )
+                .expect("tab.close params serialize"),
+                TargetSelector {
+                    tab: Some(TabTarget::Index { index: 0 }),
+                    ..window_target(window_id)
+                },
+            ),
+            request_with_action_and_target(
+                Action::with_params(
+                    ActionKind::PaneNavigate,
+                    PaneNavigateParams {
+                        direction: PaneDirection::Left,
+                    },
+                )
+                .expect("pane.navigate params serialize"),
+                window_target(window_id),
+            ),
+            request_with_action_and_target(
+                Action::new(ActionKind::PaneMaximize),
+                window_target(window_id),
+            ),
+            request_with_action_and_target(
+                Action::with_params(
+                    ActionKind::PaneResize,
+                    PaneResizeParams {
+                        direction: PaneDirection::Right,
+                        amount: Some(1),
+                    },
+                )
+                .expect("pane.resize params serialize"),
+                window_target(window_id),
+            ),
+        ];
+        for request in cases {
+            let action = request.action.kind;
+            LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+                let response =
+                    bridge.handle_request(request, authenticated_grant(action, ctx), ctx);
+                assert_eq!(
+                    response_error_code(response),
+                    ErrorCode::TargetStateConflict
+                );
+            });
+        }
+    });
+}
+
+fn initialize_app_with_workspace(
+    app: &mut App,
+) -> (warpui::WindowId, warpui::ViewHandle<Workspace>) {
+    initialize_app_for_terminal_view(app);
+    app.add_singleton_model(AppearanceManager::new);
+    app.add_singleton_model(|ctx| {
+        AutoupdateState::new(crate::server::server_api::ServerApiProvider::as_ref(ctx).get())
+    });
+    app.add_singleton_model(|_| RelaunchModel::new());
+    app.add_singleton_model(|_| GPUState::new());
+    app.add_singleton_model(|_| DisplayCount::mock());
+    app.add_singleton_model(DefaultTerminal::new);
+    #[cfg(feature = "local_tty")]
+    available_shells::register(app);
+    app.add_singleton_model(RemoteServerManager::new);
+    #[cfg(not(target_family = "wasm"))]
+    app.add_singleton_model(RemoteCodebaseIndexModel::new);
+    app.add_singleton_model(|_| LspManagerModel::new());
+    app.add_singleton_model(|ctx| ProjectContextModel::new_from_persisted(vec![], ctx));
+    app.add_singleton_model(FileMCPWatcher::new);
+    app.add_singleton_model(|_| FileBasedMCPManager::default());
+    app.add_singleton_model(NotebookKeybindings::new);
+    app.add_singleton_model(|_| SettingsPaneManager::new());
+    app.add_singleton_model(|_| AIFactManager::new());
+    app.add_singleton_model(|_| ObjectActions::new(Vec::new()));
+    app.add_singleton_model(CloudViewModel::mock);
+    app.add_singleton_model(|_| WorkspaceToastStack);
+    app.add_singleton_model(SharedSessionManager::new);
+    app.add_singleton_model(BonusGrantNotificationModel::new);
+    app.add_singleton_model(|_| CrossWindowTabDrag::new());
+    #[cfg(enable_crash_recovery)]
+    CrashRecovery::register_for_test(app);
+    app.add_singleton_model(LocalControlBridge::new);
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        Workspace::new(
+            global_resource_handles,
+            None,
+            NewWorkspaceSource::Empty {
+                previous_active_window: None,
+                shell: None,
+            },
+            ctx,
+        )
+    })
+}
+
+fn window_target(window_id: warpui::WindowId) -> TargetSelector {
+    TargetSelector {
+        window: Some(WindowTarget::Id {
+            id: WindowSelector(window_id.to_string()),
+        }),
+        ..TargetSelector::default()
+    }
+}
+
+fn ok_response_data(response: ::local_control::ResponseEnvelope) -> serde_json::Value {
+    let ControlResponse::Ok { data } = response.response else {
+        panic!("expected ok response");
+    };
+    data
+}
+
+#[test]
+fn tab_activate_success_activates_target_tab() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    App::test((), |mut app| async move {
+        let (window_id, workspace) = initialize_app_with_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::AddTerminalTab {
+                    hide_homepage: false,
+                },
+                ctx,
+            );
+        });
+        let request = request_with_target(
+            ActionKind::TabActivate,
+            TargetSelector {
+                tab: Some(TabTarget::Index { index: 0 }),
+                ..window_target(window_id)
+            },
+        );
+        LocalControlBridge::handle(&app).update(&mut app, |bridge, ctx| {
+            let response = bridge.handle_request(
+                request,
+                authenticated_grant(ActionKind::TabActivate, ctx),
+                ctx,
+            );
+            let data = ok_response_data(response);
+            let result: TabMutationResult =
+                serde_json::from_value(data).expect("tab mutation result decodes");
+            let active_tab_id = workspace.read(ctx, |workspace, _| {
+                assert_eq!(workspace.active_tab_index(), 0);
+                workspace.active_tab_pane_group().id().to_string()
+            });
+            assert_eq!(result.tab_id, active_tab_id);
+            assert_eq!(result.window_id, window_id.to_string());
+        });
+    });
+}
+
+#[test]
 fn tab_create_accepts_default_and_active_targets() {
     validate_tab_create_target(&TargetSelector::default()).expect("default target is accepted");
 
@@ -447,8 +905,17 @@ fn capabilities_advertises_implemented_actions() {
             ActionKind::WindowClose,
             ActionKind::TabList,
             ActionKind::TabCreate,
+            ActionKind::TabActivate,
+            ActionKind::TabMove,
             ActionKind::TabRename,
+            ActionKind::TabClose,
             ActionKind::PaneList,
+            ActionKind::PaneSplit,
+            ActionKind::PaneFocus,
+            ActionKind::PaneNavigate,
+            ActionKind::PaneClose,
+            ActionKind::PaneMaximize,
+            ActionKind::PaneResize,
             ActionKind::SessionList,
             ActionKind::BlockList,
             ActionKind::BlockGet,

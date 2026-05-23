@@ -308,6 +308,15 @@ fn owned_app_state_actions_are_implemented_authenticated_mutations() {
         ActionKind::WindowCreate,
         ActionKind::WindowFocus,
         ActionKind::WindowClose,
+        ActionKind::TabActivate,
+        ActionKind::TabMove,
+        ActionKind::TabClose,
+        ActionKind::PaneSplit,
+        ActionKind::PaneFocus,
+        ActionKind::PaneNavigate,
+        ActionKind::PaneClose,
+        ActionKind::PaneMaximize,
+        ActionKind::PaneResize,
     ] {
         let metadata = action.metadata();
         assert_eq!(
@@ -413,15 +422,6 @@ fn default_permissions_preserve_security_categories() {
 #[test]
 fn mutating_contract_actions_are_allowlisted_stubs_except_implemented_mutations() {
     for action in [
-        ActionKind::TabActivate,
-        ActionKind::TabMove,
-        ActionKind::TabClose,
-        ActionKind::PaneSplit,
-        ActionKind::PaneFocus,
-        ActionKind::PaneNavigate,
-        ActionKind::PaneClose,
-        ActionKind::PaneMaximize,
-        ActionKind::PaneResize,
         ActionKind::PaneSessionPrevious,
         ActionKind::PaneSessionNext,
         ActionKind::InputInsert,
@@ -608,17 +608,4 @@ fn mutating_contract_preserves_distinct_permission_categories() {
             PermissionCategory::MutateUnderlyingData
         );
     }
-}
-#[test]
-fn non_first_slice_actions_are_catalog_stubs() {
-    let metadata = ActionKind::TabActivate.metadata();
-    assert_eq!(
-        metadata.implementation_status,
-        ActionImplementationStatus::Stub
-    );
-    assert!(
-        !metadata
-            .allowed_invocation_contexts
-            .contains(&InvocationContext::OutsideWarp)
-    );
 }

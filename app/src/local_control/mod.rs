@@ -8,7 +8,7 @@ use crate::env_vars::{CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVarC
 use crate::features::FeatureFlag;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel, NotebookId};
 use crate::palette::PaletteMode;
-use crate::pane_group::{PaneGroup, PaneId};
+use crate::pane_group::{Direction as PaneGroupDirection, PaneGroup, PaneGroupAction, PaneId};
 use crate::projects::ProjectManagementModel;
 use crate::root_view;
 use crate::server::ids::{ClientId, SyncId};
@@ -45,15 +45,16 @@ use ::local_control::protocol::{
     DriveListParams, DriveListResult, DriveMutationResult, DriveObjectSummary,
     DriveObjectType as ControlDriveObjectType, DriveRunParams, DriveTarget, DriveUpdateParams,
     FileDeleteParams, FileListResult, FileMutationResult, FileOpenParams, FileSummary, FileTarget,
-    FileWriteParams, HistoryEntrySummary, HistoryListParams, HistoryListResult, InputClearParams,
-    InputInsertParams, InputModeSetParams, InputReplaceParams, InputRunParams, InputStateResult,
-    PaneCloseParams, PaneFocusParams, PaneMaximizeParams, PaneNavigateParams, PaneResizeParams,
+    FileWriteParams, HistoryEntrySummary, HistoryListParams, HistoryListResult,
+    HorizontalDirection, InputClearParams, InputInsertParams, InputModeSetParams,
+    InputReplaceParams, InputRunParams, InputStateResult, PaneCloseParams, PaneDirection,
+    PaneFocusParams, PaneMaximizeParams, PaneMutationResult, PaneNavigateParams, PaneResizeParams,
     PaneSplitParams, PaneTarget, ProjectActiveResult, ProjectListResult, ProjectSummary,
     SessionTarget, SettingGetParams, SettingGetResult, SettingListResult, SettingMutationResult,
     SettingSetParams, SettingSummary, SettingToggleParams, SizeAdjustment, TabActivateParams,
-    TabCloseParams, TabMoveParams, TabRenameParams, TabTarget, TargetSelector, ThemeListResult,
-    ThemeSetParams, ThemeSummary, WindowCloseParams, WindowCreateParams, WindowFocusParams,
-    WindowTarget,
+    TabActivationTarget, TabCloseParams, TabCloseScope, TabMoveParams, TabMutationResult,
+    TabRenameParams, TabTarget, TargetSelector, ThemeListResult, ThemeSetParams, ThemeSummary,
+    WindowCloseParams, WindowCreateParams, WindowFocusParams, WindowTarget,
 };
 use ::local_control::{
     ActionKind, AuthToken, ControlEndpoint, ControlError, ControlResponse, ErrorCode,
@@ -710,6 +711,42 @@ impl LocalControlBridge {
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
+            ActionKind::TabActivate => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<TabActivateParams>()
+                    .and_then(|params| self.activate_tab(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::TabMove => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<TabMoveParams>()
+                    .and_then(|params| self.move_tab(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
             ActionKind::TabRename => {
                 if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
                     return ResponseEnvelope::error(request.request_id, error);
@@ -724,6 +761,128 @@ impl LocalControlBridge {
                     request.action.params_as::<TabRenameParams>(),
                     ctx,
                 ) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::TabClose => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<TabCloseParams>()
+                    .and_then(|params| self.close_tab(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneSplit => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<PaneSplitParams>()
+                    .and_then(|params| self.split_pane(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneFocus => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match self.focus_pane(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneNavigate => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<PaneNavigateParams>()
+                    .and_then(|params| self.navigate_pane(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneClose => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<PaneCloseParams>()
+                    .and_then(|_| self.close_pane(&request.target, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneMaximize => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<PaneMaximizeParams>()
+                    .and_then(|params| self.maximize_pane(&request.target, params, ctx))
+                {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneResize => {
+                if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match request
+                    .action
+                    .params_as::<PaneResizeParams>()
+                    .and_then(|params| self.resize_pane(&request.target, params, ctx))
+                {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
@@ -972,6 +1131,283 @@ impl LocalControlBridge {
                 "active_index": active_tab_index,
             },
         }))
+    }
+
+    fn activate_tab(
+        &mut self,
+        target: &TargetSelector,
+        params: TabActivateParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let (window_id, tab_id) = if let Some(relative) = params.relative {
+            reject_concrete_tab_selector_for_relative_activation(target)?;
+            let entry = select_single_tab_entry_for_mutation(target, ActionKind::TabActivate, ctx)?;
+            let workspace = workspace_for_window(ActionKind::TabActivate, entry.window_id, ctx)?;
+            workspace.update(ctx, |workspace, ctx| {
+                let action = match relative {
+                    TabActivationTarget::Previous => WorkspaceAction::ActivatePrevTab,
+                    TabActivationTarget::Next => WorkspaceAction::ActivateNextTab,
+                    TabActivationTarget::Last => WorkspaceAction::ActivateLastTab,
+                };
+                workspace.handle_action(&action, ctx);
+                let pane_group = workspace.active_tab_pane_group();
+                (entry.window_id, pane_group.id().to_string())
+            })
+        } else {
+            let entry = select_single_tab_entry_for_mutation(target, ActionKind::TabActivate, ctx)?;
+            let workspace = workspace_for_window(ActionKind::TabActivate, entry.window_id, ctx)?;
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.handle_action(&WorkspaceAction::ActivateTab(entry.index), ctx);
+                (entry.window_id, entry.pane_group.id().to_string())
+            })
+        };
+        to_control_data(TabMutationResult {
+            tab_id,
+            window_id: window_id.to_string(),
+        })
+    }
+
+    fn move_tab(
+        &mut self,
+        target: &TargetSelector,
+        params: TabMoveParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let entry = select_single_tab_entry_for_mutation(target, ActionKind::TabMove, ctx)?;
+        let workspace = workspace_for_window(ActionKind::TabMove, entry.window_id, ctx)?;
+        let tab_count = workspace.read(ctx, |workspace, _| workspace.tab_count());
+        match params.direction {
+            HorizontalDirection::Left if entry.index == 0 => {
+                return Err(ControlError::new(
+                    ErrorCode::TargetStateConflict,
+                    "tab.move cannot move the leftmost tab further left",
+                ));
+            }
+            HorizontalDirection::Right if entry.index + 1 >= tab_count => {
+                return Err(ControlError::new(
+                    ErrorCode::TargetStateConflict,
+                    "tab.move cannot move the rightmost tab further right",
+                ));
+            }
+            _ => {}
+        }
+        let tab_id = entry.pane_group.id().to_string();
+        workspace.update(ctx, |workspace, ctx| {
+            let action = match params.direction {
+                HorizontalDirection::Left => WorkspaceAction::MoveTabLeft(entry.index),
+                HorizontalDirection::Right => WorkspaceAction::MoveTabRight(entry.index),
+            };
+            workspace.handle_action(&action, ctx);
+        });
+        to_control_data(TabMutationResult {
+            tab_id,
+            window_id: entry.window_id.to_string(),
+        })
+    }
+
+    fn close_tab(
+        &mut self,
+        target: &TargetSelector,
+        params: TabCloseParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let entry = select_single_tab_entry_for_mutation(target, ActionKind::TabClose, ctx)?;
+        let workspace = workspace_for_window(ActionKind::TabClose, entry.window_id, ctx)?;
+        let tab_count = workspace.read(ctx, |workspace, _| workspace.tab_count());
+        match params.scope {
+            TabCloseScope::Others if tab_count <= 1 => {
+                return Err(ControlError::new(
+                    ErrorCode::TargetStateConflict,
+                    "tab.close others requires at least one other tab",
+                ));
+            }
+            TabCloseScope::Right if entry.index + 1 >= tab_count => {
+                return Err(ControlError::new(
+                    ErrorCode::TargetStateConflict,
+                    "tab.close right requires at least one tab to the right",
+                ));
+            }
+            _ => {}
+        }
+        let tab_id = entry.pane_group.id().to_string();
+        workspace.update(ctx, |workspace, ctx| {
+            let action = match params.scope {
+                TabCloseScope::Target => WorkspaceAction::CloseTab(entry.index),
+                TabCloseScope::Others => WorkspaceAction::CloseOtherTabs(entry.index),
+                TabCloseScope::Right => WorkspaceAction::CloseTabsRight(entry.index),
+            };
+            workspace.handle_action(&action, ctx);
+        });
+        to_control_data(TabMutationResult {
+            tab_id,
+            window_id: entry.window_id.to_string(),
+        })
+    }
+
+    fn split_pane(
+        &mut self,
+        target: &TargetSelector,
+        params: PaneSplitParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        if params.profile.is_some() {
+            return Err(ControlError::new(
+                ErrorCode::UnsupportedAction,
+                "pane.split profile selection is not implemented by this local-control bridge",
+            ));
+        }
+        let entry = select_single_pane_entry_for_mutation(target, ActionKind::PaneSplit, ctx)?;
+        let direction = pane_direction(params.direction);
+        let new_pane_id = entry.pane_group.update(ctx, |pane_group, ctx| {
+            let existing_ids = pane_group.visible_pane_ids();
+            pane_group.focus_pane_by_id(entry.pane_id, ctx);
+            pane_group.handle_action(&PaneGroupAction::Add(direction), ctx);
+            pane_group
+                .visible_pane_ids()
+                .into_iter()
+                .find(|pane_id| !existing_ids.contains(pane_id))
+        });
+        let pane_id = new_pane_id.ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::TargetStateConflict,
+                "pane.split did not create a new pane in the target pane group",
+            )
+        })?;
+        to_control_data(PaneMutationResult {
+            pane_id: pane_id.to_string(),
+            tab_id: entry.tab_id,
+        })
+    }
+
+    fn focus_pane(
+        &mut self,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let entry = select_single_pane_entry_for_mutation(target, ActionKind::PaneFocus, ctx)?;
+        entry.pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.focus_pane_by_id(entry.pane_id, ctx);
+        });
+        to_control_data(PaneMutationResult {
+            pane_id: entry.pane_id.to_string(),
+            tab_id: entry.tab_id,
+        })
+    }
+
+    fn navigate_pane(
+        &mut self,
+        target: &TargetSelector,
+        params: PaneNavigateParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let entry = select_single_pane_entry_for_mutation(target, ActionKind::PaneNavigate, ctx)?;
+        let action = match params.direction {
+            PaneDirection::Left => PaneGroupAction::NavigateLeft,
+            PaneDirection::Right => PaneGroupAction::NavigateRight,
+            PaneDirection::Up => PaneGroupAction::NavigateUp,
+            PaneDirection::Down => PaneGroupAction::NavigateDown,
+        };
+        let focused_pane_id = entry.pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.focus_pane_by_id(entry.pane_id, ctx);
+            pane_group.handle_action(&action, ctx);
+            pane_group.focused_pane_id(ctx)
+        });
+        if focused_pane_id == entry.pane_id {
+            return Err(ControlError::new(
+                ErrorCode::TargetStateConflict,
+                "pane.navigate could not find a pane in the requested direction",
+            ));
+        }
+        to_control_data(PaneMutationResult {
+            pane_id: focused_pane_id.to_string(),
+            tab_id: entry.tab_id,
+        })
+    }
+
+    fn close_pane(
+        &mut self,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let entry = select_single_pane_entry_for_mutation(target, ActionKind::PaneClose, ctx)?;
+        let pane_id = entry.pane_id.to_string();
+        entry.pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.close_pane(entry.pane_id, ctx);
+        });
+        to_control_data(PaneMutationResult {
+            pane_id,
+            tab_id: entry.tab_id,
+        })
+    }
+
+    fn maximize_pane(
+        &mut self,
+        target: &TargetSelector,
+        params: PaneMaximizeParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let entry = select_single_pane_entry_for_mutation(target, ActionKind::PaneMaximize, ctx)?;
+        let pane_id = entry.pane_id.to_string();
+        entry.pane_group.update(ctx, |pane_group, ctx| {
+            if pane_group.pane_count() <= 1 {
+                return Err(ControlError::new(
+                    ErrorCode::TargetStateConflict,
+                    "pane.maximize requires a split pane group",
+                ));
+            }
+            pane_group.focus_pane_by_id(entry.pane_id, ctx);
+            let currently_enabled = pane_group.is_focused_pane_maximized(ctx);
+            if params
+                .enabled
+                .is_none_or(|enabled| enabled != currently_enabled)
+            {
+                pane_group.handle_action(&PaneGroupAction::ToggleMaximizePane, ctx);
+            }
+            Ok(())
+        })?;
+        to_control_data(PaneMutationResult {
+            pane_id,
+            tab_id: entry.tab_id,
+        })
+    }
+
+    fn resize_pane(
+        &mut self,
+        target: &TargetSelector,
+        params: PaneResizeParams,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        let entry = select_single_pane_entry_for_mutation(target, ActionKind::PaneResize, ctx)?;
+        if params.amount == Some(0) {
+            return Err(ControlError::new(
+                ErrorCode::InvalidParams,
+                "pane.resize amount must be greater than zero",
+            ));
+        }
+        let action = match params.direction {
+            PaneDirection::Left => PaneGroupAction::ResizeLeft,
+            PaneDirection::Right => PaneGroupAction::ResizeRight,
+            PaneDirection::Up => PaneGroupAction::ResizeUp,
+            PaneDirection::Down => PaneGroupAction::ResizeDown,
+        };
+        entry.pane_group.update(ctx, |pane_group, ctx| {
+            if pane_group.pane_count() <= 1 {
+                return Err(ControlError::new(
+                    ErrorCode::TargetStateConflict,
+                    "pane.resize requires a split pane group",
+                ));
+            }
+            pane_group.focus_pane_by_id(entry.pane_id, ctx);
+            let repeat_count = params.amount.unwrap_or(1);
+            for _ in 0..repeat_count {
+                pane_group.handle_action(&action, ctx);
+            }
+            Ok(())
+        })?;
+        to_control_data(PaneMutationResult {
+            pane_id: entry.pane_id.to_string(),
+            tab_id: entry.tab_id,
+        })
     }
 
     fn rename_tab(
@@ -3200,6 +3636,99 @@ fn pane_entries_for_tabs(
                 })
         })
         .collect()
+}
+
+fn reject_concrete_tab_selector_for_relative_activation(
+    target: &TargetSelector,
+) -> Result<(), ControlError> {
+    if matches!(
+        target.tab,
+        Some(TabTarget::Id { .. } | TabTarget::Index { .. } | TabTarget::Title { .. })
+    ) {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            "tab.activate relative navigation only accepts the default or active tab selector",
+        ));
+    }
+    Ok(())
+}
+
+fn select_single_tab_entry_for_mutation(
+    target: &TargetSelector,
+    action: ActionKind,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<TabEntry, ControlError> {
+    reject_target_families(
+        action,
+        target.pane.is_some()
+            || target.session.is_some()
+            || target.block.is_some()
+            || target.file.is_some()
+            || target.drive.is_some(),
+        "pane, session, block, file, or drive selectors",
+    )?;
+    let mut target = target.clone();
+    if target.tab.is_none() {
+        target.tab = Some(TabTarget::Active);
+    }
+    let entries = select_tab_entries(&target, action, ctx)?;
+    single_entry(entries, action, "tab")
+}
+
+fn select_single_pane_entry_for_mutation(
+    target: &TargetSelector,
+    action: ActionKind,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<PaneEntry, ControlError> {
+    reject_target_families(
+        action,
+        target.session.is_some()
+            || target.block.is_some()
+            || target.file.is_some()
+            || target.drive.is_some(),
+        "session, block, file, or drive selectors",
+    )?;
+    let mut target = target.clone();
+    if target.tab.is_none() && target.pane.is_none() {
+        target.tab = Some(TabTarget::Active);
+    }
+    if target.pane.is_none() {
+        target.pane = Some(PaneTarget::Active);
+    }
+    let entries = select_pane_entries(&target, action, ctx)?;
+    single_entry(entries, action, "pane")
+}
+
+fn single_entry<T>(
+    mut entries: Vec<T>,
+    action: ActionKind,
+    target_name: &str,
+) -> Result<T, ControlError> {
+    if entries.len() == 1 {
+        return Ok(entries.remove(0));
+    }
+    if entries.is_empty() {
+        return Err(ControlError::new(
+            ErrorCode::MissingTarget,
+            format!("{} requires a target {target_name}", action.as_str()),
+        ));
+    }
+    Err(ControlError::new(
+        ErrorCode::TargetStateConflict,
+        format!(
+            "{} resolved more than one {target_name}; provide a more specific selector",
+            action.as_str()
+        ),
+    ))
+}
+
+fn pane_direction(direction: PaneDirection) -> PaneGroupDirection {
+    match direction {
+        PaneDirection::Left => PaneGroupDirection::Left,
+        PaneDirection::Right => PaneGroupDirection::Right,
+        PaneDirection::Up => PaneGroupDirection::Up,
+        PaneDirection::Down => PaneGroupDirection::Down,
+    }
 }
 
 fn select_single_tab_for_mutation(
