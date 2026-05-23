@@ -303,6 +303,98 @@ fn test_tab_bar_traffic_light_space_regression_for_resource_center_overlap() {
     }
 }
 
+fn visible_zoom_level_hud(workspace: &ViewHandle<Workspace>, app: &App) -> Option<u16> {
+    workspace.read(app, |workspace, ctx| {
+        workspace
+            .zoom_level_hud
+            .read(ctx, |zoom_level_hud, _| zoom_level_hud.visible_zoom_level())
+    })
+}
+
+#[test]
+fn test_zoom_actions_show_zoom_level_hud() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                window_settings.zoom_level.set_value(100, ctx).unwrap();
+            });
+
+            workspace.handle_action(&WorkspaceAction::IncreaseZoom, ctx);
+            assert_eq!(*WindowSettings::as_ref(ctx).zoom_level.value(), 110);
+        });
+        assert_eq!(visible_zoom_level_hud(&workspace, &app), Some(110));
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::ResetZoom, ctx);
+            assert_eq!(
+                *WindowSettings::as_ref(ctx).zoom_level.value(),
+                ZoomLevel::default_value()
+            );
+        });
+        assert_eq!(
+            visible_zoom_level_hud(&workspace, &app),
+            Some(ZoomLevel::default_value())
+        );
+    });
+}
+
+#[test]
+fn test_zoom_actions_show_clamped_zoom_level_hud() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                window_settings.zoom_level.set_value(350, ctx).unwrap();
+            });
+
+            workspace.handle_action(&WorkspaceAction::IncreaseZoom, ctx);
+            assert_eq!(*WindowSettings::as_ref(ctx).zoom_level.value(), 350);
+        });
+        assert_eq!(visible_zoom_level_hud(&workspace, &app), Some(350));
+
+        workspace.update(&mut app, |workspace, ctx| {
+            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                window_settings.zoom_level.set_value(50, ctx).unwrap();
+            });
+
+            workspace.handle_action(&WorkspaceAction::DecreaseZoom, ctx);
+            assert_eq!(*WindowSettings::as_ref(ctx).zoom_level.value(), 50);
+        });
+        assert_eq!(visible_zoom_level_hud(&workspace, &app), Some(50));
+    });
+}
+
+#[test]
+fn test_invalid_zoom_level_dismisses_zoom_level_hud() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::IncreaseZoom, ctx);
+        });
+        assert_eq!(visible_zoom_level_hud(&workspace, &app), Some(110));
+
+        workspace.update(&mut app, |workspace, ctx| {
+            WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                window_settings.zoom_level.set_value(101, ctx).unwrap();
+            });
+
+            workspace.handle_action(&WorkspaceAction::DecreaseZoom, ctx);
+            assert_eq!(*WindowSettings::as_ref(ctx).zoom_level.value(), 101);
+        });
+        assert_eq!(visible_zoom_level_hud(&workspace, &app), None);
+    });
+}
+
 #[cfg(feature = "local_fs")]
 fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
     workspace.update(app, |workspace, ctx| {
