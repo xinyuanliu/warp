@@ -20,7 +20,7 @@ fn read_only_metadata_actions_are_logged_out_safe_metadata_reads() {
         let metadata = action.metadata();
         assert_eq!(
             metadata.implementation_status,
-            ActionImplementationStatus::Stub
+            ActionImplementationStatus::Implemented
         );
         assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyMetadata);
         assert_eq!(
@@ -96,12 +96,12 @@ fn file_and_project_metadata_reads_are_logged_out_safe_and_implemented() {
 }
 
 #[test]
-fn stub_terminal_data_reads_use_underlying_data_permission() {
+fn block_terminal_data_reads_use_underlying_data_permission() {
     for action in [ActionKind::BlockList, ActionKind::BlockGet] {
         let metadata = action.metadata();
         assert_eq!(
             metadata.implementation_status,
-            ActionImplementationStatus::Stub
+            ActionImplementationStatus::Implemented
         );
         assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyTerminalData);
         assert_eq!(
