@@ -92,4 +92,10 @@ mod tests {
         let err = select_instance(&records, &InstanceSelector::Active).expect_err("ambiguous");
         assert_eq!(err.code, ErrorCode::AmbiguousInstance);
     }
+
+    #[test]
+    fn active_selector_rejects_no_instances() {
+        let err = select_instance(&[], &InstanceSelector::Active).expect_err("no instance");
+        assert_eq!(err.code, ErrorCode::NoInstance);
+    }
 }

@@ -47,7 +47,7 @@ impl SingletonEntity for LocalControlServer {}
 
 impl LocalControlServer {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        if !FeatureFlag::WarpControlCli.is_enabled() {
+        if !warp_control_cli_enabled() {
             return Self {
                 _runtime: None,
                 _registered_instance: None,
@@ -66,12 +66,7 @@ impl LocalControlServer {
     }
 
     fn start(ctx: &mut ModelContext<Self>) -> Result<Self, ControlError> {
-        if !FeatureFlag::WarpControlCli.is_enabled() {
-            return Err(ControlError::new(
-                ErrorCode::LocalControlDisabled,
-                "local control is disabled by feature flag",
-            ));
-        }
+        ensure_feature_enabled()?;
         if !outside_warp_any_implemented_action_enabled(ctx) {
             return Err(ControlError::new(
                 ErrorCode::LocalControlDisabled,
@@ -171,14 +166,8 @@ impl LocalControlBridge {
         grant: CredentialGrant,
         ctx: &mut ModelContext<Self>,
     ) -> ResponseEnvelope {
-        if !FeatureFlag::WarpControlCli.is_enabled() {
-            return ResponseEnvelope::error(
-                request.request_id,
-                ControlError::new(
-                    ErrorCode::LocalControlDisabled,
-                    "local control is disabled by feature flag",
-                ),
-            );
+        if let Err(error) = ensure_feature_enabled() {
+            return ResponseEnvelope::error(request.request_id, error);
         }
         if request.protocol_version != PROTOCOL_VERSION {
             return ResponseEnvelope::error(
@@ -188,6 +177,9 @@ impl LocalControlBridge {
                     format!("unsupported protocol version {}", request.protocol_version),
                 ),
             );
+        }
+        if let Err(error) = validate_action_params(&request.action) {
+            return ResponseEnvelope::error(request.request_id, error);
         }
         if let Err(error) = grant.verify_for_action(request.action.kind) {
             return ResponseEnvelope::error(request.request_id, error);
@@ -338,13 +330,10 @@ async fn handle_credential_request(
     State(state): State<ControlServerState>,
     payload: Result<Json<CredentialRequest>, JsonRejection>,
 ) -> Response {
-    if !FeatureFlag::WarpControlCli.is_enabled() {
+    if let Err(error) = ensure_feature_enabled() {
         return (
             StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(ControlError::new(
-                ErrorCode::LocalControlDisabled,
-                "local control is disabled by feature flag",
-            ))),
+            Json(ErrorResponseEnvelope::new(error)),
         )
             .into_response();
     }
@@ -470,13 +459,10 @@ async fn handle_control_request(
     headers: HeaderMap,
     payload: Result<Json<RequestEnvelope>, JsonRejection>,
 ) -> Response {
-    if !FeatureFlag::WarpControlCli.is_enabled() {
+    if let Err(error) = ensure_feature_enabled() {
         return (
             StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(ControlError::new(
-                ErrorCode::LocalControlDisabled,
-                "local control is disabled by feature flag",
-            ))),
+            Json(ErrorResponseEnvelope::new(error)),
         )
             .into_response();
     }
@@ -553,16 +539,34 @@ async fn handle_control_request(
 }
 
 fn validate_tab_create_target(target: &TargetSelector) -> Result<(), ControlError> {
+    if matches!(target.window.as_ref(), Some(WindowTarget::Id { .. })) {
+        return Err(ControlError::new(
+            ErrorCode::StaleTarget,
+            "tab.create cannot resolve the requested window id",
+        ));
+    }
     if !matches!(target.window.as_ref(), None | Some(WindowTarget::Active)) {
         return Err(ControlError::new(
             ErrorCode::InvalidSelector,
             "tab.create only supports the active window selector",
         ));
     }
+    if matches!(target.tab.as_ref(), Some(TabTarget::Id { .. })) {
+        return Err(ControlError::new(
+            ErrorCode::StaleTarget,
+            "tab.create cannot resolve the requested tab id",
+        ));
+    }
     if !matches!(target.tab.as_ref(), None | Some(TabTarget::Active)) {
         return Err(ControlError::new(
             ErrorCode::InvalidSelector,
             "tab.create does not accept a concrete tab selector",
+        ));
+    }
+    if matches!(target.pane.as_ref(), Some(PaneTarget::Id { .. })) {
+        return Err(ControlError::new(
+            ErrorCode::StaleTarget,
+            "tab.create cannot resolve the requested pane id",
         ));
     }
     if !matches!(target.pane.as_ref(), None | Some(PaneTarget::Active)) {
@@ -573,20 +577,52 @@ fn validate_tab_create_target(target: &TargetSelector) -> Result<(), ControlErro
     }
     Ok(())
 }
+fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
+    if action.kind != ActionKind::TabCreate {
+        return Ok(());
+    }
+    if action
+        .params
+        .as_object()
+        .is_some_and(serde_json::Map::is_empty)
+    {
+        return Ok(());
+    }
+    Err(ControlError::new(
+        ErrorCode::InvalidParams,
+        "tab.create does not accept parameters in the first implementation slice",
+    ))
+}
+
+fn warp_control_cli_enabled() -> bool {
+    FeatureFlag::WarpControlCli.is_enabled()
+}
+
+fn ensure_feature_enabled() -> Result<(), ControlError> {
+    if warp_control_cli_enabled() {
+        return Ok(());
+    }
+    Err(ControlError::new(
+        ErrorCode::LocalControlDisabled,
+        "Warp control CLI is disabled by feature flag",
+    ))
+}
 
 fn target_window_id(
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<warpui::WindowId, ControlError> {
-    active_window_id(ctx.windows().active_window()).ok_or_else(|| {
+    require_active_window_id(ctx.windows().active_window())
+}
+
+fn require_active_window_id(
+    active_window: Option<warpui::WindowId>,
+) -> Result<warpui::WindowId, ControlError> {
+    active_window.ok_or_else(|| {
         ControlError::new(
             ErrorCode::MissingTarget,
             "tab.create requires an active Warp window",
         )
     })
-}
-
-fn active_window_id(active_window: Option<warpui::WindowId>) -> Option<warpui::WindowId> {
-    active_window
 }
 
 fn outside_warp_any_implemented_action_enabled(ctx: &ModelContext<LocalControlServer>) -> bool {
@@ -652,6 +688,14 @@ fn ensure_action_allowed(
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<(), ControlError> {
     let settings = LocalControlSettings::as_ref(ctx);
+    ensure_settings_allow_action(settings, context, action)
+}
+
+fn ensure_settings_allow_action(
+    settings: &LocalControlSettings,
+    context: InvocationContext,
+    action: ActionKind,
+) -> Result<(), ControlError> {
     let context = local_invocation_context(context);
     if !settings.is_context_enabled(context) {
         return Err(ControlError::new(

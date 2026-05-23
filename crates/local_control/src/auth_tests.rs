@@ -12,6 +12,14 @@ fn rejects_missing_authorization_header() {
         .expect_err("rejected");
     assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
 }
+#[test]
+fn rejects_malformed_authorization_header() {
+    let token = AuthToken::from_secret("secret");
+    let err = token
+        .verify_authorization_header(Some("Basic secret"))
+        .expect_err("rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+}
 
 #[test]
 fn rejects_wrong_bearer_token() {

@@ -27,6 +27,11 @@ fn input_run_is_not_in_the_allowlisted_catalog() {
     let action = serde_json::from_value::<ActionKind>(serde_json::json!("input.run"));
     assert!(action.is_err());
 }
+#[test]
+fn malformed_action_name_is_not_deserialized() {
+    let action = serde_json::from_value::<ActionKind>(serde_json::json!("tab.create.extra"));
+    assert!(action.is_err());
+}
 
 #[test]
 fn tab_create_metadata_is_first_slice_logged_out_safe_mutation() {
@@ -94,6 +99,25 @@ fn action_metadata_serializes_security_categories() {
     );
 }
 
+#[test]
+fn default_permissions_preserve_security_categories() {
+    assert_eq!(
+        ActionKind::TabCreate.metadata().permission_category,
+        PermissionCategory::MutateAppState
+    );
+    assert_eq!(
+        ActionKind::InputInsert.metadata().permission_category,
+        PermissionCategory::MutateUnderlyingData
+    );
+    assert_eq!(
+        ActionKind::SettingSet.metadata().permission_category,
+        PermissionCategory::MutateMetadataConfiguration
+    );
+    assert_eq!(
+        ActionKind::TabList.metadata().permission_category,
+        PermissionCategory::ReadMetadata
+    );
+}
 #[test]
 fn non_first_slice_actions_are_catalog_stubs() {
     let metadata = ActionKind::WindowCreate.metadata();
