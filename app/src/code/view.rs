@@ -235,6 +235,11 @@ impl TabData {
             .as_ref()
             .and_then(|loc| loc.to_local_path().map(Path::to_path_buf))
     }
+
+    /// Returns the local or remote file location backing this tab.
+    pub fn location(&self) -> Option<&LocalOrRemotePath> {
+        self.location.as_ref()
+    }
 }
 
 pub struct CodeView {

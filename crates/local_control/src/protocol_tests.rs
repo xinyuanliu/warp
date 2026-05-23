@@ -20,12 +20,39 @@ fn read_only_metadata_actions_are_logged_out_safe_metadata_reads() {
         ActionKind::AppearanceGet,
         ActionKind::SettingGet,
         ActionKind::SettingList,
-        ActionKind::FileList,
     ] {
         let metadata = action.metadata();
         assert_eq!(
             metadata.implementation_status,
             ActionImplementationStatus::Stub
+        );
+        assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyMetadata);
+        assert_eq!(
+            metadata.permission_category,
+            PermissionCategory::ReadMetadata
+        );
+        assert!(!metadata.authenticated_user.required);
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![
+                InvocationContext::InsideWarp,
+                InvocationContext::OutsideWarp
+            ]
+        );
+    }
+}
+
+#[test]
+fn file_and_project_metadata_reads_are_logged_out_safe_and_implemented() {
+    for action in [
+        ActionKind::FileList,
+        ActionKind::ProjectActive,
+        ActionKind::ProjectList,
+    ] {
+        let metadata = action.metadata();
+        assert_eq!(
+            metadata.implementation_status,
+            ActionImplementationStatus::Implemented
         );
         assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyMetadata);
         assert_eq!(

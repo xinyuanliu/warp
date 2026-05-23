@@ -80,6 +80,8 @@ fn parses_read_only_contract_commands() {
         vec!["warpctrl", "setting", "list"],
         vec!["warpctrl", "setting", "get", "appearance.theme"],
         vec!["warpctrl", "file", "list"],
+        vec!["warpctrl", "project", "active"],
+        vec!["warpctrl", "project", "list"],
         vec!["warpctrl", "drive", "list", "--type", "workflow"],
         vec![
             "warpctrl",
@@ -111,6 +113,7 @@ fn generated_bash_completions_include_first_slice_commands() {
     assert!(completions.contains("tab"));
     assert!(completions.contains("window"));
     assert!(completions.contains("setting"));
+    assert!(completions.contains("project"));
     assert!(completions.contains("drive"));
     assert!(completions.contains("completions"));
 }

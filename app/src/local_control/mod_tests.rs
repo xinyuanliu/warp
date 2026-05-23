@@ -1,7 +1,7 @@
 use ::local_control::protocol::ActionKind;
 use ::local_control::protocol::{
-    Action, PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector,
-    WindowTarget,
+    Action, FileTarget, PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector,
+    WindowSelector, WindowTarget,
 };
 use ::local_control::{ErrorCode, InvocationContext};
 use settings::Setting as _;
@@ -10,7 +10,7 @@ use warp_core::features::FeatureFlag;
 use super::{
     action_metadata_for_name, capabilities, ensure_feature_enabled, ensure_settings_allow_action,
     outside_warp_action_enabled_for_settings, require_active_window_id, validate_action_params,
-    validate_tab_create_target,
+    validate_instance_metadata_read_target, validate_tab_create_target,
 };
 use crate::settings::{
     AllowInsideWarpControl, AllowInsideWarpReadOnly, AllowInsideWarpReadWrite,
@@ -125,8 +125,39 @@ fn capabilities_advertises_only_first_slice_core_actions() {
             ActionKind::ActionList,
             ActionKind::ActionGet,
             ActionKind::TabCreate,
+            ActionKind::FileList,
+            ActionKind::ProjectActive,
+            ActionKind::ProjectList,
         ]
     );
+}
+
+#[test]
+fn file_and_project_metadata_reads_reject_target_selectors() {
+    validate_instance_metadata_read_target(ActionKind::FileList, &TargetSelector::default())
+        .expect("default target is accepted");
+
+    let err = validate_instance_metadata_read_target(
+        ActionKind::FileList,
+        &TargetSelector {
+            file: Some(FileTarget::Path {
+                path: "../secret".to_owned(),
+            }),
+            ..TargetSelector::default()
+        },
+    )
+    .expect_err("file path selector is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
+
+    let err = validate_instance_metadata_read_target(
+        ActionKind::ProjectList,
+        &TargetSelector {
+            window: Some(WindowTarget::Active),
+            ..TargetSelector::default()
+        },
+    )
+    .expect_err("project target selector is rejected");
+    assert_eq!(err.code, ErrorCode::InvalidSelector);
 }
 
 #[test]
@@ -194,29 +225,16 @@ fn disabled_granular_permission_denies_with_insufficient_permissions() {
 fn metadata_read_actions_require_read_permission() {
     let settings = settings_with_values(true, true, false, true, true, true);
 
-    let err = ensure_settings_allow_action(
-        &settings,
-        InvocationContext::InsideWarp,
+    for action in [
         ActionKind::ActionList,
-    )
-    .expect_err("read permission is disabled");
-    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
-}
-
-#[test]
-fn tab_create_rejects_malformed_params() {
-    let err = validate_action_params(&Action {
-        kind: ActionKind::TabCreate,
-        params: serde_json::json!({ "unexpected": true }),
-    })
-    .expect_err("tab.create params must be empty");
-    assert_eq!(err.code, ErrorCode::InvalidParams);
-
-    validate_action_params(&Action {
-        kind: ActionKind::TabCreate,
-        params: serde_json::json!({}),
-    })
-    .expect("empty tab.create params are accepted");
+        ActionKind::FileList,
+        ActionKind::ProjectActive,
+        ActionKind::ProjectList,
+    ] {
+        let err = ensure_settings_allow_action(&settings, InvocationContext::InsideWarp, action)
+            .expect_err("read permission is disabled");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
 }
 
 #[test]
@@ -248,4 +266,26 @@ fn action_list_rejects_malformed_params() {
     })
     .expect_err("action.list params must be empty");
     assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn file_and_project_metadata_reads_reject_malformed_params() {
+    for action in [
+        ActionKind::FileList,
+        ActionKind::ProjectActive,
+        ActionKind::ProjectList,
+    ] {
+        let err = validate_action_params(&Action {
+            kind: action,
+            params: serde_json::json!({ "unexpected": true }),
+        })
+        .expect_err("metadata read params must be empty");
+        assert_eq!(err.code, ErrorCode::InvalidParams);
+
+        validate_action_params(&Action {
+            kind: action,
+            params: serde_json::json!({}),
+        })
+        .expect("empty metadata read params are accepted");
+    }
 }

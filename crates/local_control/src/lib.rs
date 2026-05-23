@@ -22,6 +22,7 @@ pub use protocol::{
     ExecutionContextProof, FileListParams, FileListResult, FileSelector, FileSummary, FileTarget,
     HistoryEntrySummary, HistoryListParams, HistoryListResult, InputGetParams, InputStateResult,
     InvocationContext, PROTOCOL_VERSION, PaneListResult, PaneSelector, PermissionCategory,
+    ProjectActiveParams, ProjectActiveResult, ProjectListParams, ProjectListResult, ProjectSummary,
     RequestEnvelope, ResponseEnvelope, RiskTier, SessionListResult, SessionSelector,
     SessionSummary, SessionTarget, SettingGetParams, SettingGetResult, SettingListParams,
     SettingListResult, SettingSummary, StateDataCategory, TabListResult, TabSelector, TabSummary,

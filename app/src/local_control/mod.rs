@@ -1,14 +1,19 @@
+use crate::code::view::CodeView;
 use crate::features::FeatureFlag;
-use std::collections::HashMap;
+use crate::projects::ProjectManagementModel;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use crate::settings::{
     LocalControlInvocationContext, LocalControlPermissionCategory, LocalControlSettings,
 };
+use crate::terminal::view::TerminalView;
+use crate::workspace::ActiveSession;
 use ::local_control::auth::{CredentialGrant, CredentialRequest, ScopedCredential};
 use ::local_control::protocol::{
-    ActionGetParams, PaneTarget, TabTarget, TargetSelector, WindowTarget,
+    ActionGetParams, FileListResult, FileSummary, PaneTarget, ProjectActiveResult,
+    ProjectListResult, ProjectSummary, TabTarget, TargetSelector, WindowTarget,
 };
 use ::local_control::{
     ActionKind, AuthToken, ControlEndpoint, ControlError, ControlResponse, ErrorCode,
@@ -250,6 +255,39 @@ impl LocalControlBridge {
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
+            ActionKind::FileList => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match self.list_open_files(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::ProjectActive => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match self.active_project(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::ProjectList => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match self.list_projects(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
             ActionKind::TabCreate => {
                 if let Err(error) =
                     ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
@@ -321,6 +359,38 @@ impl LocalControlBridge {
         }))
     }
 
+    fn list_open_files(
+        &mut self,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        validate_instance_metadata_read_target(ActionKind::FileList, target)?;
+        to_control_data(FileListResult {
+            files: open_file_summaries(ctx),
+        })
+    }
+
+    fn active_project(
+        &mut self,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        validate_instance_metadata_read_target(ActionKind::ProjectActive, target)?;
+        to_control_data(ProjectActiveResult {
+            project: active_project_summary(ctx),
+        })
+    }
+
+    fn list_projects(
+        &mut self,
+        target: &TargetSelector,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<serde_json::Value, ControlError> {
+        validate_instance_metadata_read_target(ActionKind::ProjectList, target)?;
+        to_control_data(ProjectListResult {
+            projects: project_summaries(ctx),
+        })
+    }
     fn instance_metadata(&self) -> serde_json::Value {
         json!({
             "action": ActionKind::InstanceList.as_str(),
@@ -653,29 +723,47 @@ fn validate_tab_create_target(target: &TargetSelector) -> Result<(), ControlErro
     }
     Ok(())
 }
+
+fn validate_instance_metadata_read_target(
+    action: ActionKind,
+    target: &TargetSelector,
+) -> Result<(), ControlError> {
+    if target.window.is_some()
+        || target.tab.is_some()
+        || target.pane.is_some()
+        || target.session.is_some()
+        || target.block.is_some()
+        || target.file.is_some()
+        || target.drive.is_some()
+    {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            format!(
+                "{} does not accept target selectors; it only reads state already represented in Warp",
+                action.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
 fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
     match action.kind {
-        ActionKind::AppInspect | ActionKind::ActionList => {
-            if action
-                .params
-                .as_object()
-                .is_some_and(serde_json::Map::is_empty)
-            {
-                return Ok(());
-            }
-            return Err(ControlError::new(
-                ErrorCode::InvalidParams,
-                format!("{} does not accept parameters", action.kind.as_str()),
-            ));
-        }
         ActionKind::ActionGet => {
             let params = action.params_as::<ActionGetParams>()?;
             action_metadata_for_name(&params.action)?;
-            return Ok(());
+            Ok(())
         }
-        ActionKind::TabCreate => {}
-        _ => return Ok(()),
+        ActionKind::AppInspect
+        | ActionKind::ActionList
+        | ActionKind::TabCreate
+        | ActionKind::FileList
+        | ActionKind::ProjectActive
+        | ActionKind::ProjectList => validate_empty_action_params(action),
+        _ => Ok(()),
     }
+}
+
+fn validate_empty_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
     if action
         .params
         .as_object()
@@ -685,7 +773,7 @@ fn validate_action_params(action: &::local_control::Action) -> Result<(), Contro
     }
     Err(ControlError::new(
         ErrorCode::InvalidParams,
-        "tab.create does not accept parameters in the first implementation slice",
+        format!("{} does not accept parameters", action.kind.as_str()),
     ))
 }
 
@@ -705,6 +793,92 @@ fn action_metadata_for_name(
         })
 }
 
+fn open_file_summaries(ctx: &mut ModelContext<LocalControlBridge>) -> Vec<FileSummary> {
+    let window_ids: Vec<_> = ctx.window_ids().collect();
+    let mut files = Vec::new();
+    for window_id in window_ids {
+        let Some(code_views) = ctx.views_of_type::<CodeView>(window_id) else {
+            continue;
+        };
+        for code_view in code_views {
+            code_view.read(ctx, |code_view, _ctx| {
+                for index in 0..code_view.tab_count() {
+                    if let Some(location) = code_view.tab_at(index).and_then(|tab| tab.location()) {
+                        files.push(FileSummary {
+                            path: location.display_path(),
+                            tab_id: None,
+                        });
+                    }
+                }
+            });
+        }
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files
+}
+
+fn active_project_path(ctx: &mut ModelContext<LocalControlBridge>) -> Option<String> {
+    let window_id = ctx.windows().active_window()?;
+    let repo_path = ActiveSession::as_ref(ctx)
+        .terminal_view_id(window_id)
+        .and_then(|terminal_view_id| ctx.view_with_id::<TerminalView>(window_id, terminal_view_id))
+        .and_then(|terminal| {
+            terminal
+                .as_ref(ctx)
+                .current_repo_path()
+                .map(|path| path.display_path())
+        });
+    repo_path.or_else(|| {
+        ActiveSession::as_ref(ctx)
+            .working_directory(window_id)
+            .map(|path| path.display_path())
+    })
+}
+
+fn active_project_summary(ctx: &mut ModelContext<LocalControlBridge>) -> Option<ProjectSummary> {
+    active_project_path(ctx).map(|path| ProjectSummary {
+        path,
+        is_active: true,
+        last_opened_at: None,
+    })
+}
+
+fn project_summaries(ctx: &mut ModelContext<LocalControlBridge>) -> Vec<ProjectSummary> {
+    let active_path = active_project_path(ctx);
+    let mut projects = BTreeMap::new();
+    ProjectManagementModel::handle(ctx).read(ctx, |model, _ctx| {
+        for project in model.all_projects() {
+            projects.insert(
+                project.path.clone(),
+                ProjectSummary {
+                    path: project.path.clone(),
+                    is_active: active_path.as_ref() == Some(&project.path),
+                    last_opened_at: project
+                        .last_opened_ts
+                        .map(|timestamp| timestamp.to_string()),
+                },
+            );
+        }
+    });
+    if let Some(path) = active_path {
+        projects.entry(path.clone()).or_insert(ProjectSummary {
+            path,
+            is_active: true,
+            last_opened_at: None,
+        });
+    }
+    projects.into_values().collect()
+}
+
+fn to_control_data<T: serde::Serialize>(data: T) -> Result<serde_json::Value, ControlError> {
+    serde_json::to_value(data).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::Internal,
+            "failed to encode local-control response",
+            err.to_string(),
+        )
+    })
+}
 fn warp_control_cli_enabled() -> bool {
     FeatureFlag::WarpControlCli.is_enabled()
 }

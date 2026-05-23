@@ -99,6 +99,9 @@ pub enum ControlCommand {
     /// Inspect files currently surfaced in Warp.
     #[command(subcommand)]
     File(FileCommand),
+    /// Inspect projects currently known to Warp.
+    #[command(subcommand)]
+    Project(ProjectCommand),
     /// Inspect Warp Drive objects.
     #[command(subcommand)]
     Drive(DriveCommand),
@@ -221,6 +224,14 @@ pub enum SettingCommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum FileCommand {
     /// List files currently surfaced in Warp.
+    List(TargetArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum ProjectCommand {
+    /// Print the active project for the selected local Warp app.
+    Active(TargetArgs),
+    /// List projects currently known to Warp.
     List(TargetArgs),
 }
 
@@ -390,6 +401,7 @@ fn run_inner(args: ControlArgs) -> Result<(), ControlError> {
         ControlCommand::Appearance(command) => run_appearance_command(command, output_format),
         ControlCommand::Setting(command) => run_setting_command(command, output_format),
         ControlCommand::File(command) => run_file_command(command, output_format),
+        ControlCommand::Project(command) => run_project_command(command, output_format),
         ControlCommand::Drive(command) => run_drive_command(command, output_format),
         ControlCommand::Completions { shell } => generate_completions_to_stdout(shell),
     }
@@ -643,6 +655,26 @@ fn run_file_command(command: FileCommand, output_format: OutputFormat) -> Result
             args,
             ActionKind::FileList,
             local_control::FileListParams::default(),
+            output_format,
+        ),
+    }
+}
+
+fn run_project_command(
+    command: ProjectCommand,
+    output_format: OutputFormat,
+) -> Result<(), ControlError> {
+    match command {
+        ProjectCommand::Active(args) => run_action_with_params(
+            args,
+            ActionKind::ProjectActive,
+            local_control::ProjectActiveParams::default(),
+            output_format,
+        ),
+        ProjectCommand::List(args) => run_action_with_params(
+            args,
+            ActionKind::ProjectList,
+            local_control::ProjectListParams::default(),
             output_format,
         ),
     }

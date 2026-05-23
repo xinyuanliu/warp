@@ -71,6 +71,11 @@ pub struct HistoryListParams {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputGetParams {}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectActiveParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectListParams {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingGetParams {
@@ -258,6 +263,23 @@ pub struct FileSummary {
 pub struct FileListResult {
     pub files: Vec<FileSummary>,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSummary {
+    pub path: String,
+    pub is_active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_opened_at: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectListResult {
+    pub projects: Vec<ProjectSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectActiveResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectSummary>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DriveObjectSummary {
@@ -332,6 +354,7 @@ pub enum TargetScope {
     Settings,
     Appearance,
     File,
+    Project,
     Drive,
     Surface,
 }
@@ -637,6 +660,10 @@ pub enum ActionKind {
     SettingToggle,
     #[serde(rename = "file.list")]
     FileList,
+    #[serde(rename = "project.active")]
+    ProjectActive,
+    #[serde(rename = "project.list")]
+    ProjectList,
     #[serde(rename = "drive.list")]
     DriveList,
     #[serde(rename = "drive.get")]
@@ -701,6 +728,8 @@ impl ActionKind {
         Self::SettingSet,
         Self::SettingToggle,
         Self::FileList,
+        Self::ProjectActive,
+        Self::ProjectList,
         Self::DriveList,
         Self::DriveGet,
     ];
@@ -762,6 +791,8 @@ impl ActionKind {
             Self::SettingSet => "setting.set",
             Self::SettingToggle => "setting.toggle",
             Self::FileList => "file.list",
+            Self::ProjectActive => "project.active",
+            Self::ProjectList => "project.list",
             Self::DriveList => "drive.list",
             Self::DriveGet => "drive.get",
         }
@@ -775,7 +806,10 @@ impl ActionKind {
             | Self::AppVersion
             | Self::ActionList
             | Self::ActionGet
-            | Self::TabCreate => ActionImplementationStatus::Implemented,
+            | Self::TabCreate
+            | Self::FileList
+            | Self::ProjectActive
+            | Self::ProjectList => ActionImplementationStatus::Implemented,
             _ => ActionImplementationStatus::Stub,
         };
         let requires_authenticated_user = self.default_requires_authenticated_user();
@@ -828,6 +862,8 @@ impl ActionKind {
             | Self::SettingGet
             | Self::SettingList
             | Self::FileList
+            | Self::ProjectActive
+            | Self::ProjectList
             | Self::DriveList => RiskTier::ReadOnlyMetadata,
             Self::BlockList
             | Self::BlockGet
@@ -891,6 +927,8 @@ impl ActionKind {
             | Self::SettingGet
             | Self::SettingList
             | Self::FileList
+            | Self::ProjectActive
+            | Self::ProjectList
             | Self::DriveList => StateDataCategory::MetadataRead,
             Self::BlockList
             | Self::BlockGet
@@ -1011,6 +1049,7 @@ impl ActionKind {
             }
             Self::ActionList | Self::ActionGet => TargetScope::Action,
             Self::FileList => TargetScope::File,
+            Self::ProjectActive | Self::ProjectList => TargetScope::Project,
             Self::DriveList | Self::DriveGet => TargetScope::Drive,
             Self::AppSettingsOpen
             | Self::AppCommandPaletteOpen
