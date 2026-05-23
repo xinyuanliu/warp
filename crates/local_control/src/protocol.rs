@@ -811,6 +811,10 @@ impl ActionKind {
             | Self::BlockGet
             | Self::InputGet
             | Self::HistoryList
+            | Self::ThemeList
+            | Self::AppearanceGet
+            | Self::SettingGet
+            | Self::SettingList
             | Self::FileList
             | Self::ProjectActive
             | Self::ProjectList

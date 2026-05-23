@@ -14,10 +14,11 @@ use warp_core::session_id::SessionId;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    action_metadata_for_name, authenticated_user_subject_for_action, block_get_result_from_model,
-    block_list_result_from_model, capabilities, ensure_feature_enabled,
-    ensure_settings_allow_action, outside_warp_action_enabled_for_settings,
-    require_active_window_id, require_active_window_id_for_action, validate_action_params,
+    action_metadata_for_name, appearance_state_result, authenticated_user_subject_for_action,
+    block_get_result_from_model, block_list_result_from_model, capabilities,
+    ensure_feature_enabled, ensure_settings_allow_action, outside_warp_action_enabled_for_settings,
+    rejected_setting_key, require_active_window_id, require_active_window_id_for_action,
+    setting_get_result, setting_list_result, theme_list_result, validate_action_params,
     validate_block_get_target, validate_block_list_target, validate_drive_target,
     validate_instance_metadata_read_target, validate_tab_create_target,
     validate_terminal_read_target, LocalControlBridge,
@@ -61,6 +62,13 @@ fn settings_with_outside_warp(
     outside_read_write: bool,
 ) -> LocalControlSettings {
     settings_with_values(true, outside_control, true, false, true, outside_read_write)
+}
+
+fn settings_with_outside_warp_read_only(
+    outside_control: bool,
+    outside_read_only: bool,
+) -> LocalControlSettings {
+    settings_with_values(true, outside_control, true, outside_read_only, true, false)
 }
 
 fn initialize_drive_app(app: &mut App, logged_in: bool) {
@@ -169,6 +177,16 @@ fn response_error_code(response: ::local_control::ResponseEnvelope) -> ErrorCode
     error.code
 }
 
+fn with_local_control_bridge(
+    test: impl FnOnce(&mut LocalControlBridge, &mut warpui::ModelContext<LocalControlBridge>) + 'static,
+) {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(LocalControlBridge::new);
+        LocalControlBridge::handle(&app).update(&mut app, test);
+    });
+}
+
 #[test]
 fn tab_create_accepts_default_and_active_targets() {
     validate_tab_create_target(&TargetSelector::default()).expect("default target is accepted");
@@ -255,6 +273,10 @@ fn capabilities_advertises_only_first_slice_core_actions() {
             ActionKind::BlockGet,
             ActionKind::InputGet,
             ActionKind::HistoryList,
+            ActionKind::ThemeList,
+            ActionKind::AppearanceGet,
+            ActionKind::SettingGet,
+            ActionKind::SettingList,
             ActionKind::FileList,
             ActionKind::ProjectActive,
             ActionKind::ProjectList,
@@ -457,9 +479,14 @@ fn metadata_read_actions_require_read_permission() {
 
     for action in [
         ActionKind::ActionList,
+        ActionKind::ThemeList,
+        ActionKind::AppearanceGet,
+        ActionKind::SettingGet,
+        ActionKind::SettingList,
         ActionKind::FileList,
         ActionKind::ProjectActive,
         ActionKind::ProjectList,
+        ActionKind::DriveList,
     ] {
         let err = ensure_settings_allow_action(&settings, InvocationContext::InsideWarp, action)
             .expect_err("read permission is disabled");
@@ -493,6 +520,35 @@ fn metadata_scoped_credential_cannot_invoke_input_or_history_reads() {
             .expect_err("metadata-scoped credential cannot read underlying data");
         assert_eq!(err.code, ErrorCode::InsufficientPermissions);
     }
+}
+
+#[test]
+fn metadata_reads_require_read_only_permission() {
+    let settings = settings_with_outside_warp_read_only(true, false);
+
+    let err = ensure_settings_allow_action(
+        &settings,
+        InvocationContext::OutsideWarp,
+        ActionKind::SettingGet,
+    )
+    .expect_err("read-only permission is disabled");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn tab_create_rejects_malformed_params() {
+    let err = validate_action_params(&Action {
+        kind: ActionKind::TabCreate,
+        params: serde_json::json!({ "unexpected": true }),
+    })
+    .expect_err("tab.create params must be empty");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+
+    validate_action_params(&Action {
+        kind: ActionKind::TabCreate,
+        params: serde_json::json!({}),
+    })
+    .expect("empty tab.create params are accepted");
 }
 
 #[test]
@@ -898,4 +954,54 @@ fn drive_get_rejects_unsupported_or_mismatched_objects() {
             );
         });
     })
+}
+
+#[test]
+fn read_only_settings_and_appearance_handlers_return_allowlisted_metadata() {
+    with_local_control_bridge(|_, ctx| {
+        let themes = theme_list_result(ctx).expect("themes are listed");
+        assert!(themes.themes.iter().any(|theme| theme.name == "Dark"));
+
+        let appearance = appearance_state_result(ctx).expect("appearance is readable");
+        assert_eq!(appearance.theme.as_deref(), Some("Dark"));
+        assert_eq!(appearance.light_theme.as_deref(), Some("Light"));
+        assert_eq!(appearance.dark_theme.as_deref(), Some("Dark"));
+        assert_eq!(appearance.ui_zoom_percent, Some(100));
+
+        let settings = setting_list_result(ctx).expect("settings are listed");
+        assert!(settings
+            .settings
+            .iter()
+            .any(|setting| setting.key == "appearance.themes.system_theme"));
+
+        let setting = setting_get_result("appearance.themes.system_theme", ctx)
+            .expect("allowlisted setting is readable");
+        assert_eq!(setting.setting.value, serde_json::json!(false));
+        assert_eq!(setting.setting.value_type, "bool");
+    });
+}
+
+#[test]
+fn setting_get_rejects_unknown_and_private_settings() {
+    with_local_control_bridge(|_, ctx| {
+        let err = setting_get_result("appearance.secrets.token", ctx)
+            .expect_err("unknown settings are rejected");
+        assert_eq!(err.code, ErrorCode::NotAllowlisted);
+
+        let err = setting_get_result("local_control.allow_outside_warp_control", ctx)
+            .expect_err("private settings are rejected");
+        assert_eq!(err.code, ErrorCode::NotAllowlisted);
+        assert!(err.message.contains("private or sensitive"));
+    });
+}
+
+#[test]
+fn rejected_setting_key_distinguishes_private_settings() {
+    let private_err = rejected_setting_key("terminal.input.inline_menu_custom_content_heights");
+    assert_eq!(private_err.code, ErrorCode::NotAllowlisted);
+    assert!(private_err.message.contains("private or sensitive"));
+
+    let unknown_err = rejected_setting_key("terminal.input.not_real");
+    assert_eq!(unknown_err.code, ErrorCode::NotAllowlisted);
+    assert!(unknown_err.message.contains("not an allowlisted"));
 }
