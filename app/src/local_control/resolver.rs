@@ -1,7 +1,8 @@
 //! Target and parameter validation for the first local-control action slice.
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
-    ActionGetParams, PaneTarget, SessionTarget, TabTarget, TargetSelector, WindowTarget,
+    ActionGetParams, PaneTarget, SessionTarget, SettingGetParams, TabTarget, TargetSelector,
+    WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use warpui::ModelContext;
@@ -70,6 +71,11 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
         ActionKind::ActionInspect | ActionKind::CapabilityInspect => {
             let params = action.params_as::<ActionGetParams>()?;
             action_metadata_for_name(&params.action)?;
+            Ok(())
+        }
+
+        ActionKind::SettingGet => {
+            action.params_as::<SettingGetParams>()?;
             Ok(())
         }
         ActionKind::InstanceList

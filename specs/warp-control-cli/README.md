@@ -4,8 +4,9 @@ The first implementation slice is intentionally narrow:
 - discover compatible running Warp instances;
 - select one instance implicitly when unambiguous or explicitly with `--instance`;
 - send authenticated local-control requests through the per-instance discovery record;
+- return implemented app/action/layout/appearance/settings metadata reads;
 - create a new terminal tab with `warpctrl tab create`.
-The local-control protocol and catalog are broader than this slice, but commands outside the implemented capability set should fail with structured unsupported-action errors until their handlers land.
+The local-control protocol and catalog are broader than this slice, but commands outside the implemented capability set should fail with structured unsupported-action errors until their handlers land. Operator docs and Agent skills must not present stubbed commands as guaranteed live app handlers.
 ## Packaging model
 `warpctrl` should be packaged as a separate CLI artifact from the Warp GUI app while reusing shared repository code:
 - `crates/local_control` owns discovery records, local authentication material, client transport, protocol envelopes, action names, and error types.
@@ -29,26 +30,59 @@ Run `warpctrl --version` after installation to confirm the shell is resolving th
 ### Windows
 Build locally with `cargo build -p warp --bin warpctrl`, then run `target\debug\warpctrl.exe` or copy that binary onto `PATH`.
 The Windows-native binary target exists in this slice. Installer helper creation and release-artifact wiring still need a later packaging change before docs can promise an installer-provided `warpctrl` command.
+## Read-only metadata command contract
+The read-only contract separates low-sensitivity metadata reads from underlying-data reads. This branch implements metadata reads only. Metadata read permission must not be treated as permission to read terminal contents, command history, input buffers, file contents, Drive object contents, or AI conversation content.
+Implemented metadata read command forms are:
+- `warpctrl instance list`
+- `warpctrl app ping`
+- `warpctrl app version`
+- `warpctrl app active`
+- `warpctrl app inspect`
+- `warpctrl action list`
+- `warpctrl action get <action>`
+- `warpctrl window list`
+- `warpctrl tab list`
+- `warpctrl pane list`
+- `warpctrl session list`
+- `warpctrl theme list`
+- `warpctrl appearance get`
+- `warpctrl setting list`
+- `warpctrl setting get <key>`
+`theme.list`, `appearance.get`, `setting.list`, and `setting.get` are classified as `ReadMetadata` actions and are logged-out-safe because they expose only local appearance/configuration metadata from a small allowlist. `setting.get` rejects unknown, private, and sensitive settings with `not_allowlisted`.
+Underlying-data reads are not part of this shard. Do not document or rely on `block`, `input`, `history`, `file`, Drive content, terminal output, command execution, workflow execution, accepted-command submission, or agent prompt submission as available from this read-only settings/docs branch.
+## Safe targeting guidance
+For repeatable scripts and Agent workflows:
+- Start with `warpctrl --output-format json instance list` and record the target `instance_id`.
+- If exactly one compatible instance is listed, implicit targeting may be acceptable for interactive use. In scripts, pass `--instance <instance_id>` once discovered.
+- If multiple instances are listed, always pass `--instance`; do not rely on active/frontmost selection unless the task is explicitly interactive and ambiguity is acceptable.
+- Prefer opaque `instance_id` selectors over PID selectors for durable automation. `--pid` is a convenience filter for short-lived local debugging.
+- Handle structured failures explicitly: `no_instance`, `ambiguous_instance`, `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `execution_context_not_allowed`, `unsupported_action`, and `stale_target`.
+- Treat `unsupported_action` as a version or implementation mismatch, not as permission to fall back to mutating UI automation or internal dispatch.
 ## End-to-end local test flow
 Use matching app and CLI bits from the same branch or release artifact so the protocol version and action catalog agree.
 1. Start Warp and leave at least one window open.
 2. Confirm that the local-control server registered the running process:
    ```bash
-   warpctrl instance list
+   warpctrl --output-format json instance list
    ```
-3. If exactly one compatible instance is listed, create a new terminal tab:
+3. Copy the desired `instance_id`, then check the selected app's protocol version and implemented action catalog:
    ```bash
-   warpctrl tab create
+   warpctrl --output-format json app version --instance <instance_id>
+   warpctrl --output-format json action list --instance <instance_id>
    ```
-4. If multiple compatible instances are listed, copy the desired `instance_id` and target it explicitly:
+4. Inspect local structure and settings metadata:
+   ```bash
+   warpctrl --output-format json tab list --instance <instance_id>
+   warpctrl --output-format json theme list --instance <instance_id>
+   warpctrl --output-format json appearance get --instance <instance_id>
+   warpctrl --output-format json setting list --instance <instance_id>
+   warpctrl --output-format json setting get --instance <instance_id> appearance.themes.theme
+   ```
+5. If you are smoke-testing the first implemented mutation, create a new terminal tab explicitly in that instance:
    ```bash
    warpctrl tab create --instance <instance_id>
    ```
-5. Verify the running app receives focus for the selected instance and a new terminal tab appears according to Warp's normal new-tab placement behavior.
-6. In a future slice that implements `tab list`, inspect state before and after the mutation:
-   ```bash
-   warpctrl tab list --instance <instance_id>
-   ```
+6. Verify the running app receives focus for the selected instance and a new terminal tab appears according to Warp's normal new-tab placement behavior.
 Expected failures:
 - no running compatible app: exits non-zero with a no-instance error;
 - multiple ambiguous instances: exits non-zero and asks for `--instance`;
@@ -88,6 +122,6 @@ sequenceDiagram
 - Once higher-risk handlers land (e.g. `input.insert`, command execution), the same-user boundary becomes a code-execution trust boundary. Consider separating the token from the discovery metadata, adding per-request nonces, or switching to a Unix domain socket with `SO_PEERCRED` for kernel-verified caller identity.
 ## Documentation review notes
 - Treat `warpctrl` as provisional executable naming until packaging signs off on final artifact aliases.
-- Keep examples scoped to discovery and `tab create` until additional app-side handlers are implemented.
+- Keep examples scoped to implemented metadata reads and `tab create` until additional app-side handlers land.
 - Do not document catalog commands as usable just because they exist in protocol enums or parser scaffolding; operator docs should distinguish implemented commands from planned allowlist entries.
 - Windows packaging may initially follow the existing helper-wrapper pattern rather than shipping a native standalone executable. Update this README when that decision is final.

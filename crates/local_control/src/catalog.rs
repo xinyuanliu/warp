@@ -567,7 +567,11 @@ impl ActionKind {
             | Self::BlockInspect
             | Self::BlockOutput
             | Self::InputGet
-            | Self::HistoryList => ActionImplementationStatus::Implemented,
+            | Self::HistoryList
+            | Self::ThemeList
+            | Self::AppearanceGet
+            | Self::SettingList
+            | Self::SettingGet => ActionImplementationStatus::Implemented,
             Self::AppFocus
             | Self::AuthStatus
             | Self::AuthLogin
@@ -602,21 +606,17 @@ impl ActionKind {
             | Self::InputClear
             | Self::InputModeSet
             | Self::InputRun
-            | Self::ThemeList
             | Self::ThemeGet
             | Self::ThemeSet
             | Self::ThemeSystemSet
             | Self::ThemeLightSet
             | Self::ThemeDarkSet
-            | Self::AppearanceGet
             | Self::AppearanceFontSizeIncrease
             | Self::AppearanceFontSizeDecrease
             | Self::AppearanceFontSizeReset
             | Self::AppearanceZoomIncrease
             | Self::AppearanceZoomDecrease
             | Self::AppearanceZoomReset
-            | Self::SettingList
-            | Self::SettingGet
             | Self::SettingSet
             | Self::SettingToggle
             | Self::KeybindingList
