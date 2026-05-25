@@ -1,4 +1,6 @@
 //! Credential request, issuance, and validation types for local control.
+use std::collections::HashMap;
+
 use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
 use rand::RngCore as _;
@@ -62,6 +64,101 @@ impl AuthToken {
     }
 }
 
+/// App-issued proof material for one Warp-managed terminal session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalSessionProof {
+    pub proof_id: String,
+    pub terminal_session_id: String,
+    pub proof_secret: String,
+}
+
+struct TerminalSessionProofRef<'a> {
+    proof_id: &'a str,
+    terminal_session_id: &'a str,
+    proof_secret: &'a str,
+}
+
+#[derive(Debug, Clone)]
+struct TerminalSessionProofEntry {
+    instance_id: InstanceId,
+    terminal_session_id: String,
+    proof_secret: String,
+    expires_at: DateTime<Utc>,
+    revoked: bool,
+}
+
+/// In-memory verifier for app-issued terminal-session proof material.
+#[derive(Debug, Default, Clone)]
+pub struct TerminalSessionProofRegistry {
+    entries: HashMap<String, TerminalSessionProofEntry>,
+}
+
+impl TerminalSessionProofRegistry {
+    pub fn issue(
+        &mut self,
+        instance_id: InstanceId,
+        terminal_session_id: impl Into<String>,
+        ttl: Duration,
+    ) -> TerminalSessionProof {
+        let terminal_session_id = terminal_session_id.into();
+        let proof = TerminalSessionProof {
+            proof_id: format!("term_proof_{}", Uuid::new_v4().simple()),
+            terminal_session_id: terminal_session_id.clone(),
+            proof_secret: AuthToken::generate().secret().to_owned(),
+        };
+        let entry = TerminalSessionProofEntry {
+            instance_id,
+            terminal_session_id,
+            proof_secret: proof.proof_secret.clone(),
+            expires_at: Utc::now() + ttl,
+            revoked: false,
+        };
+        self.entries.insert(proof.proof_id.clone(), entry);
+        proof
+    }
+
+    pub fn revoke_session(&mut self, terminal_session_id: &str) {
+        for entry in self.entries.values_mut() {
+            if entry.terminal_session_id == terminal_session_id {
+                entry.revoked = true;
+            }
+        }
+    }
+
+    pub fn invalidate_all(&mut self) {
+        self.entries.clear();
+    }
+
+    fn verify(
+        &self,
+        instance_id: &InstanceId,
+        proof: TerminalSessionProofRef<'_>,
+    ) -> Result<(), ControlError> {
+        let Some(entry) = self.entries.get(proof.proof_id) else {
+            return Err(ControlError::new(
+                ErrorCode::ExecutionContextNotAllowed,
+                "Warp terminal proof is unknown or has been invalidated",
+            ));
+        };
+        if entry.revoked || Utc::now() >= entry.expires_at {
+            return Err(ControlError::new(
+                ErrorCode::ExecutionContextNotAllowed,
+                "Warp terminal proof is expired or revoked",
+            ));
+        }
+        if &entry.instance_id != instance_id
+            || entry.terminal_session_id != proof.terminal_session_id
+            || entry.proof_secret != proof.proof_secret
+        {
+            return Err(ControlError::new(
+                ErrorCode::ExecutionContextNotAllowed,
+                "Warp terminal proof does not match the issuing session",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Request for a short-lived credential scoped to one action and invocation context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRequest {
@@ -104,10 +201,68 @@ impl CredentialRequest {
             ) => Ok(()),
             (
                 InvocationContext::OutsideWarp,
-                Some(ExecutionContextProof::VerifiedWarpTerminal { .. }),
+                Some(
+                    ExecutionContextProof::VerifiedWarpTerminal { .. }
+                    | ExecutionContextProof::CallerDeclared { .. }
+                    | ExecutionContextProof::PlainEnvironment { .. },
+                ),
             ) => Err(ControlError::new(
                 ErrorCode::ExecutionContextNotAllowed,
-                "external clients cannot use a Warp terminal execution proof",
+                "external clients cannot use an inside-Warp execution proof",
+            )),
+        }
+    }
+
+    pub fn verify_execution_context_proof_with_registry(
+        &self,
+        instance_id: &InstanceId,
+        registry: &TerminalSessionProofRegistry,
+    ) -> Result<(), ControlError> {
+        match (&self.invocation_context, &self.execution_context_proof) {
+            (
+                InvocationContext::InsideWarp,
+                Some(ExecutionContextProof::VerifiedWarpTerminal {
+                    proof_id,
+                    terminal_session_id,
+                    proof_secret,
+                }),
+            ) => registry.verify(
+                instance_id,
+                TerminalSessionProofRef {
+                    proof_id,
+                    terminal_session_id,
+                    proof_secret,
+                },
+            ),
+            (InvocationContext::InsideWarp, None) => Err(ControlError::new(
+                ErrorCode::ExecutionContextNotAllowed,
+                "inside-Warp credentials require an app-issued verified Warp terminal proof",
+            )),
+            (
+                InvocationContext::InsideWarp,
+                Some(
+                    ExecutionContextProof::ExternalClient
+                    | ExecutionContextProof::CallerDeclared { .. }
+                    | ExecutionContextProof::PlainEnvironment { .. },
+                ),
+            ) => Err(ControlError::new(
+                ErrorCode::ExecutionContextNotAllowed,
+                "inside-Warp credentials require registry-verified terminal proof material",
+            )),
+            (
+                InvocationContext::OutsideWarp,
+                None | Some(ExecutionContextProof::ExternalClient),
+            ) => Ok(()),
+            (
+                InvocationContext::OutsideWarp,
+                Some(
+                    ExecutionContextProof::VerifiedWarpTerminal { .. }
+                    | ExecutionContextProof::CallerDeclared { .. }
+                    | ExecutionContextProof::PlainEnvironment { .. },
+                ),
+            ) => Err(ControlError::new(
+                ErrorCode::ExecutionContextNotAllowed,
+                "external clients cannot use an inside-Warp execution proof",
             )),
         }
     }

@@ -2,19 +2,21 @@
 use crate::auth::{CredentialRequest, ScopedCredential};
 use crate::discovery::InstanceRecord;
 use crate::protocol::{
-    ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, InvocationContext,
-    RequestEnvelope, ResponseEnvelope,
+    ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, ExecutionContextProof,
+    InvocationContext, RequestEnvelope, ResponseEnvelope,
 };
+
+const TERMINAL_PROOF_ID_ENV: &str = "WARPCTRL_TERMINAL_PROOF_ID";
+const TERMINAL_SESSION_ID_ENV: &str = "WARPCTRL_TERMINAL_SESSION_ID";
+const TERMINAL_PROOF_SECRET_ENV: &str = "WARPCTRL_TERMINAL_PROOF_SECRET";
 
 pub fn send_request(
     instance: &InstanceRecord,
     request: &RequestEnvelope,
 ) -> Result<ResponseEnvelope, ControlError> {
-    let credential = request_credential(
-        instance,
-        request.action.kind,
-        InvocationContext::OutsideWarp,
-    )?;
+    let (invocation_context, proof) = invocation_context_from_environment();
+    let credential =
+        request_credential_with_proof(instance, request.action.kind, invocation_context, proof)?;
     let endpoint = instance.endpoint.as_ref().ok_or_else(|| {
         ControlError::new(
             ErrorCode::LocalControlDisabled,
@@ -63,6 +65,15 @@ pub fn request_credential(
     action: crate::protocol::ActionKind,
     invocation_context: InvocationContext,
 ) -> Result<ScopedCredential, ControlError> {
+    request_credential_with_proof(instance, action, invocation_context, None)
+}
+
+pub fn request_credential_with_proof(
+    instance: &InstanceRecord,
+    action: crate::protocol::ActionKind,
+    invocation_context: InvocationContext,
+    execution_context_proof: Option<ExecutionContextProof>,
+) -> Result<ScopedCredential, ControlError> {
     let credential_broker = instance.credential_broker.as_ref().ok_or_else(|| {
         ControlError::new(
             ErrorCode::LocalControlDisabled,
@@ -70,7 +81,8 @@ pub fn request_credential(
         )
     })?;
     let client = reqwest::blocking::Client::new();
-    let request = CredentialRequest::new(action, invocation_context);
+    let mut request = CredentialRequest::new(action, invocation_context);
+    request.execution_context_proof = execution_context_proof;
     let response = client
         .post(credential_broker.endpoint.credential_url())
         .json(&request)
@@ -101,4 +113,21 @@ pub fn request_credential(
         format!("local-control credential request failed with HTTP {status}"),
         text,
     ))
+}
+
+pub fn invocation_context_from_environment() -> (InvocationContext, Option<ExecutionContextProof>) {
+    let proof_id = std::env::var(TERMINAL_PROOF_ID_ENV).ok();
+    let terminal_session_id = std::env::var(TERMINAL_SESSION_ID_ENV).ok();
+    let proof_secret = std::env::var(TERMINAL_PROOF_SECRET_ENV).ok();
+    match (proof_id, terminal_session_id, proof_secret) {
+        (Some(proof_id), Some(terminal_session_id), Some(proof_secret)) => (
+            InvocationContext::InsideWarp,
+            Some(ExecutionContextProof::VerifiedWarpTerminal {
+                proof_id,
+                terminal_session_id,
+                proof_secret,
+            }),
+        ),
+        _ => (InvocationContext::OutsideWarp, None),
+    }
 }

@@ -19,7 +19,18 @@ pub enum InvocationContext {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExecutionContextProof {
-    VerifiedWarpTerminal { proof_id: String },
+    VerifiedWarpTerminal {
+        proof_id: String,
+        terminal_session_id: String,
+        proof_secret: String,
+    },
+    CallerDeclared {
+        label: String,
+    },
+    PlainEnvironment {
+        variable: String,
+        value: String,
+    },
     ExternalClient,
 }
 
@@ -313,7 +324,10 @@ impl ActionKind {
                 Self::InstanceList | Self::AppPing | Self::AppVersion | Self::TabCreate => (
                     ActionImplementationStatus::Implemented,
                     false,
-                    vec![InvocationContext::OutsideWarp],
+                    vec![
+                        InvocationContext::InsideWarp,
+                        InvocationContext::OutsideWarp,
+                    ],
                 ),
                 _ => (ActionImplementationStatus::Stub, true, Vec::new()),
             };

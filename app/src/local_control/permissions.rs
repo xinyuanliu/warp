@@ -74,27 +74,42 @@ pub(crate) fn ensure_settings_allow_action(
     context: InvocationContext,
     action: ActionKind,
 ) -> Result<(), ControlError> {
-    if context == InvocationContext::InsideWarp {
-        return Err(ControlError::new(
-            ErrorCode::ExecutionContextNotAllowed,
-            "inside-Warp local-control grants are not implemented",
-        ));
-    }
-    if !settings.outside_warp_control_enabled() {
-        return Err(ControlError::new(
-            ErrorCode::LocalControlDisabled,
-            "local control is disabled for this invocation context",
-        ));
-    }
     let permission = local_permission(action.metadata().permission_category);
-    if !settings.outside_warp_permission_enabled(permission) {
-        return Err(ControlError::new(
-            ErrorCode::InsufficientPermissions,
-            format!(
-                "{} requires a local-control permission that is disabled",
-                action.as_str()
-            ),
-        ));
+    match context {
+        InvocationContext::InsideWarp => {
+            if !settings.inside_warp_control_enabled() {
+                return Err(ControlError::new(
+                    ErrorCode::LocalControlDisabled,
+                    "local control is disabled for this invocation context",
+                ));
+            }
+            if !settings.inside_warp_permission_enabled(permission) {
+                return Err(ControlError::new(
+                    ErrorCode::InsufficientPermissions,
+                    format!(
+                        "{} requires a local-control permission that is disabled",
+                        action.as_str()
+                    ),
+                ));
+            }
+        }
+        InvocationContext::OutsideWarp => {
+            if !settings.outside_warp_control_enabled() {
+                return Err(ControlError::new(
+                    ErrorCode::LocalControlDisabled,
+                    "local control is disabled for this invocation context",
+                ));
+            }
+            if !settings.outside_warp_permission_enabled(permission) {
+                return Err(ControlError::new(
+                    ErrorCode::InsufficientPermissions,
+                    format!(
+                        "{} requires a local-control permission that is disabled",
+                        action.as_str()
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

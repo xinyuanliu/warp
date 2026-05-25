@@ -13,6 +13,7 @@ pub mod selectors;
 
 pub use auth::{
     AuthToken, AuthenticatedUserGrant, CredentialGrant, CredentialRequest, ScopedCredential,
+    TerminalSessionProof, TerminalSessionProofRegistry,
 };
 pub use catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, AuthenticatedUserRequirement,

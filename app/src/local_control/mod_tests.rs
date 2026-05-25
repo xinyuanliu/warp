@@ -13,6 +13,7 @@ use super::{
     validate_tab_create_target,
 };
 use crate::settings::{
+    AllowInsideWarpAppStateMutations, AllowInsideWarpControl, AllowInsideWarpMetadataReads,
     AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
     AllowOutsideWarpMetadataConfigurationMutations, AllowOutsideWarpMetadataReads,
     AllowOutsideWarpUnderlyingDataMutations, AllowOutsideWarpUnderlyingDataReads,
@@ -25,6 +26,9 @@ fn settings_with_values(
     outside_app_state_mutations: bool,
 ) -> LocalControlSettings {
     LocalControlSettings {
+        allow_inside_warp_control: AllowInsideWarpControl::new(Some(true)),
+        allow_inside_warp_metadata_reads: AllowInsideWarpMetadataReads::new(Some(true)),
+        allow_inside_warp_app_state_mutations: AllowInsideWarpAppStateMutations::new(Some(true)),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(outside_enabled)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(
             outside_metadata_reads,
@@ -176,16 +180,15 @@ fn disabled_outside_warp_denies_before_granular_permission() {
 }
 
 #[test]
-fn inside_warp_context_is_not_implemented() {
+fn inside_warp_context_allows_implemented_local_action_categories() {
     let settings = settings_with_values(true, true, true);
 
-    let err = ensure_settings_allow_action(
+    ensure_settings_allow_action(
         &settings,
         InvocationContext::InsideWarp,
         ActionKind::TabCreate,
     )
-    .expect_err("inside-Warp grants are not implemented");
-    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
+    .expect("inside-Warp app-state mutation grants are allowed by default");
 }
 
 #[test]

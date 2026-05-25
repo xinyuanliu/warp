@@ -1,6 +1,7 @@
 use settings::{Setting, SyncToCloud};
 
 use super::{
+    AllowInsideWarpAppStateMutations, AllowInsideWarpControl, AllowInsideWarpMetadataReads,
     AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
     AllowOutsideWarpMetadataConfigurationMutations, AllowOutsideWarpMetadataReads,
     AllowOutsideWarpUnderlyingDataMutations, AllowOutsideWarpUnderlyingDataReads,
@@ -9,6 +10,9 @@ use super::{
 
 fn settings_with_values(outside_enabled: bool) -> LocalControlSettings {
     LocalControlSettings {
+        allow_inside_warp_control: AllowInsideWarpControl::new(Some(true)),
+        allow_inside_warp_metadata_reads: AllowInsideWarpMetadataReads::new(Some(true)),
+        allow_inside_warp_app_state_mutations: AllowInsideWarpAppStateMutations::new(Some(true)),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(outside_enabled)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(false)),
         allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(
@@ -21,6 +25,18 @@ fn settings_with_values(outside_enabled: bool) -> LocalControlSettings {
             Some(false),
         ),
     }
+}
+
+#[test]
+fn inside_warp_defaults_allow_implemented_local_categories_only() {
+    let settings = settings_with_values(false);
+
+    assert!(settings.allows_inside_warp(LocalControlPermissionCategory::MetadataReads));
+    assert!(settings.allows_inside_warp(LocalControlPermissionCategory::AppStateMutations));
+    assert!(!settings.allows_inside_warp(LocalControlPermissionCategory::UnderlyingDataReads));
+    assert!(!settings
+        .allows_inside_warp(LocalControlPermissionCategory::MetadataConfigurationMutations));
+    assert!(!settings.allows_inside_warp(LocalControlPermissionCategory::UnderlyingDataMutations));
 }
 
 #[test]
@@ -40,17 +56,24 @@ fn defaults_disable_outside_warp_permissions() {
 
 #[test]
 fn generated_settings_are_private_local_only_with_expected_defaults() {
+    assert!(*AllowInsideWarpControl::new(None));
+    assert!(*AllowInsideWarpMetadataReads::new(None));
+    assert!(*AllowInsideWarpAppStateMutations::new(None));
     assert!(!*AllowOutsideWarpControl::new(None));
     assert!(!*AllowOutsideWarpMetadataReads::new(None));
     assert!(!*AllowOutsideWarpUnderlyingDataReads::new(None));
     assert!(!*AllowOutsideWarpAppStateMutations::new(None));
     assert!(!*AllowOutsideWarpMetadataConfigurationMutations::new(None));
     assert!(!*AllowOutsideWarpUnderlyingDataMutations::new(None));
+    assert_eq!(AllowInsideWarpControl::sync_to_cloud(), SyncToCloud::Never);
     assert_eq!(AllowOutsideWarpControl::sync_to_cloud(), SyncToCloud::Never);
     assert_eq!(
         AllowOutsideWarpUnderlyingDataMutations::sync_to_cloud(),
         SyncToCloud::Never
     );
+    assert!(AllowInsideWarpControl::is_private());
+    assert!(AllowInsideWarpMetadataReads::is_private());
+    assert!(AllowInsideWarpAppStateMutations::is_private());
     assert!(AllowOutsideWarpControl::is_private());
     assert!(AllowOutsideWarpMetadataReads::is_private());
     assert!(AllowOutsideWarpUnderlyingDataMutations::is_private());
@@ -59,6 +82,9 @@ fn generated_settings_are_private_local_only_with_expected_defaults() {
 #[test]
 fn disabled_context_blocks_enabled_granular_permissions() {
     let settings = LocalControlSettings {
+        allow_inside_warp_control: AllowInsideWarpControl::new(Some(true)),
+        allow_inside_warp_metadata_reads: AllowInsideWarpMetadataReads::new(Some(true)),
+        allow_inside_warp_app_state_mutations: AllowInsideWarpAppStateMutations::new(Some(true)),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(false)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(true)),
         allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(
@@ -79,6 +105,9 @@ fn disabled_context_blocks_enabled_granular_permissions() {
 #[test]
 fn granular_permissions_are_independent() {
     let settings = LocalControlSettings {
+        allow_inside_warp_control: AllowInsideWarpControl::new(Some(true)),
+        allow_inside_warp_metadata_reads: AllowInsideWarpMetadataReads::new(Some(true)),
+        allow_inside_warp_app_state_mutations: AllowInsideWarpAppStateMutations::new(Some(true)),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(true)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(true)),
         allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(

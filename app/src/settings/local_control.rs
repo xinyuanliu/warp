@@ -19,6 +19,33 @@ pub enum LocalControlPermissionCategory {
 }
 
 define_settings_group!(LocalControlSettings, settings: [
+    allow_inside_warp_control: AllowInsideWarpControl {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+        storage_key: "LocalControlAllowInsideWarp",
+        description: "Whether Warp control is allowed from verified Warp-managed terminal sessions.",
+    },
+    allow_inside_warp_metadata_reads: AllowInsideWarpMetadataReads {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+        storage_key: "LocalControlInsideWarpMetadataReads",
+        description: "Whether verified Warp terminals may receive metadata-read local control grants.",
+    },
+    allow_inside_warp_app_state_mutations: AllowInsideWarpAppStateMutations {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+        storage_key: "LocalControlInsideWarpAppStateMutations",
+        description: "Whether verified Warp terminals may receive app-state-mutation local control grants.",
+    },
     allow_outside_warp_control: AllowOutsideWarpControl {
         type: bool,
         default: false,
@@ -76,6 +103,24 @@ define_settings_group!(LocalControlSettings, settings: [
 ]);
 
 impl LocalControlSettings {
+    pub fn inside_warp_control_enabled(&self) -> bool {
+        *self.allow_inside_warp_control
+    }
+
+    pub fn inside_warp_permission_enabled(
+        &self,
+        permission: LocalControlPermissionCategory,
+    ) -> bool {
+        match permission {
+            LocalControlPermissionCategory::MetadataReads => *self.allow_inside_warp_metadata_reads,
+            LocalControlPermissionCategory::AppStateMutations => {
+                *self.allow_inside_warp_app_state_mutations
+            }
+            LocalControlPermissionCategory::UnderlyingDataReads
+            | LocalControlPermissionCategory::MetadataConfigurationMutations
+            | LocalControlPermissionCategory::UnderlyingDataMutations => false,
+        }
+    }
     pub fn outside_warp_control_enabled(&self) -> bool {
         *self.allow_outside_warp_control
     }
@@ -105,6 +150,10 @@ impl LocalControlSettings {
 
     pub fn allows_outside_warp(&self, permission: LocalControlPermissionCategory) -> bool {
         self.outside_warp_control_enabled() && self.outside_warp_permission_enabled(permission)
+    }
+
+    pub fn allows_inside_warp(&self, permission: LocalControlPermissionCategory) -> bool {
+        self.inside_warp_control_enabled() && self.inside_warp_permission_enabled(permission)
     }
 }
 
