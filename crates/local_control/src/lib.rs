@@ -26,11 +26,17 @@ pub use protocol::{
     Action, ActionGetParams, ActionGetResult, ActionListParams, ActionListResult,
     ActiveTargetChain, AppActiveParams, AppInspectParams, AppInspectResult, AppVersionResult,
     AppearanceStateResult, BlockGetParams, BlockGetResult, BlockListParams, BlockListResult,
-    BlockSummary, ControlError, ControlResponse, EmptyParams, ErrorCode, ErrorResponseEnvelope,
-    ExecutionContextProof, HistoryEntrySummary, HistoryListParams, HistoryListResult,
-    InputGetParams, InputStateResult, PROTOCOL_VERSION, PaneListResult, PaneSummary,
-    RequestEnvelope, ResponseEnvelope, SessionListResult, SessionSummary, SettingGetParams,
-    SettingGetResult, SettingListParams, SettingListResult, SettingSummary, TabListResult,
-    TabSummary, ThemeListResult, ThemeSummary, WindowListResult, WindowSummary,
+    BlockSummary, ControlError, ControlResponse, DriveCreateParams, DriveDeleteParams,
+    DriveInsertParams, DriveMutationResult, DriveObjectSummary, DriveObjectType, DriveRunParams,
+    DriveTarget, DriveUpdateParams, EmptyParams, ErrorCode, ErrorResponseEnvelope,
+    ExecutionContextProof, FileDeleteParams, FileMutationResult, FileTarget, FileWriteParams,
+    HistoryEntrySummary, HistoryListParams, HistoryListResult, InputGetParams, InputStateResult,
+    PROTOCOL_VERSION, PaneListResult, PaneSummary, RequestEnvelope, ResponseEnvelope,
+    SessionListResult, SessionSummary, SettingGetParams, SettingGetResult, SettingListParams,
+    SettingListResult, SettingSummary, TabListResult, TabSummary, ThemeListResult, ThemeSummary,
+    WindowListResult, WindowSummary,
 };
-pub use selectors::{PaneSelector, SessionSelector, TabSelector, TargetSelector, WindowSelector};
+pub use selectors::{
+    DriveObjectSelector, FileSelector, PaneSelector, SessionSelector, TabSelector, TargetSelector,
+    WindowSelector,
+};

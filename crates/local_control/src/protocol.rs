@@ -9,8 +9,9 @@ pub use crate::catalog::{
     StateDataCategory, TargetScope,
 };
 pub use crate::selectors::{
-    PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget,
-    TargetSelector, WindowSelector, WindowTarget,
+    DriveObjectSelector, DriveObjectType, DriveTarget, FileSelector, FileTarget, PaneSelector,
+    PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget, TargetSelector,
+    WindowSelector, WindowTarget,
 };
 
 /// Top-level request sent by a local-control client to a Warp instance.
@@ -403,6 +404,74 @@ pub enum ErrorCode {
     UnsupportedAction,
     NotAllowlisted,
     Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileWriteParams {
+    pub path: String,
+    pub contents: String,
+    #[serde(default)]
+    pub create: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDeleteParams {
+    pub path: String,
+    #[serde(default)]
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileMutationResult {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DriveCreateParams {
+    pub object_type: DriveObjectType,
+    pub name: String,
+    pub content: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DriveUpdateParams {
+    pub object_type: DriveObjectType,
+    pub id: String,
+    pub content: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveDeleteParams {
+    pub object_type: DriveObjectType,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveRunParams {
+    pub object_type: DriveObjectType,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveInsertParams {
+    pub object_type: DriveObjectType,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveObjectSummary {
+    pub object_type: DriveObjectType,
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DriveMutationResult {
+    pub object: DriveObjectSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
 }
 
 impl std::fmt::Display for ErrorCode {

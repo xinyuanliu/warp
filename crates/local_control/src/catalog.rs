@@ -77,6 +77,8 @@ pub enum TargetScope {
     Appearance,
     Surface,
     Action,
+    File,
+    Drive,
 }
 
 /// Whether an action has an app-side implementation in this stack layer.
@@ -215,6 +217,20 @@ pub enum ActionKind {
     SettingSet,
     #[serde(rename = "setting.toggle")]
     SettingToggle,
+    #[serde(rename = "file.write")]
+    FileWrite,
+    #[serde(rename = "file.delete")]
+    FileDelete,
+    #[serde(rename = "drive.create")]
+    DriveCreate,
+    #[serde(rename = "drive.update")]
+    DriveUpdate,
+    #[serde(rename = "drive.delete")]
+    DriveDelete,
+    #[serde(rename = "drive.run")]
+    DriveRun,
+    #[serde(rename = "drive.insert")]
+    DriveInsert,
 }
 
 impl ActionKind {
@@ -274,6 +290,13 @@ impl ActionKind {
         Self::SettingList,
         Self::SettingSet,
         Self::SettingToggle,
+        Self::FileWrite,
+        Self::FileDelete,
+        Self::DriveCreate,
+        Self::DriveUpdate,
+        Self::DriveDelete,
+        Self::DriveRun,
+        Self::DriveInsert,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -332,6 +355,13 @@ impl ActionKind {
             Self::SettingList => "setting.list",
             Self::SettingSet => "setting.set",
             Self::SettingToggle => "setting.toggle",
+            Self::FileWrite => "file.write",
+            Self::FileDelete => "file.delete",
+            Self::DriveCreate => "drive.create",
+            Self::DriveUpdate => "drive.update",
+            Self::DriveDelete => "drive.delete",
+            Self::DriveRun => "drive.run",
+            Self::DriveInsert => "drive.insert",
         }
     }
 
@@ -356,7 +386,14 @@ impl ActionKind {
             | Self::ThemeList
             | Self::AppearanceGet
             | Self::SettingGet
-            | Self::SettingList => ActionImplementationStatus::Implemented,
+            | Self::SettingList
+            | Self::FileWrite
+            | Self::FileDelete
+            | Self::DriveCreate
+            | Self::DriveUpdate
+            | Self::DriveDelete
+            | Self::DriveRun
+            | Self::DriveInsert => ActionImplementationStatus::Implemented,
             _ => ActionImplementationStatus::Stub,
         };
         let requires_authenticated_user = self.default_requires_authenticated_user();
@@ -423,7 +460,12 @@ impl ActionKind {
             | Self::InputModeSet
             | Self::WindowClose
             | Self::TabClose
-            | Self::PaneClose => RiskTier::MutatingDestructiveOrExecution,
+            | Self::PaneClose
+            | Self::FileWrite
+            | Self::FileDelete
+            | Self::DriveDelete
+            | Self::DriveRun
+            | Self::DriveInsert => RiskTier::MutatingDestructiveOrExecution,
             Self::AppFocus
             | Self::AppSettingsOpen
             | Self::AppCommandPaletteOpen
@@ -452,7 +494,9 @@ impl ActionKind {
             | Self::AppearanceFontSize
             | Self::AppearanceZoom
             | Self::SettingSet
-            | Self::SettingToggle => RiskTier::MutatingNonDestructive,
+            | Self::SettingToggle
+            | Self::DriveCreate
+            | Self::DriveUpdate => RiskTier::MutatingNonDestructive,
         }
     }
 
@@ -482,9 +526,17 @@ impl ActionKind {
             | Self::AppearanceSet
             | Self::AppearanceFontSize
             | Self::AppearanceZoom => StateDataCategory::MetadataConfigurationMutation,
-            Self::InputInsert | Self::InputReplace | Self::InputClear | Self::InputModeSet => {
-                StateDataCategory::UnderlyingDataMutation
-            }
+            Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet
+            | Self::FileWrite
+            | Self::FileDelete
+            | Self::DriveCreate
+            | Self::DriveUpdate
+            | Self::DriveDelete
+            | Self::DriveRun
+            | Self::DriveInsert => StateDataCategory::UnderlyingDataMutation,
             Self::AppFocus
             | Self::AppSettingsOpen
             | Self::AppCommandPaletteOpen
@@ -527,7 +579,17 @@ impl ActionKind {
     }
     fn default_requires_authenticated_user(self) -> bool {
         match self {
-            Self::BlockList | Self::BlockGet | Self::InputGet | Self::HistoryList => true,
+            Self::BlockList
+            | Self::BlockGet
+            | Self::InputGet
+            | Self::HistoryList
+            | Self::FileWrite
+            | Self::FileDelete
+            | Self::DriveCreate
+            | Self::DriveUpdate
+            | Self::DriveDelete
+            | Self::DriveRun
+            | Self::DriveInsert => true,
             Self::InstanceList
             | Self::AppPing
             | Self::AppInspect
@@ -585,6 +647,12 @@ impl ActionKind {
             Self::SettingGet | Self::SettingList | Self::SettingSet | Self::SettingToggle => {
                 TargetScope::Settings
             }
+            Self::FileWrite | Self::FileDelete => TargetScope::File,
+            Self::DriveCreate
+            | Self::DriveUpdate
+            | Self::DriveDelete
+            | Self::DriveRun
+            | Self::DriveInsert => TargetScope::Drive,
             Self::ActionList | Self::ActionGet => TargetScope::Action,
             Self::AppSettingsOpen
             | Self::AppCommandPaletteOpen
