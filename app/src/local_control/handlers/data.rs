@@ -142,24 +142,6 @@ pub(crate) fn validate_terminal_read_target(
     target: &TargetSelector,
 ) -> Result<(), ControlError> {
     validate_active_terminal_target(action, target)?;
-    if matches!(target.session.as_ref(), Some(SessionTarget::Id { .. })) {
-        return Err(ControlError::new(
-            ErrorCode::StaleTarget,
-            format!(
-                "{} cannot resolve the requested session id",
-                action.as_str()
-            ),
-        ));
-    }
-    if !matches!(target.session.as_ref(), None | Some(SessionTarget::Active)) {
-        return Err(ControlError::new(
-            ErrorCode::InvalidSelector,
-            format!(
-                "{} only supports the active session selector",
-                action.as_str()
-            ),
-        ));
-    }
     Ok(())
 }
 
@@ -250,7 +232,18 @@ fn resolve_terminal_in_pane_group(
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<ResolvedTerminalTarget, ControlError> {
     let terminal_view = pane_group.read(ctx, |pane_group, ctx| {
-        let pane_id = if matches!(target.pane, Some(PaneTarget::Active)) {
+        let pane_id = if let Some(SessionTarget::Id { id }) = target.session.as_ref() {
+            pane_group
+                .visible_pane_ids()
+                .into_iter()
+                .find(|pane_id| pane_id.to_string() == id.0)
+                .ok_or_else(|| {
+                    ControlError::new(
+                        ErrorCode::StaleTarget,
+                        format!("{} cannot resolve the requested session id", action.as_str()),
+                    )
+                })?
+        } else if matches!(target.pane, Some(PaneTarget::Active)) {
             pane_group.focused_pane_id(ctx)
         } else {
             pane_group

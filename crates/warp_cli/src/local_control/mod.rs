@@ -286,6 +286,14 @@ pub enum PaneCommand {
 pub enum SessionCommand {
     /// List sessions in the selected local Warp app.
     List(TargetArgs),
+    /// Activate the selected session.
+    Activate(TargetArgs),
+    /// Switch to the previous session.
+    Previous(TargetArgs),
+    /// Switch to the next session.
+    Next(TargetArgs),
+    /// Reopen the most recently closed session.
+    ReopenClosed(TargetArgs),
 }
 /// Commands that inspect terminal blocks.
 
@@ -310,8 +318,6 @@ pub enum InputCommand {
     Clear(TargetArgs),
     /// Set the active input mode.
     Mode(InputModeArgs),
-    /// Run a command in the target session.
-    Run(InputRunArgs),
 }
 
 /// Commands that inspect Warp themes.
@@ -404,6 +410,14 @@ pub struct TargetArgs {
     /// Target a specific local Warp process id.
     #[arg(long = "pid", conflicts_with = "instance")]
     pub pid: Option<u32>,
+
+    /// Target a session by `active` or opaque session id.
+    #[arg(long = "session", conflicts_with = "session_id")]
+    pub session: Option<String>,
+
+    /// Target a session by opaque session id.
+    #[arg(long = "session-id", conflicts_with = "session")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -602,13 +616,6 @@ pub struct InputModeArgs {
     pub mode: InputModeArg,
 }
 
-#[derive(Debug, Clone, Args)]
-pub struct InputRunArgs {
-    #[command(flatten)]
-    pub target: TargetArgs,
-
-    pub command: String,
-}
 
 #[derive(Debug, Clone, Args)]
 pub struct ThemeSetArgs {

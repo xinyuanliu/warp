@@ -513,7 +513,10 @@ impl LocalControlBridge {
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
-            ActionKind::PaneSessionPrevious | ActionKind::PaneSessionNext => {
+            ActionKind::PaneSessionPrevious
+            | ActionKind::PaneSessionNext
+            | ActionKind::SessionPrevious
+            | ActionKind::SessionNext => {
                 if let Err(error) =
                     ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
                 {
@@ -524,7 +527,18 @@ impl LocalControlBridge {
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
-            ActionKind::PaneSessionReopen => {
+            ActionKind::SessionActivate => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match session_input::activate_session(&request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneSessionReopen | ActionKind::SessionReopen => {
                 if let Err(error) =
                     ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
                 {

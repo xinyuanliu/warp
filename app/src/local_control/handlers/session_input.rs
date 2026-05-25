@@ -1,14 +1,15 @@
 //! Session activation/cycling/reopen and input mutation handlers.
 use ::local_control::protocol::{
     InputInsertParams, InputMode, InputModeSetParams, InputReplaceParams, InputStateResult,
-    TargetSelector, WindowTarget,
+    SessionTarget, TargetSelector, WindowTarget,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode};
 use serde_json::json;
-use warpui::{ModelContext, TypedActionView, ViewHandle};
+use warpui::{ModelContext, TypedActionView, ViewContext, ViewHandle};
 
 use crate::local_control::resolver::require_active_window_id_for_action;
 use crate::local_control::LocalControlBridge;
+use crate::pane_group::{PaneGroup, PaneId};
 use crate::terminal::input::Input;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::view::TerminalView;
@@ -31,6 +32,17 @@ pub(crate) fn validate_session_cycle_target(
             ErrorCode::InvalidSelector,
             format!(
                 "{} only supports the active window selector",
+                action.as_str()
+            ),
+        ));
+    }
+    if action != ActionKind::SessionActivate
+        && matches!(target.session.as_ref(), Some(SessionTarget::Id { .. }))
+    {
+        return Err(ControlError::new(
+            ErrorCode::InvalidSelector,
+            format!(
+                "{} does not accept a concrete session selector",
                 action.as_str()
             ),
         ));
@@ -61,8 +73,12 @@ pub(crate) fn cycle_session(
         workspace.update(ctx, |workspace, ctx| {
             let previous_tab_index = workspace.active_tab_index();
             let workspace_action = match action {
-                ActionKind::PaneSessionPrevious => WorkspaceAction::CyclePrevSession,
-                ActionKind::PaneSessionNext => WorkspaceAction::CycleNextSession,
+                ActionKind::PaneSessionPrevious | ActionKind::SessionPrevious => {
+                    WorkspaceAction::CyclePrevSession
+                }
+                ActionKind::PaneSessionNext | ActionKind::SessionNext => {
+                    WorkspaceAction::CycleNextSession
+                }
                 _ => {
                     return (
                         previous_tab_index,
@@ -87,14 +103,54 @@ pub(crate) fn cycle_session(
     }))
 }
 
+pub(crate) fn activate_session(
+    target: &TargetSelector,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<serde_json::Value, ControlError> {
+    let action = ActionKind::SessionActivate;
+    validate_session_cycle_target(action, target)?;
+    let window_id = require_active_window_id_for_action(ctx.windows().active_window(), action)?;
+    let workspace = ctx
+        .views_of_type::<Workspace>(window_id)
+        .and_then(|workspaces| workspaces.into_iter().next())
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::MissingTarget,
+                "session.activate requires a workspace in the target window",
+            )
+        })?;
+    let pane_group = workspace.read(ctx, |workspace, _| {
+        workspace.active_tab_pane_group().clone()
+    });
+    let tab_id = pane_group.id().to_string();
+    let pane_id = pane_group.update(ctx, |pane_group, ctx| {
+        let pane_id = resolve_target_session_pane_id(pane_group, target, action, ctx)?;
+        if pane_group.terminal_view_from_pane_id(pane_id, ctx).is_none() {
+            return Err(ControlError::new(
+                ErrorCode::TargetStateConflict,
+                "session.activate target pane does not contain a terminal session",
+            ));
+        }
+        pane_group.focus_pane_by_id(pane_id, ctx);
+        Ok::<_, ControlError>(pane_id)
+    })?;
+    Ok(json!({
+        "action": action.as_str(),
+        "window_id": window_id.to_string(),
+        "tab_id": tab_id,
+        "pane_id": pane_id.to_string(),
+        "session_id": pane_id.to_string(),
+    }))
+}
+
 pub(crate) fn reopen_session(
     target: &TargetSelector,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
-    validate_session_cycle_target(ActionKind::PaneSessionReopen, target)?;
+    validate_session_cycle_target(ActionKind::SessionReopen, target)?;
     let window_id = require_active_window_id_for_action(
         ctx.windows().active_window(),
-        ActionKind::PaneSessionReopen,
+        ActionKind::SessionReopen,
     )?;
     let workspace = ctx
         .views_of_type::<Workspace>(window_id)
@@ -102,17 +158,50 @@ pub(crate) fn reopen_session(
         .ok_or_else(|| {
             ControlError::new(
                 ErrorCode::MissingTarget,
-                "pane.session.reopen requires a workspace in the target window",
+                "session.reopen requires a workspace in the target window",
             )
         })?;
     workspace.update(ctx, |workspace, ctx| {
         workspace.handle_action(&WorkspaceAction::ReopenClosedSession, ctx);
     });
     Ok(json!({
-        "action": ActionKind::PaneSessionReopen.as_str(),
+        "action": ActionKind::SessionReopen.as_str(),
         "handled": true,
         "window_id": window_id.to_string(),
     }))
+}
+
+fn resolve_target_session_pane_id(
+    pane_group: &PaneGroup,
+    target: &TargetSelector,
+    action: ActionKind,
+    ctx: &mut ViewContext<PaneGroup>,
+) -> Result<PaneId, ControlError> {
+    match target.session.as_ref() {
+        None | Some(SessionTarget::Active) => {
+            pane_group
+                .active_session_id(ctx)
+                .map(PaneId::from)
+                .ok_or_else(|| {
+                    ControlError::new(
+                        ErrorCode::MissingTarget,
+                        format!("{} requires an active terminal session", action.as_str()),
+                    )
+                })
+        }
+        Some(SessionTarget::Id { id }) => {
+            pane_group
+                .visible_pane_ids()
+                .into_iter()
+                .find(|pane_id| pane_id.to_string() == id.0)
+                .ok_or_else(|| {
+                    ControlError::new(
+                        ErrorCode::StaleTarget,
+                        format!("{} cannot resolve the requested session id", action.as_str()),
+                    )
+                })
+        }
+    }
 }
 
 pub(crate) fn insert_input(

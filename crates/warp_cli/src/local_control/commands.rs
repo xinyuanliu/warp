@@ -5,12 +5,12 @@ use local_control::protocol::{
     DriveCreateParams, DriveDeleteParams, DriveGetParams, DriveInsertParams, DriveListParams,
     DriveRunParams, DriveUpdateParams, EmptyParams, ErrorCode, FileDeleteParams, FileListParams,
     FileOpenParams, FileWriteParams, HorizontalDirection, InputClearParams, InputInsertParams,
-    InputMode, InputModeSetParams, InputReplaceParams, InputRunParams, PaneCloseParams,
-    PaneDirection, PaneFocusParams, PaneMaximizeParams, PaneNavigateParams, PaneResizeParams,
-    PaneSplitParams, ProjectActiveParams, ProjectListParams, RequestEnvelope, SettingGetParams,
-    SettingListParams, SettingSetParams, SettingToggleParams, SizeAdjustment, TabActivateParams,
-    TabActivationTarget, TabCloseParams, TabCloseScope, TabMoveParams, TabRenameParams,
-    ThemeSetParams, WindowCloseParams, WindowCreateParams, WindowFocusParams,
+    InputMode, InputModeSetParams, InputReplaceParams, PaneCloseParams, PaneDirection,
+    PaneFocusParams, PaneMaximizeParams, PaneNavigateParams, PaneResizeParams, PaneSplitParams,
+    ProjectActiveParams, ProjectListParams, RequestEnvelope, SettingGetParams, SettingListParams,
+    SettingSetParams, SettingToggleParams, SizeAdjustment, TabActivateParams, TabActivationTarget,
+    TabCloseParams, TabCloseScope, TabMoveParams, TabRenameParams, ThemeSetParams,
+    WindowCloseParams, WindowCreateParams, WindowFocusParams,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -19,7 +19,7 @@ use serde_json::json;
 use crate::agent::OutputFormat;
 use crate::local_control::auth_commands::{ApiKeySubcommand, AuthCommand};
 use crate::local_control::output::{write_json, write_json_line};
-use crate::local_control::selectors::instance_selector;
+use crate::local_control::selectors::{instance_selector, target_selector};
 use crate::local_control::{
     ActionCommand, AppCommand, AppSurfaceArgs, AppearanceCommand, BlockCommand, DriveCommand,
     FileCommand, HistoryCommand, InputCommand, InstanceCommand, PaneCommand, ProjectCommand,
@@ -365,6 +365,27 @@ pub(super) fn run_session_command(
         SessionCommand::List(args) => {
             run_action_with_params(args, ActionKind::SessionList, EmptyParams {}, output_format)
         }
+        SessionCommand::Activate(args) => run_action_with_params(
+            args,
+            ActionKind::SessionActivate,
+            EmptyParams {},
+            output_format,
+        ),
+        SessionCommand::Previous(args) => run_action_with_params(
+            args,
+            ActionKind::SessionPrevious,
+            EmptyParams {},
+            output_format,
+        ),
+        SessionCommand::Next(args) => {
+            run_action_with_params(args, ActionKind::SessionNext, EmptyParams {}, output_format)
+        }
+        SessionCommand::ReopenClosed(args) => run_action_with_params(
+            args,
+            ActionKind::SessionReopen,
+            EmptyParams {},
+            output_format,
+        ),
     }
 }
 
@@ -427,14 +448,6 @@ pub(super) fn run_input_command(
             ActionKind::InputModeSet,
             InputModeSetParams {
                 mode: InputMode::from(args.mode),
-            },
-            output_format,
-        ),
-        InputCommand::Run(args) => run_action_with_params(
-            args.target,
-            ActionKind::InputRun,
-            InputRunParams {
-                command: args.command,
             },
             output_format,
         ),
@@ -691,7 +704,7 @@ pub(super) fn run_auth_command(
     match command {
         AuthCommand::Status(args) => {
             let records = local_control::discovery::list_instances();
-            let selector = instance_selector(args);
+            let selector = instance_selector(&args);
             let instance = select_instance(&records, &selector)?;
             let request = RequestEnvelope::new(Action::new(ActionKind::AppVersion));
             let response = local_control::client::send_request(&instance, &request)?;
@@ -709,7 +722,7 @@ pub(super) fn run_auth_command(
         }
         AuthCommand::Login(args) => {
             let records = local_control::discovery::list_instances();
-            let selector = instance_selector(args);
+            let selector = instance_selector(&args);
             select_instance(&records, &selector)?;
             Err(ControlError::new(
                 ErrorCode::UnsupportedAction,
@@ -747,12 +760,13 @@ fn run_action(
     output_format: OutputFormat,
 ) -> Result<(), ControlError> {
     let records = local_control::discovery::list_instances();
-    let selector = instance_selector(args);
+    let selector = instance_selector(&args);
     let instance = select_instance(&records, &selector)?;
-    let request = RequestEnvelope::new(Action {
+    let mut request = RequestEnvelope::new(Action {
         kind: action,
         params,
     });
+    request.target = target_selector(&args);
     let response = local_control::client::send_request(&instance, &request)?;
     let local_control::protocol::ControlResponse::Ok { data } = response.response else {
         return Err(ControlError::new(
@@ -774,9 +788,10 @@ fn run_action_with_params<T: Serialize>(
     output_format: OutputFormat,
 ) -> Result<(), ControlError> {
     let records = local_control::discovery::list_instances();
-    let selector = instance_selector(args);
+    let selector = instance_selector(&args);
     let instance = select_instance(&records, &selector)?;
-    let request = RequestEnvelope::new(Action::with_params(action, params)?);
+    let mut request = RequestEnvelope::new(Action::with_params(action, params)?);
+    request.target = target_selector(&args);
     let response = local_control::client::send_request(&instance, &request)?;
     let local_control::protocol::ControlResponse::Ok { data } = response.response else {
         return Err(ControlError::new(

@@ -1,7 +1,8 @@
 //! Target and parameter validation for the first local-control action slice.
 use crate::local_control::handlers::metadata::action_metadata_for_name;
 use ::local_control::protocol::{
-    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, PaneMaximizeParams,
+    ActionGetParams, BlockGetParams, BlockListParams, HistoryListParams, InputClearParams,
+    InputInsertParams, InputModeSetParams, InputReplaceParams, PaneMaximizeParams,
     PaneNavigateParams, PaneResizeParams, PaneSplitParams, PaneTarget, SessionTarget,
     SettingGetParams, TabActivateParams, TabCloseParams, TabMoveParams, TabTarget, TargetSelector,
     WindowCloseParams, WindowCreateParams, WindowTarget,
@@ -93,7 +94,14 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
         | ActionKind::AppFocus
         | ActionKind::WindowFocus
         | ActionKind::PaneFocus
-        | ActionKind::PaneClose => validate_empty_action_params(action),
+        | ActionKind::PaneClose
+        | ActionKind::PaneSessionPrevious
+        | ActionKind::PaneSessionNext
+        | ActionKind::PaneSessionReopen
+        | ActionKind::SessionActivate
+        | ActionKind::SessionPrevious
+        | ActionKind::SessionNext
+        | ActionKind::SessionReopen => validate_empty_action_params(action),
         ActionKind::WindowCreate => action.params_as::<WindowCreateParams>().map(|_| ()),
         ActionKind::WindowClose => action.params_as::<WindowCloseParams>().map(|_| ()),
         ActionKind::TabActivate => action.params_as::<TabActivateParams>().map(|_| ()),
@@ -122,6 +130,18 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
             Ok(())
         }),
         ActionKind::HistoryList => action.params_as::<HistoryListParams>().map(|_| ()),
+        ActionKind::InputInsert => action.params_as::<InputInsertParams>().and_then(|params| {
+            if params.text.is_empty() {
+                return Err(ControlError::new(
+                    ErrorCode::InvalidParams,
+                    "input.insert requires non-empty text",
+                ));
+            }
+            Ok(())
+        }),
+        ActionKind::InputReplace => action.params_as::<InputReplaceParams>().map(|_| ()),
+        ActionKind::InputClear => action.params_as::<InputClearParams>().map(|_| ()),
+        ActionKind::InputModeSet => action.params_as::<InputModeSetParams>().map(|_| ()),
         _ => Ok(()),
     }
 }

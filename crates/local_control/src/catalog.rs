@@ -185,6 +185,14 @@ pub enum ActionKind {
     PaneSessionReopen,
     #[serde(rename = "session.list")]
     SessionList,
+    #[serde(rename = "session.activate")]
+    SessionActivate,
+    #[serde(rename = "session.previous")]
+    SessionPrevious,
+    #[serde(rename = "session.next")]
+    SessionNext,
+    #[serde(rename = "session.reopen")]
+    SessionReopen,
     #[serde(rename = "block.list")]
     BlockList,
     #[serde(rename = "block.get")]
@@ -291,6 +299,10 @@ impl ActionKind {
         Self::PaneSessionNext,
         Self::PaneSessionReopen,
         Self::SessionList,
+        Self::SessionActivate,
+        Self::SessionPrevious,
+        Self::SessionNext,
+        Self::SessionReopen,
         Self::BlockList,
         Self::BlockGet,
         Self::InputGet,
@@ -364,6 +376,10 @@ impl ActionKind {
             Self::PaneSessionNext => "pane.session.next",
             Self::PaneSessionReopen => "pane.session.reopen",
             Self::SessionList => "session.list",
+            Self::SessionActivate => "session.activate",
+            Self::SessionPrevious => "session.previous",
+            Self::SessionNext => "session.next",
+            Self::SessionReopen => "session.reopen",
             Self::BlockList => "block.list",
             Self::BlockGet => "block.get",
             Self::InputGet => "input.get",
@@ -437,6 +453,10 @@ impl ActionKind {
             | Self::PaneSessionPrevious
             | Self::PaneSessionNext
             | Self::PaneSessionReopen
+            | Self::SessionActivate
+            | Self::SessionPrevious
+            | Self::SessionNext
+            | Self::SessionReopen
             | Self::InputInsert
             | Self::InputReplace
             | Self::InputClear
@@ -519,11 +539,7 @@ impl ActionKind {
             | Self::InputGet
             | Self::HistoryList
             | Self::DriveGet => RiskTier::ReadOnlyTerminalData,
-            Self::InputInsert
-            | Self::InputReplace
-            | Self::InputClear
-            | Self::InputModeSet
-            | Self::InputRun
+            Self::InputRun
             | Self::FileWrite
             | Self::FileDelete
             | Self::DriveCreate
@@ -558,6 +574,14 @@ impl ActionKind {
             | Self::PaneSessionPrevious
             | Self::PaneSessionNext
             | Self::PaneSessionReopen
+            | Self::SessionActivate
+            | Self::SessionPrevious
+            | Self::SessionNext
+            | Self::SessionReopen
+            | Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet
             | Self::ThemeSet
             | Self::AppearanceSet
             | Self::AppearanceFontSize
@@ -601,11 +625,7 @@ impl ActionKind {
             | Self::AppearanceFontSize
             | Self::AppearanceZoom
             | Self::TabRename => StateDataCategory::MetadataConfigurationMutation,
-            Self::InputInsert
-            | Self::InputReplace
-            | Self::InputClear
-            | Self::InputModeSet
-            | Self::InputRun
+            Self::InputRun
             | Self::FileWrite
             | Self::FileDelete
             | Self::DriveCreate
@@ -639,6 +659,14 @@ impl ActionKind {
             | Self::PaneSessionPrevious
             | Self::PaneSessionNext
             | Self::PaneSessionReopen
+            | Self::SessionActivate
+            | Self::SessionPrevious
+            | Self::SessionNext
+            | Self::SessionReopen
+            | Self::InputInsert
+            | Self::InputReplace
+            | Self::InputClear
+            | Self::InputModeSet
             | Self::FileOpen => StateDataCategory::AppStateMutation,
         }
     }
@@ -690,6 +718,10 @@ impl ActionKind {
                 | Self::PaneSessionPrevious
                 | Self::PaneSessionNext
                 | Self::PaneSessionReopen
+                | Self::SessionActivate
+                | Self::SessionPrevious
+                | Self::SessionNext
+                | Self::SessionReopen
                 | Self::InputInsert
                 | Self::InputReplace
                 | Self::InputClear
@@ -767,6 +799,10 @@ impl ActionKind {
             Self::PaneSessionPrevious
             | Self::PaneSessionNext
             | Self::PaneSessionReopen
+            | Self::SessionActivate
+            | Self::SessionPrevious
+            | Self::SessionNext
+            | Self::SessionReopen
             | Self::InputInsert
             | Self::InputReplace
             | Self::InputClear
@@ -814,6 +850,10 @@ impl ActionKind {
             | Self::PaneSessionNext
             | Self::PaneSessionReopen => TargetScope::Pane,
             Self::SessionList
+            | Self::SessionActivate
+            | Self::SessionPrevious
+            | Self::SessionNext
+            | Self::SessionReopen
             | Self::InputGet
             | Self::InputInsert
             | Self::InputReplace

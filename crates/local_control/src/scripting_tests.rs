@@ -45,12 +45,7 @@ fn scripting_grant_expiry_detection() {
 
 #[test]
 fn underlying_data_mutation_actions_require_authenticated_scripting() {
-    for action in [
-        ActionKind::InputInsert,
-        ActionKind::InputReplace,
-        ActionKind::InputClear,
-        ActionKind::InputModeSet,
-    ] {
+    for action in [ActionKind::InputRun] {
         assert_eq!(
             action.metadata().state_data_category,
             StateDataCategory::UnderlyingDataMutation
@@ -73,6 +68,10 @@ fn non_underlying_mutation_actions_do_not_require_authenticated_scripting() {
         ActionKind::BlockList,
         ActionKind::HistoryList,
         ActionKind::InstanceList,
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
     ] {
         assert!(
             !action.metadata().requires_authenticated_scripting,

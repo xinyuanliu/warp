@@ -241,9 +241,10 @@ fn capabilities_advertises_core_metadata_and_layout_mutation_actions() {
 #[test]
 fn capabilities_advertises_session_and_input_mutation_actions() {
     let caps = capabilities();
-    assert!(caps.contains(&ActionKind::PaneSessionPrevious));
-    assert!(caps.contains(&ActionKind::PaneSessionNext));
-    assert!(caps.contains(&ActionKind::PaneSessionReopen));
+    assert!(caps.contains(&ActionKind::SessionActivate));
+    assert!(caps.contains(&ActionKind::SessionPrevious));
+    assert!(caps.contains(&ActionKind::SessionNext));
+    assert!(caps.contains(&ActionKind::SessionReopen));
     assert!(caps.contains(&ActionKind::InputInsert));
     assert!(caps.contains(&ActionKind::InputReplace));
     assert!(caps.contains(&ActionKind::InputClear));
@@ -792,12 +793,7 @@ fn high_risk_actions_require_authenticated_scripting_grant() {
     let settings_with_auth = settings_with_authenticated_user_actions(true, true, true);
     let settings_without_auth = settings_with_authenticated_user_actions(true, true, false);
 
-    for action in [
-        ActionKind::InputInsert,
-        ActionKind::InputReplace,
-        ActionKind::InputClear,
-        ActionKind::InputModeSet,
-    ] {
+    for action in [ActionKind::InputRun] {
         let grant_without_scripting = CredentialGrant::new(
             InstanceId("test-instance".to_owned()),
             action,
@@ -836,12 +832,7 @@ fn high_risk_actions_require_authenticated_scripting_grant() {
 fn high_risk_actions_with_scripting_grant_and_enabled_setting_pass_grant_check() {
     let settings_with_auth = settings_with_authenticated_user_actions(true, true, true);
 
-    for action in [
-        ActionKind::InputInsert,
-        ActionKind::InputReplace,
-        ActionKind::InputClear,
-        ActionKind::InputModeSet,
-    ] {
+    for action in [ActionKind::InputRun] {
         let mut grant = CredentialGrant::new(
             InstanceId("test-instance".to_owned()),
             action,
@@ -859,7 +850,7 @@ fn high_risk_actions_with_scripting_grant_and_enabled_setting_pass_grant_check()
 fn high_risk_actions_with_scripting_grant_but_disabled_setting_are_denied() {
     let settings_without_auth = settings_with_authenticated_user_actions(true, true, false);
 
-    for action in [ActionKind::InputInsert, ActionKind::InputReplace] {
+    for action in [ActionKind::InputRun] {
         let mut grant = CredentialGrant::new(
             InstanceId("test-instance".to_owned()),
             action,
@@ -884,6 +875,10 @@ fn low_risk_actions_pass_scripting_grant_check_without_grant() {
         ActionKind::AppPing,
         ActionKind::WindowList,
         ActionKind::SettingGet,
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
     ] {
         let grant = CredentialGrant::new(
             InstanceId("test-instance".to_owned()),
@@ -1149,9 +1144,10 @@ fn layout_mutation_params_reject_malformed_inputs() {
 #[test]
 fn session_mutation_actions_use_app_state_mutation_permission_category() {
     for action in [
-        ActionKind::PaneSessionPrevious,
-        ActionKind::PaneSessionNext,
-        ActionKind::PaneSessionReopen,
+        ActionKind::SessionActivate,
+        ActionKind::SessionPrevious,
+        ActionKind::SessionNext,
+        ActionKind::SessionReopen,
     ] {
         assert_eq!(
             action.metadata().permission_category,
@@ -1163,7 +1159,7 @@ fn session_mutation_actions_use_app_state_mutation_permission_category() {
 }
 
 #[test]
-fn input_staging_mutations_are_underlying_data_mutations() {
+fn input_staging_mutations_are_app_state_mutations() {
     for action in [
         ActionKind::InputInsert,
         ActionKind::InputReplace,
@@ -1172,8 +1168,8 @@ fn input_staging_mutations_are_underlying_data_mutations() {
     ] {
         assert_eq!(
             action.metadata().permission_category,
-            PermissionCategory::MutateUnderlyingData,
-            "{} should use MutateUnderlyingData permission",
+            PermissionCategory::MutateAppState,
+            "{} should use MutateAppState permission",
             action.as_str()
         );
     }
@@ -1184,9 +1180,10 @@ fn inside_warp_only_actions_reject_outside_warp_invocation_context() {
     let all_enabled = settings_with_values(true, true, true, true, true, true);
 
     for action in [
-        ActionKind::PaneSessionPrevious,
-        ActionKind::PaneSessionNext,
-        ActionKind::PaneSessionReopen,
+        ActionKind::SessionActivate,
+        ActionKind::SessionPrevious,
+        ActionKind::SessionNext,
+        ActionKind::SessionReopen,
         ActionKind::InputInsert,
         ActionKind::InputReplace,
         ActionKind::InputClear,
@@ -1301,9 +1298,10 @@ fn settings_allowlist_rejects_local_control_keys() {
 #[test]
 fn action_metadata_lookup_reports_implemented_status_for_new_mutations() {
     for action_name in [
-        "pane.session.previous",
-        "pane.session.next",
-        "pane.session.reopen",
+        "session.activate",
+        "session.previous",
+        "session.next",
+        "session.reopen",
         "input.insert",
         "input.replace",
         "input.clear",

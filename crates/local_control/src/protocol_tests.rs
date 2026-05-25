@@ -244,7 +244,7 @@ fn default_permissions_preserve_security_categories() {
     );
     assert_eq!(
         ActionKind::InputInsert.metadata().permission_category,
-        PermissionCategory::MutateUnderlyingData
+        PermissionCategory::MutateAppState
     );
     assert_eq!(
         ActionKind::TabRename.metadata().permission_category,
@@ -459,6 +459,14 @@ fn mutating_contract_preserves_distinct_permission_categories() {
         ActionKind::PaneResize,
         ActionKind::PaneSessionPrevious,
         ActionKind::PaneSessionNext,
+        ActionKind::SessionActivate,
+        ActionKind::SessionPrevious,
+        ActionKind::SessionNext,
+        ActionKind::SessionReopen,
+        ActionKind::InputInsert,
+        ActionKind::InputReplace,
+        ActionKind::InputClear,
+        ActionKind::InputModeSet,
         ActionKind::FileOpen,
     ] {
         assert_eq!(
@@ -483,10 +491,6 @@ fn mutating_contract_preserves_distinct_permission_categories() {
     }
 
     for action in [
-        ActionKind::InputInsert,
-        ActionKind::InputReplace,
-        ActionKind::InputClear,
-        ActionKind::InputModeSet,
         ActionKind::InputRun,
         ActionKind::FileWrite,
         ActionKind::FileDelete,
