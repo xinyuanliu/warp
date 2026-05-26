@@ -10,7 +10,7 @@ use ::local_control::{
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::local_control::handlers::{
-    app_state, data, drive, layout, metadata, product_metadata, settings_surfaces,
+    app_state, data, drive, layout, metadata, metadata_config, product_metadata, settings_surfaces,
 };
 use crate::local_control::permissions::{
     ensure_action_allowed, ensure_authenticated_user_matches, ensure_feature_enabled,
@@ -374,9 +374,6 @@ impl LocalControlBridge {
             | ActionKind::TabActivate
             | ActionKind::TabMove
             | ActionKind::TabClose
-            | ActionKind::TabRename
-            | ActionKind::TabResetName
-            | ActionKind::TabColorClear
             | ActionKind::PaneSplit
             | ActionKind::PaneFocus
             | ActionKind::PaneNavigate
@@ -384,8 +381,6 @@ impl LocalControlBridge {
             | ActionKind::PaneMaximize
             | ActionKind::PaneUnmaximize
             | ActionKind::PaneClose
-            | ActionKind::PaneRename
-            | ActionKind::PaneResetName
             | ActionKind::SessionActivate
             | ActionKind::SessionPrevious
             | ActionKind::SessionNext
@@ -423,6 +418,139 @@ impl LocalControlBridge {
                     &request.target,
                     ctx,
                 ) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::TabRename => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::tab_rename(
+                    &self.instance_id,
+                    &request.target,
+                    &request.action,
+                    ctx,
+                ) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::TabResetName => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::tab_reset_name(&self.instance_id, &request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::TabColorSet => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::tab_color_set(
+                    &self.instance_id,
+                    &request.target,
+                    &request.action,
+                    ctx,
+                ) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::TabColorClear => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::tab_color_clear(&self.instance_id, &request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneRename => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::pane_rename(
+                    &self.instance_id,
+                    &request.target,
+                    &request.action,
+                    ctx,
+                ) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::PaneResetName => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::pane_reset_name(&self.instance_id, &request.target, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::ThemeSet
+            | ActionKind::ThemeSystemSet
+            | ActionKind::ThemeLightSet
+            | ActionKind::ThemeDarkSet => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::theme_set(request.action.kind, &request.action, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::AppearanceFontSizeIncrease
+            | ActionKind::AppearanceFontSizeDecrease
+            | ActionKind::AppearanceFontSizeReset
+            | ActionKind::AppearanceZoomIncrease
+            | ActionKind::AppearanceZoomDecrease
+            | ActionKind::AppearanceZoomReset => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::appearance_mutation(request.action.kind, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::SettingSet => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::setting_set(&request.action, ctx) {
+                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                    Err(error) => ResponseEnvelope::error(request.request_id, error),
+                }
+            }
+            ActionKind::SettingToggle => {
+                if let Err(error) =
+                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+                {
+                    return ResponseEnvelope::error(request.request_id, error);
+                }
+                match metadata_config::setting_toggle(&request.action, ctx) {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }

@@ -563,6 +563,7 @@ impl ActionKind {
             | Self::TabClose
             | Self::TabRename
             | Self::TabResetName
+            | Self::TabColorSet
             | Self::TabColorClear
             | Self::PaneList
             | Self::PaneInspect
@@ -592,9 +593,21 @@ impl ActionKind {
             | Self::HistoryList
             | Self::ThemeList
             | Self::ThemeGet
+            | Self::ThemeSet
+            | Self::ThemeSystemSet
+            | Self::ThemeLightSet
+            | Self::ThemeDarkSet
             | Self::AppearanceGet
+            | Self::AppearanceFontSizeIncrease
+            | Self::AppearanceFontSizeDecrease
+            | Self::AppearanceFontSizeReset
+            | Self::AppearanceZoomIncrease
+            | Self::AppearanceZoomDecrease
+            | Self::AppearanceZoomReset
             | Self::SettingList
             | Self::SettingGet
+            | Self::SettingSet
+            | Self::SettingToggle
             | Self::KeybindingList
             | Self::KeybindingGet
             | Self::ActionList
@@ -623,20 +636,7 @@ impl ActionKind {
             | Self::DriveObjectShareOpen => ActionImplementationStatus::Implemented,
             Self::AuthStatus
             | Self::AuthLogin
-            | Self::TabColorSet
             | Self::InputRun
-            | Self::ThemeSet
-            | Self::ThemeSystemSet
-            | Self::ThemeLightSet
-            | Self::ThemeDarkSet
-            | Self::AppearanceFontSizeIncrease
-            | Self::AppearanceFontSizeDecrease
-            | Self::AppearanceFontSizeReset
-            | Self::AppearanceZoomIncrease
-            | Self::AppearanceZoomDecrease
-            | Self::AppearanceZoomReset
-            | Self::SettingSet
-            | Self::SettingToggle
             | Self::DriveObjectCreate
             | Self::DriveObjectUpdate
             | Self::DriveObjectDelete

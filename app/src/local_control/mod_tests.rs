@@ -24,6 +24,8 @@ fn settings_with_values(
     outside_enabled: bool,
     outside_metadata_reads: bool,
     outside_app_state_mutations: bool,
+    outside_metadata_configuration_mutations: bool,
+    outside_underlying_data_mutations: bool,
 ) -> LocalControlSettings {
     LocalControlSettings {
         allow_inside_warp_authenticated_user_actions: AllowInsideWarpAuthenticatedUserActions::new(
@@ -40,9 +42,11 @@ fn settings_with_values(
             outside_app_state_mutations,
         )),
         allow_outside_warp_metadata_configuration_mutations:
-            AllowOutsideWarpMetadataConfigurationMutations::new(Some(false)),
+            AllowOutsideWarpMetadataConfigurationMutations::new(Some(
+                outside_metadata_configuration_mutations,
+            )),
         allow_outside_warp_underlying_data_mutations: AllowOutsideWarpUnderlyingDataMutations::new(
-            Some(false),
+            Some(outside_underlying_data_mutations),
         ),
     }
 }
@@ -51,7 +55,7 @@ fn settings_with_outside_warp(
     outside_control: bool,
     outside_app_state_mutations: bool,
 ) -> LocalControlSettings {
-    settings_with_values(outside_control, false, outside_app_state_mutations)
+    settings_with_values(outside_control, false, outside_app_state_mutations, false, false)
 }
 
 #[test]
@@ -125,7 +129,7 @@ fn tab_create_rejects_unsupported_selector_forms() {
 }
 
 #[test]
-fn capabilities_advertises_implemented_readonly_and_app_state_actions() {
+fn capabilities_advertises_implemented_readonly_app_state_and_metadata_config_actions() {
     let actions = capabilities();
 
     for action in [
@@ -166,6 +170,10 @@ fn capabilities_advertises_implemented_readonly_and_app_state_actions() {
         ActionKind::TabActivate,
         ActionKind::TabMove,
         ActionKind::TabClose,
+        ActionKind::TabRename,
+        ActionKind::TabResetName,
+        ActionKind::TabColorSet,
+        ActionKind::TabColorClear,
         ActionKind::PaneSplit,
         ActionKind::PaneFocus,
         ActionKind::PaneNavigate,
@@ -173,6 +181,8 @@ fn capabilities_advertises_implemented_readonly_and_app_state_actions() {
         ActionKind::PaneMaximize,
         ActionKind::PaneUnmaximize,
         ActionKind::PaneClose,
+        ActionKind::PaneRename,
+        ActionKind::PaneResetName,
         ActionKind::SessionActivate,
         ActionKind::SessionPrevious,
         ActionKind::SessionNext,
@@ -181,6 +191,18 @@ fn capabilities_advertises_implemented_readonly_and_app_state_actions() {
         ActionKind::InputReplace,
         ActionKind::InputClear,
         ActionKind::InputModeSet,
+        ActionKind::ThemeSet,
+        ActionKind::ThemeSystemSet,
+        ActionKind::ThemeLightSet,
+        ActionKind::ThemeDarkSet,
+        ActionKind::AppearanceFontSizeIncrease,
+        ActionKind::AppearanceFontSizeDecrease,
+        ActionKind::AppearanceFontSizeReset,
+        ActionKind::AppearanceZoomIncrease,
+        ActionKind::AppearanceZoomDecrease,
+        ActionKind::AppearanceZoomReset,
+        ActionKind::SettingSet,
+        ActionKind::SettingToggle,
         ActionKind::SurfaceSettingsOpen,
         ActionKind::SurfaceCommandPaletteOpen,
         ActionKind::SurfaceCommandSearchOpen,
@@ -230,6 +252,59 @@ fn outside_warp_discovery_requires_context_and_action_permission() {
 }
 
 #[test]
+fn metadata_configuration_permission_allows_owned_metadata_actions() {
+    let settings = settings_with_values(true, false, false, true, false);
+
+    for action in [
+        ActionKind::TabRename,
+        ActionKind::TabResetName,
+        ActionKind::TabColorSet,
+        ActionKind::TabColorClear,
+        ActionKind::PaneRename,
+        ActionKind::PaneResetName,
+        ActionKind::ThemeSet,
+        ActionKind::ThemeSystemSet,
+        ActionKind::ThemeLightSet,
+        ActionKind::ThemeDarkSet,
+        ActionKind::AppearanceFontSizeIncrease,
+        ActionKind::AppearanceFontSizeDecrease,
+        ActionKind::AppearanceFontSizeReset,
+        ActionKind::AppearanceZoomIncrease,
+        ActionKind::AppearanceZoomDecrease,
+        ActionKind::AppearanceZoomReset,
+        ActionKind::SettingSet,
+        ActionKind::SettingToggle,
+    ] {
+        assert!(outside_warp_action_enabled_for_settings(&settings, action));
+        ensure_settings_allow_action(&settings, InvocationContext::OutsideWarp, action)
+            .expect("metadata configuration permission allows action");
+    }
+
+    assert!(!outside_warp_action_enabled_for_settings(
+        &settings,
+        ActionKind::TabCreate
+    ));
+}
+
+#[test]
+fn app_state_and_underlying_mutation_grants_do_not_allow_metadata_configuration_actions() {
+    let settings = settings_with_values(true, false, true, false, true);
+
+    for action in [ActionKind::SettingSet, ActionKind::TabRename] {
+        let err = ensure_settings_allow_action(&settings, InvocationContext::OutsideWarp, action)
+            .expect_err("metadata configuration permission is disabled");
+        assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+    }
+
+    ensure_settings_allow_action(
+        &settings,
+        InvocationContext::OutsideWarp,
+        ActionKind::TabCreate,
+    )
+    .expect("app-state mutation permission remains independent");
+}
+
+#[test]
 fn tab_create_requires_active_window() {
     let active = warpui::WindowId::from_usize(1);
 
@@ -250,7 +325,7 @@ fn feature_flag_disabled_denies_local_control() {
 
 #[test]
 fn disabled_outside_warp_denies_before_granular_permission() {
-    let settings = settings_with_values(false, true, true);
+    let settings = settings_with_values(false, true, true, true, true);
 
     let err = ensure_settings_allow_action(
         &settings,
@@ -263,7 +338,7 @@ fn disabled_outside_warp_denies_before_granular_permission() {
 
 #[test]
 fn inside_warp_context_is_not_implemented() {
-    let settings = settings_with_values(true, true, true);
+    let settings = settings_with_values(true, true, true, true, true);
 
     let err = ensure_settings_allow_action(
         &settings,
@@ -289,7 +364,7 @@ fn outside_warp_authenticated_actions_are_execution_context_denied() {
 
 #[test]
 fn disabled_granular_permission_denies_with_insufficient_permissions() {
-    let settings = settings_with_values(true, true, false);
+    let settings = settings_with_values(true, true, false, false, false);
 
     let err = ensure_settings_allow_action(
         &settings,

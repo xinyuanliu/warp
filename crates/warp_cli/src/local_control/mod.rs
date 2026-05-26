@@ -224,6 +224,26 @@ pub enum TabCommand {
 
     /// Create a new terminal tab in the active window.
     Create(TargetArgs),
+
+    /// Rename a tab.
+    Rename(RenameArgs),
+
+    /// Reset a tab name.
+    ResetName(TargetArgs),
+
+    /// Set or clear a tab color.
+    #[command(subcommand)]
+    Color(TabColorCommand),
+}
+
+/// Commands that control tab colors.
+#[derive(Debug, Clone, Subcommand)]
+pub enum TabColorCommand {
+    /// Set a tab color.
+    Set(ColorSetArgs),
+
+    /// Clear a tab color.
+    Clear(TargetArgs),
 }
 
 /// Commands that inspect local Warp panes.
@@ -234,6 +254,12 @@ pub enum PaneCommand {
 
     /// Inspect one pane in the selected local Warp app.
     Inspect(TargetArgs),
+
+    /// Rename a pane.
+    Rename(RenameArgs),
+
+    /// Reset a pane name.
+    ResetName(TargetArgs),
 }
 /// Commands that inspect local Warp sessions.
 
@@ -275,12 +301,42 @@ pub enum ThemeCommand {
 
     /// Read current theme state.
     Get(TargetArgs),
+
+    /// Set the current theme.
+    Set(ThemeSetArgs),
+
+    /// Set whether Warp follows the system theme.
+    SystemSet(ThemeSystemSetArgs),
+
+    /// Set the light theme used when following the system theme.
+    LightSet(ThemeSetArgs),
+
+    /// Set the dark theme used when following the system theme.
+    DarkSet(ThemeSetArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AppearanceCommand {
     /// Read appearance state.
     Get(TargetArgs),
+
+    /// Increase terminal font size.
+    FontSizeIncrease(TargetArgs),
+
+    /// Decrease terminal font size.
+    FontSizeDecrease(TargetArgs),
+
+    /// Reset terminal font size.
+    FontSizeReset(TargetArgs),
+
+    /// Increase UI zoom.
+    ZoomIncrease(TargetArgs),
+
+    /// Decrease UI zoom.
+    ZoomDecrease(TargetArgs),
+
+    /// Reset UI zoom.
+    ZoomReset(TargetArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -296,6 +352,12 @@ pub enum SettingCommand {
 
     /// Read one allowlisted setting.
     Get(SettingGetArgs),
+
+    /// Set one allowlisted setting.
+    Set(SettingSetArgs),
+
+    /// Toggle one allowlisted boolean setting.
+    Toggle(SettingToggleArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -378,6 +440,57 @@ pub struct TargetArgs {
     /// Target the active session or an opaque session id.
     #[arg(long = "session")]
     pub session: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct RenameArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ColorSetArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    pub color: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ThemeSetArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ThemeSystemSetArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    #[arg(action = clap::ArgAction::Set)]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SettingSetArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    pub key: String,
+
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SettingToggleArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    pub key: String,
 }
 
 #[derive(Debug, Clone, Args)]
