@@ -1,0 +1,3 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json instance list
+[]
+[exit_code] 0

@@ -1,0 +1,20 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json action inspect app.active
+{
+  "kind": "app.active",
+  "name": "app.active",
+  "implementation_status": "implemented",
+  "risk_tier": "read_only_metadata",
+  "state_data_category": "metadata_read",
+  "requires_authenticated_user": false,
+  "authenticated_user": {
+    "required": false
+  },
+  "allowed_invocation_contexts": [
+    "outside_warp"
+  ],
+  "permission_category": "read_metadata",
+  "target_scope": "instance",
+  "parameter_spec": "none",
+  "result_spec": "active_target"
+}
+[exit_code] 0

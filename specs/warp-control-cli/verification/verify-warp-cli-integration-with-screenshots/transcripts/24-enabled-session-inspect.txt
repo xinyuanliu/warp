@@ -1,0 +1,9 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json session inspect
+{
+  "ok": false,
+  "error": {
+    "code": "missing_target",
+    "message": "session.list requires an active terminal session"
+  }
+}
+[exit_code] 1

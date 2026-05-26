@@ -1,0 +1,10 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json window inspect
+{
+  "action": "window.inspect",
+  "window": {
+    "is_active": true,
+    "title": "Settings",
+    "window_id": "0"
+  }
+}
+[exit_code] 0

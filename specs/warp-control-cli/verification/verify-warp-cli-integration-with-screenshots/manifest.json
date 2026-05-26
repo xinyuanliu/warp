@@ -1,0 +1,284 @@
+{
+  "agent_name": "verify-warp-cli-integration-with-screenshots",
+  "repository": "warpdotdev/warp",
+  "branch": "origin/zach/warp-cli-integration-fanin",
+  "commit": "492fde34",
+  "working_tree_commit_verified": true,
+  "build_commands": [
+    "cargo build -p warp --bin warpctrl --features warp/warp_control_cli --manifest-path /workspace/warp/Cargo.toml",
+    "cargo build -p warp --bin warp --features warp/warp_control_cli --manifest-path /workspace/warp/Cargo.toml"
+  ],
+  "build_result": "Both requested builds passed. The `warp` local-channel binary required `warp-channel-config` on PATH at runtime; a minimal local helper was supplied in /tmp/warpctrl-verify-bin solely to launch this exact built binary in the sandbox.",
+  "app_launch_method": "Launched /workspace/warp/target/debug/warp on DISPLAY=:99 with isolated HOME=/tmp/warpctrl-verify-home, XDG_RUNTIME_DIR=/tmp/warpctrl-verify-runtime, WARP_LOCAL_CONTROL_DISCOVERY_DIR=/tmp/warpctrl-verify-discovery, WARP_DATA_PROFILE=warpctrl-verify, WINIT_UNIX_BACKEND=x11, LIBGL_ALWAYS_SOFTWARE=1.",
+  "settings_ui_verification": {
+    "screenshot_path": "ui/07-scripting-metadata-enabled.png",
+    "final_states": {
+      "Warp control outside Warp": "on",
+      "Allow metadata reads": "on",
+      "Allow underlying data reads": "off",
+      "Allow app-state mutations": "off",
+      "Allow metadata/configuration mutations": "off",
+      "Allow underlying data mutations": "off"
+    }
+  },
+  "entries": [
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json instance list",
+      "invocation_context": "outside_warp_pre_app",
+      "required_permission_category": "none/discovery-only",
+      "expected_result": "No app running: empty instance list.",
+      "actual_result": "Returned empty JSON array.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/00-pre-app-instance-list.png",
+      "ui_screenshot_path": null,
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json app ping",
+      "invocation_context": "outside_warp_pre_app",
+      "required_permission_category": "read_metadata",
+      "expected_result": "No app running: no_instance error.",
+      "actual_result": "Returned error no_instance: no local Warp control instances were discovered.",
+      "exit_code": 1,
+      "terminal_screenshot_path": "terminal/01-pre-app-app-ping.png",
+      "ui_screenshot_path": null,
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json instance list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "none/discovery-only",
+      "expected_result": "App running but outside-Warp control default off: instance discoverable with outside_warp_control_enabled=false and no endpoint.",
+      "actual_result": "Returned 1 instance(s); first instance_id=inst_c6bf0f14d78b4fceab0674cf2376c294, pid=34334, outside_warp_control_enabled=False, endpoint=None.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/03-default-off-instance-list.png",
+      "ui_screenshot_path": "ui/06-default-off-welcome-screen.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json app ping",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "App running but outside-Warp control default off: local_control_disabled error.",
+      "actual_result": "Returned error local_control_disabled: outside-Warp local control credential broker is disabled for this instance.",
+      "exit_code": 1,
+      "terminal_screenshot_path": "terminal/04-default-off-app-ping.png",
+      "ui_screenshot_path": "ui/06-default-off-welcome-screen.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json app version",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "App running but outside-Warp control default off: local_control_disabled error.",
+      "actual_result": "Returned error local_control_disabled: outside-Warp local control credential broker is disabled for this instance.",
+      "exit_code": 1,
+      "terminal_screenshot_path": "terminal/05-default-off-app-version.png",
+      "ui_screenshot_path": "ui/06-default-off-welcome-screen.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json instance list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "none/discovery-only",
+      "expected_result": "After enabling outside-Warp control + metadata reads: instance discoverable with endpoint and outside_warp_control_enabled=true.",
+      "actual_result": "Returned 1 instance(s); first instance_id=inst_c6bf0f14d78b4fceab0674cf2376c294, pid=34334, outside_warp_control_enabled=True, endpoint={'host': '127.0.0.1', 'port': 36779}.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/08-enabled-instance-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json instance inspect",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Instance metadata with endpoint, outside_warp_control_enabled=true, and action catalog.",
+      "actual_result": "Returned instance_id=inst_c6bf0f14d78b4fceab0674cf2376c294, pid=34334, outside_warp_control_enabled=True, endpoint={'host': '127.0.0.1', 'port': 36779}.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/09-enabled-instance-inspect.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json app ping",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Successful ping with ok=true and protocol metadata.",
+      "actual_result": "Returned app.ping ok=True protocol_version=1 instance_id=inst_c6bf0f14d78b4fceab0674cf2376c294.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/10-enabled-app-ping.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json app version",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Version metadata for launched app.",
+      "actual_result": "Returned app.version channel=local app_id=dev.warp.WarpLocal app_version=None protocol_version=1.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/11-enabled-app-version.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json app active",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Active window/tab/pane/session chain for visible active Settings tab.",
+      "actual_result": "Returned active chain {'instance_id': 'inst_c6bf0f14d78b4fceab0674cf2376c294', 'pane_id': 'Pane Pane Settings (2042)', 'tab_id': '2041', 'window_id': '0'}.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/12-enabled-app-active.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json action list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Action catalog metadata list.",
+      "actual_result": "Returned 104 metadata entries; first kind=instance.list.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/13-enabled-action-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json action inspect app.active",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Metadata for app.active action.",
+      "actual_result": "Returned metadata kind=app.active permission_category=read_metadata target_scope=instance result_spec=active_target.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/14-enabled-action-inspect-app-active.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json capability list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Capability metadata list.",
+      "actual_result": "Returned 104 metadata entries; first kind=instance.list.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/15-enabled-capability-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json capability inspect window.list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Metadata for window.list capability.",
+      "actual_result": "Returned metadata kind=window.list permission_category=read_metadata target_scope=window result_spec=target_list.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/16-enabled-capability-inspect-window-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json window list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Window list for visible app window.",
+      "actual_result": "Returned 1 window(s): [{'is_active': True, 'title': 'Settings', 'window_id': '0'}]",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/17-enabled-window-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json window inspect",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Active window metadata.",
+      "actual_result": "Returned window metadata {'is_active': True, 'title': 'Settings', 'window_id': '0'}.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/18-enabled-window-inspect.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json tab list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Tab list correlating with visible bash and Settings tabs.",
+      "actual_result": "Returned 2 tab(s): [{'index': 0, 'is_active': False, 'tab_id': '1562', 'title': 'bash', 'window_id': '0'}, {'index': 1, 'is_active': True, 'tab_id': '2041', 'title': 'Settings', 'window_id': '0'}]",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/19-enabled-tab-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json tab inspect",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Active Settings tab metadata.",
+      "actual_result": "Returned tab metadata {'index': 1, 'is_active': True, 'tab_id': '2041', 'title': 'Settings', 'window_id': '0'}.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/20-enabled-tab-inspect.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json pane list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Pane list including terminal pane and active Settings pane.",
+      "actual_result": "Returned 2 pane(s): [{'has_terminal_session': True, 'index': 0, 'is_active': True, 'pane_id': 'Pane Pane Terminal (1923)', 'tab_id': '1562'}, {'has_terminal_session': False, 'index': 0, 'is_active': True, 'pane_id': 'Pane Pane Settings (2042)', 'tab_id': '2041'}]",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/21-enabled-pane-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json pane inspect",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Active Settings pane metadata.",
+      "actual_result": "Returned pane metadata {'has_terminal_session': False, 'index': 0, 'is_active': True, 'pane_id': 'Pane Pane Settings (2042)', 'tab_id': '2041'}.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/22-enabled-pane-inspect.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json session list",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Session list including terminal session.",
+      "actual_result": "Returned 1 session(s): [{'is_active': True, 'pane_id': 'Pane Pane Terminal (1923)', 'session_id': 'Pane Pane Terminal (1923)'}]",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/23-enabled-session-list.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json session inspect",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Untargeted inspect while Settings pane active: missing_target is expected for this UI state.",
+      "actual_result": "Returned error missing_target: session.list requires an active terminal session.",
+      "exit_code": 1,
+      "terminal_screenshot_path": "terminal/24-enabled-session-inspect.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": "State-dependent negative observation: active pane was Settings and had no terminal session."
+    },
+    {
+      "command": "/workspace/warp/target/debug/warpctrl --output-format json session inspect --session-id \"Pane Pane Terminal (1923)\"",
+      "invocation_context": "outside_warp",
+      "required_permission_category": "read_metadata",
+      "expected_result": "Targeted inspect of session returned by session list succeeds.",
+      "actual_result": "Returned session metadata {'is_active': True, 'pane_id': 'Pane Pane Terminal (1923)', 'session_id': 'Pane Pane Terminal (1923)'}.",
+      "exit_code": 0,
+      "terminal_screenshot_path": "terminal/25-enabled-session-inspect-by-id.png",
+      "ui_screenshot_path": "ui/07-scripting-metadata-enabled.png",
+      "notes": null
+    }
+  ],
+  "skipped_cases": [],
+  "blockers": [
+    "Internal local-channel `warp` binary panics without private `warp-channel-config`; workaround helper was needed to launch the requested binary in this sandbox. No login/Drive state was required for this read-only metadata slice."
+  ],
+  "artifact_note": "Terminal screenshots are PNG renderings of the exact captured command line, stdout/stderr, and exit code for each warpctrl invocation. Raw transcripts are stored in transcripts/*.txt."
+}

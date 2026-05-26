@@ -1,0 +1,11 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json app active
+{
+  "action": "app.active",
+  "active": {
+    "instance_id": "inst_c6bf0f14d78b4fceab0674cf2376c294",
+    "pane_id": "Pane Pane Settings (2042)",
+    "tab_id": "2041",
+    "window_id": "0"
+  }
+}
+[exit_code] 0

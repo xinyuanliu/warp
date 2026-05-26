@@ -1,0 +1,20 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json capability inspect window.list
+{
+  "kind": "window.list",
+  "name": "window.list",
+  "implementation_status": "implemented",
+  "risk_tier": "read_only_metadata",
+  "state_data_category": "metadata_read",
+  "requires_authenticated_user": false,
+  "authenticated_user": {
+    "required": false
+  },
+  "allowed_invocation_contexts": [
+    "outside_warp"
+  ],
+  "permission_category": "read_metadata",
+  "target_scope": "window",
+  "parameter_spec": "none",
+  "result_spec": "target_list"
+}
+[exit_code] 0

@@ -1,0 +1,12 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json window list
+{
+  "action": "window.list",
+  "windows": [
+    {
+      "is_active": true,
+      "title": "Settings",
+      "window_id": "0"
+    }
+  ]
+}
+[exit_code] 0

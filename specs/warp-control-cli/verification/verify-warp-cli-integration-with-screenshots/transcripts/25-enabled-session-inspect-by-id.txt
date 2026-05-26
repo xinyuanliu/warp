@@ -1,0 +1,10 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json session inspect --session-id "Pane Pane Terminal (1923)"
+{
+  "action": "session.inspect",
+  "session": {
+    "is_active": true,
+    "pane_id": "Pane Pane Terminal (1923)",
+    "session_id": "Pane Pane Terminal (1923)"
+  }
+}
+[exit_code] 0

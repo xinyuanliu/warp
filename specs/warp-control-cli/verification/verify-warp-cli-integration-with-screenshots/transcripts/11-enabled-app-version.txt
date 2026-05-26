@@ -1,0 +1,10 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json app version
+{
+  "action": "app.version",
+  "app_id": "dev.warp.WarpLocal",
+  "app_version": null,
+  "channel": "local",
+  "instance_id": "inst_c6bf0f14d78b4fceab0674cf2376c294",
+  "protocol_version": 1
+}
+[exit_code] 0

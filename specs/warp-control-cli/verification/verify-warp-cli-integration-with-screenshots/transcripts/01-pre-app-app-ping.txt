@@ -1,0 +1,9 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json app ping
+{
+  "ok": false,
+  "error": {
+    "code": "no_instance",
+    "message": "no local Warp control instances were discovered"
+  }
+}
+[exit_code] 1

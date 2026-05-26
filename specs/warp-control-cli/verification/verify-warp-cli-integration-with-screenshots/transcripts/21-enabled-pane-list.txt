@@ -1,0 +1,21 @@
+$ /workspace/warp/target/debug/warpctrl --output-format json pane list
+{
+  "action": "pane.list",
+  "panes": [
+    {
+      "has_terminal_session": true,
+      "index": 0,
+      "is_active": true,
+      "pane_id": "Pane Pane Terminal (1923)",
+      "tab_id": "1562"
+    },
+    {
+      "has_terminal_session": false,
+      "index": 0,
+      "is_active": true,
+      "pane_id": "Pane Pane Settings (2042)",
+      "tab_id": "2041"
+    }
+  ]
+}
+[exit_code] 0
