@@ -28,6 +28,7 @@ fn tab_create_accepts_default_active_and_window_targets() {
         window: Some(WindowTarget::Active),
         tab: Some(TabTarget::Active),
         pane: Some(PaneTarget::Active),
+        session: None,
     })
     .expect("active target is accepted");
 
@@ -37,6 +38,7 @@ fn tab_create_accepts_default_active_and_window_targets() {
         }),
         tab: None,
         pane: None,
+        session: None,
     })
     .expect("window id target is accepted");
 
@@ -44,6 +46,7 @@ fn tab_create_accepts_default_active_and_window_targets() {
         window: Some(WindowTarget::Index { index: 0 }),
         tab: None,
         pane: None,
+        session: None,
     })
     .expect("window index target is accepted");
 
@@ -53,6 +56,7 @@ fn tab_create_accepts_default_active_and_window_targets() {
         }),
         tab: None,
         pane: None,
+        session: None,
     })
     .expect("window title target is accepted");
 }
@@ -65,6 +69,7 @@ fn tab_create_rejects_concrete_targets() {
             id: TabSelector("tab".to_owned()),
         }),
         pane: None,
+        session: None,
     })
     .expect_err("concrete tab target is rejected");
     assert_eq!(err.code, ErrorCode::StaleTarget);
@@ -75,6 +80,7 @@ fn tab_create_rejects_concrete_targets() {
         pane: Some(PaneTarget::Id {
             id: PaneSelector("pane".to_owned()),
         }),
+        session: None,
     })
     .expect_err("concrete pane target is rejected");
     assert_eq!(err.code, ErrorCode::StaleTarget);
@@ -86,22 +92,51 @@ fn tab_create_rejects_unsupported_selector_forms() {
         window: None,
         tab: Some(TabTarget::Index { index: 0 }),
         pane: None,
+        session: None,
     })
     .expect_err("indexed tab target is rejected");
     assert_eq!(err.code, ErrorCode::InvalidSelector);
 }
 
 #[test]
-fn capabilities_advertises_only_first_slice_core_actions() {
-    assert_eq!(
-        capabilities(),
-        vec![
-            ActionKind::InstanceList,
-            ActionKind::AppPing,
-            ActionKind::AppVersion,
-            ActionKind::TabCreate,
-        ]
-    );
+fn capabilities_advertises_readonly_capability_targets() {
+    let capabilities = capabilities();
+
+    for action in [
+        ActionKind::InstanceInspect,
+        ActionKind::CapabilityList,
+        ActionKind::CapabilityInspect,
+        ActionKind::ActionList,
+        ActionKind::ActionInspect,
+        ActionKind::WindowList,
+        ActionKind::WindowInspect,
+        ActionKind::TabList,
+        ActionKind::TabInspect,
+        ActionKind::PaneList,
+        ActionKind::PaneInspect,
+        ActionKind::SessionList,
+        ActionKind::SessionInspect,
+        ActionKind::BlockList,
+        ActionKind::BlockInspect,
+        ActionKind::BlockOutput,
+        ActionKind::InputGet,
+        ActionKind::HistoryList,
+        ActionKind::ThemeGet,
+        ActionKind::KeybindingList,
+        ActionKind::KeybindingGet,
+        ActionKind::FileList,
+        ActionKind::DriveList,
+        ActionKind::DriveInspect,
+    ] {
+        assert!(
+            capabilities.contains(&action),
+            "missing {}",
+            action.as_str()
+        );
+    }
+
+    assert!(!capabilities.contains(&ActionKind::InputRun));
+    assert!(!capabilities.contains(&ActionKind::DriveObjectCreate));
 }
 
 #[test]

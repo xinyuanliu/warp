@@ -98,6 +98,7 @@ pub enum ActionImplementationStatus {
 pub enum ActionParameterSpec {
     None,
     ActionName,
+    BlockId,
     BindingName,
     BooleanValue,
     ColorValue,
@@ -317,13 +318,13 @@ macro_rules! define_action_catalog {
 define_action_catalog! {
     instance {
         InstanceList => { name: "instance.list", status: Implemented, authenticated_user: false, contexts: OutsideWarpOnly, state: MetadataRead, target: Instance, params: None, result: InstanceList },
-        InstanceInspect => { name: "instance.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Instance, params: None, result: InstanceMetadata },
+        InstanceInspect => { name: "instance.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Instance, params: None, result: InstanceMetadata },
     }
 
     app {
         AppPing => { name: "app.ping", status: Implemented, authenticated_user: false, contexts: OutsideWarpOnly, state: MetadataRead, target: Instance, params: None, result: InstanceMetadata },
         AppVersion => { name: "app.version", status: Implemented, authenticated_user: false, contexts: OutsideWarpOnly, state: MetadataRead, target: Instance, params: None, result: InstanceMetadata },
-        AppActive => { name: "app.active", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Instance, params: None, result: ActiveTarget },
+        AppActive => { name: "app.active", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Instance, params: None, result: ActiveTarget },
         AppFocus => { name: "app.focus", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Instance, params: None, result: Acknowledgement },
     }
 
@@ -333,21 +334,21 @@ define_action_catalog! {
     }
 
     capability {
-        CapabilityList => { name: "capability.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Capability, params: None, result: CapabilityList },
-        CapabilityInspect => { name: "capability.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Capability, params: ActionName, result: CapabilityMetadata },
+        CapabilityList => { name: "capability.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Capability, params: None, result: CapabilityList },
+        CapabilityInspect => { name: "capability.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Capability, params: ActionName, result: CapabilityMetadata },
     }
 
     window {
-        WindowList => { name: "window.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Window, params: None, result: TargetList },
-        WindowInspect => { name: "window.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Window, params: None, result: TargetMetadata },
+        WindowList => { name: "window.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Window, params: None, result: TargetList },
+        WindowInspect => { name: "window.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Window, params: None, result: TargetMetadata },
         WindowCreate => { name: "window.create", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Window, params: TabCreate, result: Acknowledgement },
         WindowFocus => { name: "window.focus", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Window, params: None, result: Acknowledgement },
         WindowClose => { name: "window.close", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Window, params: None, result: Acknowledgement },
     }
 
     tab {
-        TabList => { name: "tab.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Tab, params: None, result: TargetList },
-        TabInspect => { name: "tab.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Tab, params: None, result: TargetMetadata },
+        TabList => { name: "tab.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Tab, params: None, result: TargetList },
+        TabInspect => { name: "tab.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Tab, params: None, result: TargetMetadata },
         TabCreate => { name: "tab.create", status: Implemented, authenticated_user: false, contexts: OutsideWarpOnly, state: AppStateMutation, target: Tab, params: TabCreate, result: Acknowledgement },
         TabActivate => { name: "tab.activate", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Tab, params: TabActivate, result: Acknowledgement },
         TabMove => { name: "tab.move", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Tab, params: Direction, result: Acknowledgement },
@@ -359,8 +360,8 @@ define_action_catalog! {
     }
 
     pane {
-        PaneList => { name: "pane.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Pane, params: None, result: TargetList },
-        PaneInspect => { name: "pane.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Pane, params: None, result: TargetMetadata },
+        PaneList => { name: "pane.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Pane, params: None, result: TargetList },
+        PaneInspect => { name: "pane.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Pane, params: None, result: TargetMetadata },
         PaneSplit => { name: "pane.split", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Pane, params: Direction, result: Acknowledgement },
         PaneFocus => { name: "pane.focus", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Pane, params: None, result: Acknowledgement },
         PaneNavigate => { name: "pane.navigate", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Pane, params: Direction, result: Acknowledgement },
@@ -373,8 +374,8 @@ define_action_catalog! {
     }
 
     session {
-        SessionList => { name: "session.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Session, params: None, result: TargetList },
-        SessionInspect => { name: "session.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Session, params: None, result: TargetMetadata },
+        SessionList => { name: "session.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Session, params: None, result: TargetList },
+        SessionInspect => { name: "session.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Session, params: None, result: TargetMetadata },
         SessionActivate => { name: "session.activate", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Session, params: None, result: Acknowledgement },
         SessionPrevious => { name: "session.previous", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Session, params: None, result: Acknowledgement },
         SessionNext => { name: "session.next", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Session, params: None, result: Acknowledgement },
@@ -382,13 +383,13 @@ define_action_catalog! {
     }
 
     block {
-        BlockList => { name: "block.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Block, params: Limit, result: TargetList },
-        BlockInspect => { name: "block.inspect", status: Stub, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: Block, params: None, result: Content },
-        BlockOutput => { name: "block.output", status: Stub, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: Block, params: None, result: Content },
+        BlockList => { name: "block.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Block, params: Limit, result: TargetList },
+        BlockInspect => { name: "block.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: Block, params: BlockId, result: Content },
+        BlockOutput => { name: "block.output", status: Implemented, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: Block, params: BlockId, result: Content },
     }
 
     input {
-        InputGet => { name: "input.get", status: Stub, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: Input, params: None, result: Content },
+        InputGet => { name: "input.get", status: Implemented, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: Input, params: None, result: Content },
         InputInsert => { name: "input.insert", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Input, params: Text, result: Acknowledgement },
         InputReplace => { name: "input.replace", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Input, params: Text, result: Acknowledgement },
         InputClear => { name: "input.clear", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Input, params: None, result: Acknowledgement },
@@ -397,12 +398,12 @@ define_action_catalog! {
     }
 
     history {
-        HistoryList => { name: "history.list", status: Stub, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: History, params: Limit, result: Content },
+        HistoryList => { name: "history.list", status: Implemented, authenticated_user: false, contexts: Any, state: UnderlyingDataRead, target: History, params: Limit, result: Content },
     }
 
     theme {
-        ThemeList => { name: "theme.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Appearance, params: None, result: ThemeList },
-        ThemeGet => { name: "theme.get", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Appearance, params: None, result: ThemeState },
+        ThemeList => { name: "theme.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Appearance, params: None, result: ThemeList },
+        ThemeGet => { name: "theme.get", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Appearance, params: None, result: ThemeState },
         ThemeSet => { name: "theme.set", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Appearance, params: ThemeName, result: Acknowledgement },
         ThemeSystemSet => { name: "theme.system.set", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Appearance, params: BooleanValue, result: Acknowledgement },
         ThemeLightSet => { name: "theme.light.set", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Appearance, params: ThemeName, result: Acknowledgement },
@@ -410,7 +411,7 @@ define_action_catalog! {
     }
 
     appearance {
-        AppearanceGet => { name: "appearance.get", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Appearance, params: None, result: AppearanceState },
+        AppearanceGet => { name: "appearance.get", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Appearance, params: None, result: AppearanceState },
         AppearanceFontSizeIncrease => { name: "appearance.font_size.increase", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Appearance, params: None, result: Acknowledgement },
         AppearanceFontSizeDecrease => { name: "appearance.font_size.decrease", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Appearance, params: None, result: Acknowledgement },
         AppearanceFontSizeReset => { name: "appearance.font_size.reset", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Appearance, params: None, result: Acknowledgement },
@@ -420,20 +421,20 @@ define_action_catalog! {
     }
 
     setting {
-        SettingList => { name: "setting.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Settings, params: Namespace, result: SettingList },
-        SettingGet => { name: "setting.get", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Settings, params: Key, result: SettingValue },
+        SettingList => { name: "setting.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Settings, params: Namespace, result: SettingList },
+        SettingGet => { name: "setting.get", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Settings, params: Key, result: SettingValue },
         SettingSet => { name: "setting.set", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Settings, params: KeyValue, result: Acknowledgement },
         SettingToggle => { name: "setting.toggle", status: Stub, authenticated_user: false, contexts: Any, state: MetadataConfigurationMutation, target: Settings, params: Key, result: Acknowledgement },
     }
 
     keybinding {
-        KeybindingList => { name: "keybinding.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Keybinding, params: None, result: KeybindingList },
-        KeybindingGet => { name: "keybinding.get", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Keybinding, params: BindingName, result: KeybindingMetadata },
+        KeybindingList => { name: "keybinding.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Keybinding, params: None, result: KeybindingList },
+        KeybindingGet => { name: "keybinding.get", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Keybinding, params: BindingName, result: KeybindingMetadata },
     }
 
     action {
-        ActionList => { name: "action.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Action, params: None, result: CapabilityList },
-        ActionInspect => { name: "action.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Action, params: ActionName, result: CapabilityMetadata },
+        ActionList => { name: "action.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Action, params: None, result: CapabilityList },
+        ActionInspect => { name: "action.inspect", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: Action, params: ActionName, result: CapabilityMetadata },
     }
 
     surface {
@@ -451,13 +452,13 @@ define_action_catalog! {
     }
 
     file {
-        FileList => { name: "file.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: File, params: None, result: FileList },
+        FileList => { name: "file.list", status: Implemented, authenticated_user: false, contexts: Any, state: MetadataRead, target: File, params: None, result: FileList },
         FileOpen => { name: "file.open", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: File, params: FileOpen, result: Acknowledgement },
     }
 
     drive {
-        DriveList => { name: "drive.list", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: MetadataRead, target: DriveObject, params: DriveObjectList, result: DriveObjectList },
-        DriveInspect => { name: "drive.inspect", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataRead, target: DriveObject, params: DriveObjectId, result: DriveObjectMetadata },
+        DriveList => { name: "drive.list", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: MetadataRead, target: DriveObject, params: DriveObjectList, result: DriveObjectList },
+        DriveInspect => { name: "drive.inspect", status: Implemented, authenticated_user: true, contexts: InsideWarpOnly, state: UnderlyingDataRead, target: DriveObject, params: DriveObjectId, result: DriveObjectMetadata },
         DriveOpen => { name: "drive.open", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: AppStateMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
         DriveNotebookOpen => { name: "drive.notebook.open", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: AppStateMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
         DriveEnvVarCollectionOpen => { name: "drive.env_var_collection.open", status: Stub, authenticated_user: true, contexts: InsideWarpOnly, state: AppStateMutation, target: DriveObject, params: DriveObjectId, result: Acknowledgement },
