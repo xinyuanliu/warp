@@ -1,0 +1,8 @@
+{
+  "action": "window.inspect",
+  "window": {
+    "is_active": true,
+    "title": "~",
+    "window_id": "0"
+  }
+}

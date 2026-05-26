@@ -1,0 +1,8 @@
+{
+  "action": "session.inspect",
+  "session": {
+    "is_active": true,
+    "pane_id": "Pane Pane Terminal (2034)",
+    "session_id": "Pane Pane Terminal (2034)"
+  }
+}

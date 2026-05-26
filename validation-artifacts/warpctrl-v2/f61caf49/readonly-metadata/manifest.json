@@ -1,0 +1,507 @@
+{
+  "agent_name": "readonly-metadata",
+  "repository": "git@github.com:warpdotdev/warp.git",
+  "validation_ref": "zach/warpctrl-validation/f61caf49",
+  "validated_sha": "f61caf49400dc5c0d37d57a553d27733700e5204",
+  "expected_sha": "f61caf49400dc5c0d37d57a553d27733700e5204",
+  "sha_verified": true,
+  "artifact_root": "validation-artifacts/warpctrl-v2/f61caf49/readonly-metadata",
+  "builds": [
+    {
+      "name": "standalone warpctrl",
+      "command": "cargo build -p warp --bin warpctrl --features standalone,warp_control_cli",
+      "status": "pass",
+      "log_path": "logs/build_warpctrl.log"
+    },
+    {
+      "name": "graphical Warp app baseline",
+      "command": "cargo build -p warp --bin warp-oss --features gui,warp_control_cli",
+      "status": "pass",
+      "log_path": "logs/build_warp_oss.log"
+    },
+    {
+      "name": "graphical Warp app validation launch build",
+      "command": "cargo build -p warp --bin warp-oss --features gui,warp_control_cli,skip_firebase_anonymous_user",
+      "status": "pass",
+      "log_path": "logs/build_warp_oss_with_skip_login.log",
+      "note": "Additional existing skip_firebase_anonymous_user feature was used only to bypass login/onboarding in the isolated graphical validation profile and reach a visible terminal workspace."
+    }
+  ],
+  "environment": {
+    "display": "Xvfb :94 with Openbox",
+    "workspace": "/workspace/warpctrl-validation/readonly-metadata",
+    "isolated_home": "/tmp/warpctrl-validation/readonly-metadata/final-home",
+    "warp_data_profile": "readonly-metadata-final-f61caf49",
+    "discovery_dir": "/tmp/warpctrl-validation/readonly-metadata/final-home/discovery"
+  },
+  "setup_evidence": {
+    "screenshot": "screenshots/000__outside-staggered__metadata__setup_visible_target__terminal_ui.png",
+    "visible_state": "External xterm staggered left; target Warp window staggered right with a single visible ~ tab and active terminal pane containing validation setup output.",
+    "permission_evidence": "logs/final_discovery_inst_a39b3e2f31854cf9a3f635d1bd2ba77d.json shows outside_warp_control_enabled true and endpoint/credential broker present."
+  },
+  "commands": [
+    {
+      "ordinal": "001",
+      "command_name": "window_list",
+      "command": "$WARPCTRL --output-format json window list",
+      "action": "window.list",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "List windows while one Warp window is visible; compare JSON window count/title/active flag to the visible Warp window.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"window.list\",\n  \"windows\": [\n    {\n      \"is_active\": true,\n      \"title\": \"~\",\n      \"window_id\": \"0\"\n    }\n  ]\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows one visible Warp window titled with the active tab/workspace (~), and JSON lists one active window with title ~ and window_id 0.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/001__outside-staggered__metadata__window_list__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/001__outside-staggered__metadata__window_list__stdout_stderr.txt",
+        "logs/001__outside-staggered__metadata__window_list__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "002",
+      "command_name": "window_inspect_active",
+      "command": "$WARPCTRL --output-format json window inspect --window active",
+      "action": "window.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Focus the Warp window before invocation; compare active window metadata to the visible Warp window.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"window.inspect\",\n  \"window\": {\n    \"is_active\": true,\n    \"title\": \"~\",\n    \"window_id\": \"0\"\n  }\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows the focused visible Warp window; JSON reports one active window with title ~ and window_id 0.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/002__outside-staggered__metadata__window_inspect_active__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/002__outside-staggered__metadata__window_inspect_active__stdout_stderr.txt",
+        "logs/002__outside-staggered__metadata__window_inspect_active__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "003",
+      "command_name": "tab_list",
+      "command": "$WARPCTRL --output-format json tab list",
+      "action": "tab.list",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep the tab strip visible with a single active bash/~ tab; compare JSON tab list to the visible tab.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"tab.list\",\n  \"tabs\": [\n    {\n      \"index\": 0,\n      \"is_active\": true,\n      \"tab_id\": \"1660\",\n      \"title\": \"~\",\n      \"window_id\": \"0\"\n    }\n  ]\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows one visible active tab labeled ~; JSON lists one active tab at index 0 with title ~ and window_id 0.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/003__outside-staggered__metadata__tab_list__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/003__outside-staggered__metadata__tab_list__stdout_stderr.txt",
+        "logs/003__outside-staggered__metadata__tab_list__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "004",
+      "command_name": "tab_inspect_active",
+      "command": "$WARPCTRL --output-format json tab inspect --tab active",
+      "action": "tab.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep the active tab visible and inspect --tab active; compare returned tab title/index to the visible active tab.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"tab.inspect\",\n  \"tab\": {\n    \"index\": 0,\n    \"is_active\": true,\n    \"tab_id\": \"1660\",\n    \"title\": \"~\",\n    \"window_id\": \"0\"\n  }\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows the visible active ~ tab; JSON reports active tab index 0, title ~, tab_id 1660.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/004__outside-staggered__metadata__tab_inspect_active__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/004__outside-staggered__metadata__tab_inspect_active__stdout_stderr.txt",
+        "logs/004__outside-staggered__metadata__tab_inspect_active__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "005",
+      "command_name": "tab_inspect_index_0",
+      "command": "$WARPCTRL --output-format json tab inspect --tab-index 0",
+      "action": "tab.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep only one visible tab so tab index 0 is unambiguous; compare returned tab to visible first tab.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"tab.inspect\",\n  \"tab\": {\n    \"index\": 0,\n    \"is_active\": true,\n    \"tab_id\": \"1660\",\n    \"title\": \"~\",\n    \"window_id\": \"0\"\n  }\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows a single visible ~ tab; JSON reports index 0, active true, title ~, tab_id 1660.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/005__outside-staggered__metadata__tab_inspect_index_0__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/005__outside-staggered__metadata__tab_inspect_index_0__stdout_stderr.txt",
+        "logs/005__outside-staggered__metadata__tab_inspect_index_0__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "006",
+      "command_name": "pane_list",
+      "command": "$WARPCTRL --output-format json pane list",
+      "action": "pane.list",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep one visible terminal pane with command output; compare JSON pane count and active terminal state to the visible pane.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"pane.list\",\n  \"panes\": [\n    {\n      \"has_terminal_session\": true,\n      \"index\": 0,\n      \"is_active\": true,\n      \"pane_id\": \"Pane Pane Terminal (2034)\",\n      \"tab_id\": \"1660\"\n    }\n  ]\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows one terminal pane in the Warp window; JSON lists one active pane with has_terminal_session true and index 0.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/006__outside-staggered__metadata__pane_list__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/006__outside-staggered__metadata__pane_list__stdout_stderr.txt",
+        "logs/006__outside-staggered__metadata__pane_list__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "007",
+      "command_name": "pane_inspect_active",
+      "command": "$WARPCTRL --output-format json pane inspect --pane active",
+      "action": "pane.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep the active terminal pane visible and inspect --pane active; compare returned pane to visible pane.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"pane.inspect\",\n  \"pane\": {\n    \"has_terminal_session\": true,\n    \"index\": 0,\n    \"is_active\": true,\n    \"pane_id\": \"Pane Pane Terminal (2034)\",\n    \"tab_id\": \"1660\"\n  }\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows the active terminal pane; JSON reports active true, has_terminal_session true, index 0, pane_id Pane Pane Terminal (2034).",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/007__outside-staggered__metadata__pane_inspect_active__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/007__outside-staggered__metadata__pane_inspect_active__stdout_stderr.txt",
+        "logs/007__outside-staggered__metadata__pane_inspect_active__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "008",
+      "command_name": "pane_inspect_index_0",
+      "command": "$WARPCTRL --output-format json pane inspect --pane-index 0",
+      "action": "pane.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep one visible pane so pane index 0 is unambiguous; compare returned pane to visible pane.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"pane.inspect\",\n  \"pane\": {\n    \"has_terminal_session\": true,\n    \"index\": 0,\n    \"is_active\": true,\n    \"pane_id\": \"Pane Pane Terminal (2034)\",\n    \"tab_id\": \"1660\"\n  }\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows one terminal pane; JSON reports index 0, active true, has_terminal_session true.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/008__outside-staggered__metadata__pane_inspect_index_0__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/008__outside-staggered__metadata__pane_inspect_index_0__stdout_stderr.txt",
+        "logs/008__outside-staggered__metadata__pane_inspect_index_0__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "009",
+      "command_name": "session_list",
+      "command": "$WARPCTRL --output-format json session list",
+      "action": "session.list",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep a visible terminal session with prior command output; compare JSON session list to the visible terminal session.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"session.list\",\n  \"sessions\": [\n    {\n      \"is_active\": true,\n      \"pane_id\": \"Pane Pane Terminal (2034)\",\n      \"session_id\": \"Pane Pane Terminal (2034)\"\n    }\n  ]\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows a terminal session in the active pane; JSON lists one active session bound to Pane Pane Terminal (2034).",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/009__outside-staggered__metadata__session_list__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/009__outside-staggered__metadata__session_list__stdout_stderr.txt",
+        "logs/009__outside-staggered__metadata__session_list__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "010",
+      "command_name": "session_inspect_active",
+      "command": "$WARPCTRL --output-format json session inspect --session active",
+      "action": "session.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep the active terminal session visible and inspect --session active; compare returned session to visible terminal session.",
+      "expected_result": "JSON success response",
+      "actual_result": "{\n  \"action\": \"session.inspect\",\n  \"session\": {\n    \"is_active\": true,\n    \"pane_id\": \"Pane Pane Terminal (2034)\",\n    \"session_id\": \"Pane Pane Terminal (2034)\"\n  }\n}",
+      "exit_code": 0,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows the active terminal session; JSON reports active true with session_id Pane Pane Terminal (2034).",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/010__outside-staggered__metadata__session_inspect_active__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/010__outside-staggered__metadata__session_inspect_active__stdout_stderr.txt",
+        "logs/010__outside-staggered__metadata__session_inspect_active__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "011",
+      "command_name": "window_inspect_missing_window_id",
+      "command": "$WARPCTRL --output-format json window inspect --window missing-window-id",
+      "action": "window.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep the valid Warp target visible, then request a bogus window id; verify structured stale/missing target error and no visible UI change.",
+      "expected_result": "ok=false JSON error with stale_target or missing_target for missing window id",
+      "actual_result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"stale_target\",\n    \"message\": \"window.list cannot resolve the requested window id\"\n  }\n}",
+      "exit_code": 1,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows Warp still unchanged with the same visible target; CLI JSON error is ok=false code stale_target, message cannot resolve requested window id.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/011__outside-staggered__metadata__window_inspect_missing_window_id__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/011__outside-staggered__metadata__window_inspect_missing_window_id__stdout_stderr.txt",
+        "logs/011__outside-staggered__metadata__window_inspect_missing_window_id__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "012",
+      "command_name": "tab_inspect_index_999",
+      "command": "$WARPCTRL --output-format json tab inspect --tab-index 999",
+      "action": "tab.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Keep one visible tab, then request tab index 999; verify structured missing/stale selector error and no visible UI change.",
+      "expected_result": "ok=false JSON error with missing target or structured selector error for tab index 999",
+      "actual_result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"stale_target\",\n    \"message\": \"tab.list cannot resolve the requested tab index\"\n  }\n}",
+      "exit_code": 1,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows the same single visible tab; CLI JSON error is ok=false code stale_target, message cannot resolve requested tab index.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/012__outside-staggered__metadata__tab_inspect_index_999__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/012__outside-staggered__metadata__tab_inspect_index_999__stdout_stderr.txt",
+        "logs/012__outside-staggered__metadata__tab_inspect_index_999__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    },
+    {
+      "ordinal": "013",
+      "command_name": "window_inspect_active_conflict_window_index_0",
+      "command": "$WARPCTRL --output-format json window inspect --window active --window-index 0",
+      "action": "window.inspect",
+      "context": "outside-warp invocation from external xterm, targeting one visible graphical Warp OSS window in Xvfb/Openbox",
+      "permission_state": {
+        "settings_page": "Settings > Scripting",
+        "outside_warp_control": true,
+        "outside_warp_metadata_reads": true,
+        "other_permission_categories": "not enabled / not required for this metadata-read command family",
+        "how_enabled": "preseeded private local user_preferences.json for isolated WARP_DATA_PROFILE; final_discovery log shows outside_warp_control_enabled true"
+      },
+      "proof_setup_question": "What is the best way to show the impact of this CLI command?",
+      "proof_setup_answer": "Invoke conflicting selector flags while the visible target remains available; verify parser conflict error before dispatch.",
+      "expected_result": "CLI conflict error for mutually exclusive --window and --window-index selectors",
+      "actual_result": "error: the argument '--window <WINDOW>' cannot be used with '--window-index <WINDOW_INDEX>'\n\nUsage: warpctrl window inspect --window <WINDOW>\n\nFor more information, try '--help'.",
+      "exit_code": 2,
+      "status": "pass",
+      "visual_inspection": {
+        "expected_visual_effect": "No mutation; the visible Warp window/tab/pane/session should remain available and align with returned metadata, or remain unchanged for denial/parser cases.",
+        "observed_visual_effect": "The screenshot shows the visible Warp target unchanged; CLI parser rejects --window with --window-index and exits 2.",
+        "status": "pass",
+        "unexpected_ui_changes": "none observed",
+        "ambiguities": "For metadata reads, opaque IDs are not directly visible in Warp UI; visual validation compared visible counts, active state, tab title, pane/session presence, and unchanged target state against JSON."
+      },
+      "screenshot_paths": [
+        "screenshots/013__outside-staggered__metadata__window_inspect_active_conflict_window_index_0__terminal_ui.png"
+      ],
+      "log_paths": [
+        "logs/013__outside-staggered__metadata__window_inspect_active_conflict_window_index_0__stdout_stderr.txt",
+        "logs/013__outside-staggered__metadata__window_inspect_active_conflict_window_index_0__exit_code.txt"
+      ],
+      "skip_or_blocker_reason": null
+    }
+  ],
+  "counts": {
+    "pass": 13,
+    "fail": 0,
+    "skip": 0
+  },
+  "visual_inspection_failures_or_blockers": [],
+  "blockers": [],
+  "skipped_commands": []
+}

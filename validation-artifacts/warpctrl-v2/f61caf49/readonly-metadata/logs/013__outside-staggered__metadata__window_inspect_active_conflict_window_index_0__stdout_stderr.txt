@@ -1,0 +1,5 @@
+error: the argument '--window <WINDOW>' cannot be used with '--window-index <WINDOW_INDEX>'
+
+Usage: warpctrl window inspect --window <WINDOW>
+
+For more information, try '--help'.

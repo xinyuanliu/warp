@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "stale_target",
+    "message": "window.list cannot resolve the requested window id"
+  }
+}

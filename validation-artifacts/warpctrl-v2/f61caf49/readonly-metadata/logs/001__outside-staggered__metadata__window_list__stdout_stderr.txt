@@ -1,0 +1,10 @@
+{
+  "action": "window.list",
+  "windows": [
+    {
+      "is_active": true,
+      "title": "~",
+      "window_id": "0"
+    }
+  ]
+}

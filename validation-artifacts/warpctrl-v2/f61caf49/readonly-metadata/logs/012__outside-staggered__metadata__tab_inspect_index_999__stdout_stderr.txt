@@ -1,0 +1,7 @@
+{
+  "ok": false,
+  "error": {
+    "code": "stale_target",
+    "message": "tab.list cannot resolve the requested tab index"
+  }
+}

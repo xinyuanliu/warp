@@ -1,0 +1,57 @@
+ Downloading crates ...
+  Downloaded primal-check v0.3.4
+  Downloaded transpose v0.2.3
+  Downloaded dasp_sample v0.11.0
+  Downloaded strength_reduce v0.2.4
+  Downloaded realfft v3.4.0
+  Downloaded alsa-sys v0.3.1
+  Downloaded hound v3.5.1
+  Downloaded alsa v0.10.0
+  Downloaded rubato v0.16.1
+  Downloaded cpal v0.17.1
+  Downloaded rustfft v6.2.0
+   Compiling num-complex v0.4.6
+   Compiling alsa-sys v0.3.1
+   Compiling rustfft v6.2.0
+   Compiling strength_reduce v0.2.4
+   Compiling primal-check v0.3.4
+   Compiling cpal v0.17.1
+   Compiling dasp_sample v0.11.0
+   Compiling warp v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/app)
+   Compiling transpose v0.2.3
+   Compiling hound v3.5.1
+   Compiling warp_assets v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_assets)
+   Compiling num v0.4.3
+   Compiling secret-service v5.0.0
+   Compiling alsa v0.10.0
+   Compiling warpui_extras v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warpui_extras)
+   Compiling settings v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/settings)
+   Compiling warp_core v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_core)
+   Compiling realfft v3.4.0
+   Compiling rubato v0.16.1
+   Compiling voice_input v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/voice_input)
+   Compiling http_client v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/http_client)
+   Compiling warp_cli v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_cli)
+   Compiling vim v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/vim)
+   Compiling repo_metadata v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/repo_metadata)
+   Compiling warp_logging v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_logging)
+   Compiling warp_isolation_platform v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/isolation_platform)
+   Compiling ui_components v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/ui_components)
+   Compiling simple_logger v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/simple_logger)
+   Compiling warp_editor v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/editor)
+   Compiling warp_graphql v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/graphql)
+   Compiling node_runtime v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/node_runtime)
+   Compiling remote_server v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/remote_server)
+   Compiling lsp v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/lsp)
+   Compiling warp_completer v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_completer)
+   Compiling warp_ripgrep v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_ripgrep)
+   Compiling warp_files v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_files)
+   Compiling languages v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/languages)
+   Compiling warp_terminal v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_terminal)
+   Compiling syntax_tree v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/syntax_tree)
+   Compiling input_classifier v0.0.0 (/workspace/warpctrl-validation/readonly-metadata/crates/input_classifier)
+   Compiling ai v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/ai)
+   Compiling warp_managed_secrets v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/managed_secrets)
+   Compiling warp_server_client v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/warp_server_client)
+   Compiling onboarding v0.1.0 (/workspace/warpctrl-validation/readonly-metadata/crates/onboarding)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 45s

@@ -1,0 +1,12 @@
+{
+  "action": "pane.list",
+  "panes": [
+    {
+      "has_terminal_session": true,
+      "index": 0,
+      "is_active": true,
+      "pane_id": "Pane Pane Terminal (2034)",
+      "tab_id": "1660"
+    }
+  ]
+}
