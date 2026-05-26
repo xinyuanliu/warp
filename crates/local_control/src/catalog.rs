@@ -27,15 +27,15 @@ pub enum InvocationContext {
     OutsideWarp,
 }
 
-/// Future proof shape for distinguishing verified Warp terminals from external clients.
-///
-/// `VerifiedWarpTerminal` is currently a protocol placeholder only. The
-/// foundation implementation rejects inside-Warp credential requests until the
-/// app-issued terminal-session proof broker is implemented.
+/// Execution proof supplied with a credential request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExecutionContextProof {
-    VerifiedWarpTerminal { proof_id: String },
+    VerifiedWarpTerminal {
+        proof_id: String,
+        terminal_session_id: String,
+        proof_secret: String,
+    },
     ExternalClient,
 }
 

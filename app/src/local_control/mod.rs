@@ -7,10 +7,9 @@
 //! short-lived scoped credential from `/v1/control/credentials`; the localhost
 //! server running inside Warp checks the feature flag, requested invocation
 //! context, action metadata, execution-context proof, and Settings > Scripting
-//! permissions before minting a bearer token. This foundation branch currently
-//! supports only outside-Warp credential requests; verified inside-Warp
-//! terminal credentials remain future work until the app-issued proof broker is
-//! implemented. The client then presents that bearer token to `/v1/control`,
+//! permissions before minting a bearer token. Authenticated-user grants require
+//! an app-issued, registry-verified Warp terminal proof and the selected app
+//! user to be logged in. The client then presents that bearer token to `/v1/control`,
 //! where the server looks up the in-memory grant, verifies it still matches the
 //! requested action, and only then hands the request to the main-thread
 //! `LocalControlBridge`.
@@ -33,11 +32,14 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use ::local_control::auth::{CredentialGrant, CredentialRequest, ScopedCredential};
+use ::local_control::auth::{
+    CredentialGrant, CredentialRequest, ScopedCredential, TerminalSessionProof,
+    TerminalSessionProofRegistry,
+};
 use ::local_control::{
     ActionKind, AuthToken, ControlEndpoint, ControlError, ControlResponse, ErrorCode,
     ErrorResponseEnvelope, InstanceId, InstanceRecord, RegisteredInstance, RequestEnvelope,
-    ResponseEnvelope, PROTOCOL_VERSION,
+    ResponseEnvelope, ScriptingGrant, ScriptingScope, PROTOCOL_VERSION,
 };
 use axum::extract::rejection::JsonRejection;
 use axum::extract::State;
@@ -50,7 +52,9 @@ use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 pub use bridge::LocalControlBridge;
-use permissions::{ensure_action_allowed, ensure_feature_enabled};
+use permissions::{
+    authenticated_user_subject_for_action, ensure_action_allowed, ensure_feature_enabled,
+};
 
 /// Shared state made available to Axum handlers for one localhost server
 /// running inside Warp.
@@ -59,12 +63,14 @@ struct ControlServerState {
     bridge_spawner: ModelSpawner<LocalControlBridge>,
     instance_id: InstanceId,
     credentials: Arc<Mutex<HashMap<String, CredentialGrant>>>,
+    terminal_proofs: Arc<Mutex<TerminalSessionProofRegistry>>,
 }
 /// Process-local localhost server running inside Warp for control actions.
 pub struct LocalControlServer {
     _runtime: Option<tokio::runtime::Runtime>,
     control_endpoint: Option<ControlEndpoint>,
     _registered_instance: Option<RegisteredInstance>,
+    state: Option<ControlServerState>,
 }
 
 impl Entity for LocalControlServer {
@@ -80,6 +86,7 @@ impl LocalControlServer {
                 _runtime: None,
                 control_endpoint: None,
                 _registered_instance: None,
+                state: None,
             };
         }
         match Self::start(ctx) {
@@ -87,6 +94,7 @@ impl LocalControlServer {
                 ctx.subscribe_to_model(
                     &crate::settings::LocalControlSettings::handle(ctx),
                     |server, _, ctx| {
+                        server.invalidate_all_grants();
                         if let Err(error) = server.refresh_discovery_record(ctx) {
                             log::warn!(
                                 "Failed to refresh local-control discovery record: {error:#}"
@@ -102,6 +110,7 @@ impl LocalControlServer {
                     _runtime: None,
                     control_endpoint: None,
                     _registered_instance: None,
+                    state: None,
                 }
             }
         }
@@ -151,11 +160,13 @@ impl LocalControlServer {
             bridge_spawner,
             instance_id,
             credentials: Arc::default(),
+            terminal_proofs: Arc::default(),
         };
+        let router_state = state.clone();
         let router = Router::new()
             .route("/v1/control", post(handle_control_request))
             .route("/v1/control/credentials", post(handle_credential_request))
-            .with_state(state);
+            .with_state(router_state);
         runtime.spawn(async move {
             if let Err(err) = axum::serve(listener, router).await {
                 log::warn!("local-control listener stopped: {err:#}");
@@ -165,7 +176,57 @@ impl LocalControlServer {
             _runtime: Some(runtime),
             control_endpoint: Some(control_endpoint),
             _registered_instance: Some(registered_instance),
+            state: Some(state),
         })
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn issue_terminal_session_proof(
+        &self,
+        terminal_session_id: impl Into<String>,
+    ) -> Result<TerminalSessionProof, ControlError> {
+        let Some(state) = &self.state else {
+            return Err(ControlError::new(
+                ErrorCode::LocalControlDisabled,
+                "local-control server is not running",
+            ));
+        };
+        let mut terminal_proofs = state.terminal_proofs.lock().map_err(|_| {
+            ControlError::new(
+                ErrorCode::Internal,
+                "local-control terminal proof registry is unavailable",
+            )
+        })?;
+        Ok(terminal_proofs.issue(
+            state.instance_id.clone(),
+            terminal_session_id,
+            Duration::minutes(10),
+        ))
+    }
+
+    pub(crate) fn invalidate_all_grants(&self) {
+        if let Some(state) = &self.state {
+            if let Ok(mut credentials) = state.credentials.lock() {
+                credentials.clear();
+            }
+            if let Ok(mut terminal_proofs) = state.terminal_proofs.lock() {
+                terminal_proofs.invalidate_all();
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn invalidate_terminal_session_grants(&self, terminal_session_id: &str) {
+        if let Some(state) = &self.state {
+            if let Ok(mut credentials) = state.credentials.lock() {
+                credentials.retain(|_, grant| {
+                    grant.invocation_context != ::local_control::InvocationContext::InsideWarp
+                });
+            }
+            if let Ok(mut terminal_proofs) = state.terminal_proofs.lock() {
+                terminal_proofs.revoke_session(terminal_session_id);
+            }
+        }
     }
 
     fn refresh_discovery_record(
@@ -265,23 +326,34 @@ async fn handle_credential_request(
         )
             .into_response();
     }
-    if let Err(error) = request.verify_execution_context_proof() {
+    let proof_check = match state.terminal_proofs.lock() {
+        Ok(terminal_proofs) => request
+            .verify_execution_context_proof_with_registry(&state.instance_id, &terminal_proofs),
+        Err(_) => Err(ControlError::new(
+            ErrorCode::Internal,
+            "local-control terminal proof registry is unavailable",
+        )),
+    };
+    if let Err(error) = proof_check {
         return (
             StatusCode::FORBIDDEN,
             Json(ErrorResponseEnvelope::new(error)),
         )
             .into_response();
     }
-    let settings_check = state
+    let authorization_check = state
         .bridge_spawner
         .spawn({
             let action = request.action;
             let invocation_context = request.invocation_context;
-            move |_, ctx| ensure_action_allowed(invocation_context, action, ctx)
+            move |_, ctx| {
+                ensure_action_allowed(invocation_context, action, ctx)?;
+                authenticated_user_subject_for_action(action, ctx)
+            }
         })
         .await;
-    match settings_check {
-        Ok(Ok(())) => {}
+    let authenticated_subject = match authorization_check {
+        Ok(Ok(subject)) => subject,
         Ok(Err(error)) => {
             return (
                 StatusCode::FORBIDDEN,
@@ -299,14 +371,28 @@ async fn handle_credential_request(
             )
                 .into_response();
         }
-    }
+    };
     let auth_token = AuthToken::generate();
-    let grant = CredentialGrant::new(
+    let mut grant = CredentialGrant::new(
         state.instance_id.clone(),
         request.action,
         request.invocation_context,
         Duration::minutes(5),
     );
+    grant.authenticated_user.subject = authenticated_subject.clone();
+    if let (Some(subject), Some(terminal_session_id)) = (
+        authenticated_subject,
+        request.verified_terminal_session_id().map(str::to_owned),
+    ) {
+        grant.scripting_grant = Some(ScriptingGrant::verified_warp_terminal(
+            terminal_session_id,
+            subject,
+            vec![ScriptingScope::from_permission(
+                request.action.metadata().permission_category,
+            )],
+            Duration::minutes(5),
+        ));
+    }
     let mut credentials = match state.credentials.lock() {
         Ok(credentials) => credentials,
         Err(_) => {

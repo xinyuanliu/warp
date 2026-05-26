@@ -19,6 +19,15 @@ pub enum LocalControlPermissionCategory {
 }
 
 define_settings_group!(LocalControlSettings, settings: [
+    allow_inside_warp_authenticated_user_actions: AllowInsideWarpAuthenticatedUserActions {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+        storage_key: "LocalControlInsideWarpAuthenticatedUserActions",
+        description: "Whether verified Warp-managed terminals may receive authenticated-user local control grants.",
+    },
     allow_outside_warp_control: AllowOutsideWarpControl {
         type: bool,
         default: false,
@@ -76,6 +85,9 @@ define_settings_group!(LocalControlSettings, settings: [
 ]);
 
 impl LocalControlSettings {
+    pub fn inside_warp_authenticated_user_actions_enabled(&self) -> bool {
+        *self.allow_inside_warp_authenticated_user_actions
+    }
     pub fn outside_warp_control_enabled(&self) -> bool {
         *self.allow_outside_warp_control
     }
