@@ -10,7 +10,9 @@ use ::local_control::{
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 use crate::local_control::handlers::{layout, metadata};
-use crate::local_control::permissions::{ensure_action_allowed, ensure_feature_enabled};
+use crate::local_control::permissions::{
+    ensure_action_allowed, ensure_authenticated_user_matches, ensure_feature_enabled,
+};
 use crate::local_control::resolver::validate_action_params;
 
 /// WarpUI model that executes already-authenticated local-control actions.
@@ -55,6 +57,9 @@ impl LocalControlBridge {
             return ResponseEnvelope::error(request.request_id, error);
         }
         if let Err(error) = grant.verify_for_action(request.action.kind) {
+            return ResponseEnvelope::error(request.request_id, error);
+        }
+        if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
             return ResponseEnvelope::error(request.request_id, error);
         }
         if !request.action.kind.is_implemented() {

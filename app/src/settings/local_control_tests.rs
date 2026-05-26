@@ -1,7 +1,8 @@
 use settings::{Setting, SyncToCloud};
 
 use super::{
-    AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
+    AllowInsideWarpAuthenticatedUserActions, AllowOutsideWarpAppStateMutations,
+    AllowOutsideWarpControl,
     AllowOutsideWarpMetadataConfigurationMutations, AllowOutsideWarpMetadataReads,
     AllowOutsideWarpUnderlyingDataMutations, AllowOutsideWarpUnderlyingDataReads,
     LocalControlPermissionCategory, LocalControlSettings,
@@ -9,6 +10,9 @@ use super::{
 
 fn settings_with_values(outside_enabled: bool) -> LocalControlSettings {
     LocalControlSettings {
+        allow_inside_warp_authenticated_user_actions: AllowInsideWarpAuthenticatedUserActions::new(
+            Some(false),
+        ),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(outside_enabled)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(false)),
         allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(
@@ -41,6 +45,7 @@ fn defaults_disable_outside_warp_permissions() {
 #[test]
 fn generated_settings_are_private_local_only_with_expected_defaults() {
     assert!(!*AllowOutsideWarpControl::new(None));
+    assert!(!*AllowInsideWarpAuthenticatedUserActions::new(None));
     assert!(!*AllowOutsideWarpMetadataReads::new(None));
     assert!(!*AllowOutsideWarpUnderlyingDataReads::new(None));
     assert!(!*AllowOutsideWarpAppStateMutations::new(None));
@@ -48,10 +53,15 @@ fn generated_settings_are_private_local_only_with_expected_defaults() {
     assert!(!*AllowOutsideWarpUnderlyingDataMutations::new(None));
     assert_eq!(AllowOutsideWarpControl::sync_to_cloud(), SyncToCloud::Never);
     assert_eq!(
+        AllowInsideWarpAuthenticatedUserActions::sync_to_cloud(),
+        SyncToCloud::Never
+    );
+    assert_eq!(
         AllowOutsideWarpUnderlyingDataMutations::sync_to_cloud(),
         SyncToCloud::Never
     );
     assert!(AllowOutsideWarpControl::is_private());
+    assert!(AllowInsideWarpAuthenticatedUserActions::is_private());
     assert!(AllowOutsideWarpMetadataReads::is_private());
     assert!(AllowOutsideWarpUnderlyingDataMutations::is_private());
 }
@@ -59,6 +69,9 @@ fn generated_settings_are_private_local_only_with_expected_defaults() {
 #[test]
 fn disabled_context_blocks_enabled_granular_permissions() {
     let settings = LocalControlSettings {
+        allow_inside_warp_authenticated_user_actions: AllowInsideWarpAuthenticatedUserActions::new(
+            Some(false),
+        ),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(false)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(true)),
         allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(
@@ -79,6 +92,9 @@ fn disabled_context_blocks_enabled_granular_permissions() {
 #[test]
 fn granular_permissions_are_independent() {
     let settings = LocalControlSettings {
+        allow_inside_warp_authenticated_user_actions: AllowInsideWarpAuthenticatedUserActions::new(
+            Some(false),
+        ),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(true)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(true)),
         allow_outside_warp_underlying_data_reads: AllowOutsideWarpUnderlyingDataReads::new(Some(

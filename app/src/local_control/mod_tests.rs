@@ -13,7 +13,8 @@ use super::{
     validate_tab_create_target,
 };
 use crate::settings::{
-    AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
+    AllowInsideWarpAuthenticatedUserActions, AllowOutsideWarpAppStateMutations,
+    AllowOutsideWarpControl,
     AllowOutsideWarpMetadataConfigurationMutations, AllowOutsideWarpMetadataReads,
     AllowOutsideWarpUnderlyingDataMutations, AllowOutsideWarpUnderlyingDataReads,
     LocalControlSettings,
@@ -25,6 +26,9 @@ fn settings_with_values(
     outside_app_state_mutations: bool,
 ) -> LocalControlSettings {
     LocalControlSettings {
+        allow_inside_warp_authenticated_user_actions: AllowInsideWarpAuthenticatedUserActions::new(
+            Some(false),
+        ),
         allow_outside_warp_control: AllowOutsideWarpControl::new(Some(outside_enabled)),
         allow_outside_warp_metadata_reads: AllowOutsideWarpMetadataReads::new(Some(
             outside_metadata_reads,
@@ -182,9 +186,22 @@ fn inside_warp_context_is_not_implemented() {
     let err = ensure_settings_allow_action(
         &settings,
         InvocationContext::InsideWarp,
-        ActionKind::TabCreate,
+        ActionKind::InputRun,
     )
-    .expect_err("inside-Warp grants are not implemented");
+    .expect_err("authenticated inside-Warp grants require the settings gate");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn outside_warp_authenticated_actions_are_execution_context_denied() {
+    let settings = settings_with_values(true, true, true);
+
+    let err = ensure_settings_allow_action(
+        &settings,
+        InvocationContext::OutsideWarp,
+        ActionKind::InputRun,
+    )
+    .expect_err("outside-Warp authenticated action is rejected");
     assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
 }
 

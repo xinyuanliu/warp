@@ -8,11 +8,13 @@ pub mod catalog;
 pub mod client;
 pub mod discovery;
 pub mod protocol;
+pub mod scripting;
 pub mod selection;
 pub mod selectors;
 
 pub use auth::{
     AuthToken, AuthenticatedUserGrant, CredentialGrant, CredentialRequest, ScopedCredential,
+    TerminalSessionProof, TerminalSessionProofRegistry,
 };
 pub use catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, AuthenticatedUserRequirement,
@@ -26,4 +28,5 @@ pub use protocol::{
     Action, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, ExecutionContextProof,
     PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope,
 };
+pub use scripting::{ScriptingGrant, ScriptingIdentitySource, ScriptingScope};
 pub use selectors::{PaneSelector, TabSelector, TargetSelector, WindowSelector};

@@ -3,6 +3,7 @@ use chrono::Duration;
 use super::*;
 use crate::discovery::InstanceId;
 use crate::protocol::{PermissionCategory, StateDataCategory};
+use crate::scripting::{ScriptingGrant, ScriptingScope};
 
 #[test]
 fn rejects_missing_authorization_header() {
@@ -101,10 +102,87 @@ fn credential_request_rejects_unverified_inside_warp_context() {
 }
 
 #[test]
+fn credential_request_accepts_registry_verified_inside_warp_terminal_proof() {
+    let instance_id = InstanceId("inst_test".to_owned());
+    let mut registry = TerminalSessionProofRegistry::default();
+    let proof = registry.issue(instance_id.clone(), "session-1", Duration::minutes(5));
+    let mut request = CredentialRequest::new(ActionKind::InputRun, InvocationContext::InsideWarp);
+    request.execution_context_proof = Some(ExecutionContextProof::VerifiedWarpTerminal {
+        proof_id: proof.proof_id,
+        terminal_session_id: proof.terminal_session_id,
+        proof_secret: proof.proof_secret,
+    });
+
+    request
+        .verify_execution_context_proof_with_registry(&instance_id, &registry)
+        .expect("verified terminal proof is accepted");
+}
+
+#[test]
+fn registry_rejects_terminal_proof_for_wrong_instance() {
+    let instance_id = InstanceId("inst_test".to_owned());
+    let mut registry = TerminalSessionProofRegistry::default();
+    let proof = registry.issue(instance_id, "session-1", Duration::minutes(5));
+    let mut request = CredentialRequest::new(ActionKind::InputRun, InvocationContext::InsideWarp);
+    request.execution_context_proof = Some(ExecutionContextProof::VerifiedWarpTerminal {
+        proof_id: proof.proof_id,
+        terminal_session_id: proof.terminal_session_id,
+        proof_secret: proof.proof_secret,
+    });
+    let err = request
+        .verify_execution_context_proof_with_registry(
+            &InstanceId("other_instance".to_owned()),
+            &registry,
+        )
+        .expect_err("wrong instance is rejected");
+
+    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
+}
+
+#[test]
+fn authenticated_action_requires_terminal_scripting_grant() {
+    let mut grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::InputRun,
+        InvocationContext::InsideWarp,
+        Duration::minutes(5),
+    );
+    grant.authenticated_user.subject = Some("user-1".to_owned());
+    let err = grant
+        .verify_for_action(ActionKind::InputRun)
+        .expect_err("missing terminal scripting grant is rejected");
+
+    assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
+}
+
+#[test]
+fn authenticated_action_accepts_matching_terminal_scripting_grant() {
+    let mut grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::InputRun,
+        InvocationContext::InsideWarp,
+        Duration::minutes(5),
+    );
+    grant.authenticated_user.subject = Some("user-1".to_owned());
+    grant.scripting_grant = Some(ScriptingGrant::verified_warp_terminal(
+        "session-1",
+        "user-1",
+        vec![ScriptingScope::MutateUnderlyingData],
+        Duration::minutes(5),
+    ));
+
+    grant
+        .verify_for_action(ActionKind::InputRun)
+        .expect("matching terminal scripting grant is accepted");
+}
+
+#[test]
 fn credential_request_rejects_placeholder_inside_warp_terminal_proof() {
     let mut request = CredentialRequest::new(ActionKind::TabCreate, InvocationContext::InsideWarp);
     request.execution_context_proof = Some(ExecutionContextProof::VerifiedWarpTerminal {
         proof_id: "proof".to_owned(),
+        terminal_session_id: "session".to_owned(),
+        proof_secret: "secret".to_owned(),
     });
     let err = request
         .verify_execution_context_proof()
@@ -117,6 +195,8 @@ fn credential_request_rejects_terminal_proof_for_external_client() {
     let mut request = CredentialRequest::new(ActionKind::TabCreate, InvocationContext::OutsideWarp);
     request.execution_context_proof = Some(ExecutionContextProof::VerifiedWarpTerminal {
         proof_id: "proof".to_owned(),
+        terminal_session_id: "session".to_owned(),
+        proof_secret: "secret".to_owned(),
     });
     let err = request
         .verify_execution_context_proof()

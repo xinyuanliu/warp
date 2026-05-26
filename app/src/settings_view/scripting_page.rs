@@ -10,7 +10,8 @@ use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
 use crate::report_if_error;
 use crate::settings::{
-    AllowOutsideWarpAppStateMutations, AllowOutsideWarpControl,
+    AllowInsideWarpAuthenticatedUserActions, AllowOutsideWarpAppStateMutations,
+    AllowOutsideWarpControl,
     AllowOutsideWarpMetadataConfigurationMutations, AllowOutsideWarpMetadataReads,
     AllowOutsideWarpUnderlyingDataMutations, AllowOutsideWarpUnderlyingDataReads,
     LocalControlSettings,
@@ -27,6 +28,7 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 /// Toggle rows shown on the Settings > Scripting page for outside-Warp local-control gates.
 #[derive(Clone, Copy, Debug)]
 pub enum ScriptingToggle {
+    InsideWarpAuthenticatedUserActions,
     OutsideWarpControl,
     OutsideWarpMetadataReads,
     OutsideWarpUnderlyingDataReads,
@@ -38,6 +40,7 @@ pub enum ScriptingToggle {
 impl ScriptingToggle {
     fn label(self) -> &'static str {
         match self {
+            Self::InsideWarpAuthenticatedUserActions => "Authenticated actions in Warp terminals",
             Self::OutsideWarpControl => "Warp control outside Warp",
             Self::OutsideWarpMetadataReads => "Allow metadata reads",
             Self::OutsideWarpUnderlyingDataReads => "Allow underlying data reads",
@@ -51,6 +54,9 @@ impl ScriptingToggle {
 
     fn description(self) -> &'static str {
         match self {
+            Self::InsideWarpAuthenticatedUserActions => {
+                "Allows verified Warp-managed terminal sessions to request authenticated-user grants for allowlisted actions."
+            }
             Self::OutsideWarpControl => {
                 "Allows other local apps, terminals, IDEs, launch agents, and scripts to request Warp control."
             }
@@ -74,6 +80,9 @@ impl ScriptingToggle {
 
     fn search_terms(self) -> &'static str {
         match self {
+            Self::InsideWarpAuthenticatedUserActions => {
+                "inside warp authenticated user actions verified terminal scripting"
+            }
             Self::OutsideWarpControl => {
                 "outside warp control external scripts automation local cli"
             }
@@ -97,6 +106,9 @@ impl ScriptingToggle {
 
     fn value(self, settings: &LocalControlSettings) -> bool {
         match self {
+            Self::InsideWarpAuthenticatedUserActions => {
+                *settings.allow_inside_warp_authenticated_user_actions
+            }
             Self::OutsideWarpControl => *settings.allow_outside_warp_control,
             Self::OutsideWarpMetadataReads => *settings.allow_outside_warp_metadata_reads,
             Self::OutsideWarpUnderlyingDataReads => {
@@ -114,6 +126,9 @@ impl ScriptingToggle {
 
     fn storage_key(self) -> &'static str {
         match self {
+            Self::InsideWarpAuthenticatedUserActions => {
+                AllowInsideWarpAuthenticatedUserActions::storage_key()
+            }
             Self::OutsideWarpControl => AllowOutsideWarpControl::storage_key(),
             Self::OutsideWarpMetadataReads => AllowOutsideWarpMetadataReads::storage_key(),
             Self::OutsideWarpUnderlyingDataReads => {
@@ -131,6 +146,9 @@ impl ScriptingToggle {
 
     fn sync_to_cloud(self) -> SyncToCloud {
         match self {
+            Self::InsideWarpAuthenticatedUserActions => {
+                AllowInsideWarpAuthenticatedUserActions::sync_to_cloud()
+            }
             Self::OutsideWarpControl => AllowOutsideWarpControl::sync_to_cloud(),
             Self::OutsideWarpMetadataReads => AllowOutsideWarpMetadataReads::sync_to_cloud(),
             Self::OutsideWarpUnderlyingDataReads => {
@@ -150,7 +168,7 @@ impl ScriptingToggle {
 
     fn requires_outside_control(self) -> bool {
         match self {
-            Self::OutsideWarpControl => false,
+            Self::InsideWarpAuthenticatedUserActions | Self::OutsideWarpControl => false,
             Self::OutsideWarpMetadataReads
             | Self::OutsideWarpUnderlyingDataReads
             | Self::OutsideWarpAppStateMutations
@@ -182,6 +200,9 @@ impl ScriptingSettingsPageView {
             page: PageType::new_uncategorized(
                 vec![
                     Box::new(ScriptingIntroWidget),
+                    Box::new(ScriptingToggleWidget::new(
+                        ScriptingToggle::InsideWarpAuthenticatedUserActions,
+                    )),
                     Box::new(ScriptingToggleWidget::new(
                         ScriptingToggle::OutsideWarpControl,
                     )),
@@ -222,6 +243,11 @@ impl TypedActionView for ScriptingSettingsPageView {
                     ScriptingToggle::OutsideWarpControl => {
                         report_if_error!(settings
                             .allow_outside_warp_control
+                            .toggle_and_save_value(ctx));
+                    }
+                    ScriptingToggle::InsideWarpAuthenticatedUserActions => {
+                        report_if_error!(settings
+                            .allow_inside_warp_authenticated_user_actions
                             .toggle_and_save_value(ctx));
                     }
                     ScriptingToggle::OutsideWarpMetadataReads => {
@@ -311,7 +337,9 @@ impl SettingsWidget for ScriptingIntroWidget {
     ) -> Box<dyn Element> {
         render_settings_info_banner(
             "Warp control lets local scripts automate allowlisted actions in a running Warp app.",
-            Some("This foundation branch supports outside-Warp local clients only. Verified Warp-managed terminal invocations are planned for a later implementation and are currently rejected by the credential broker."),
+            Some(
+                "Authenticated-user actions require a verified Warp-managed terminal invocation and the selected app user to be logged in. External local clients can only use logged-out-safe local-control actions when outside-Warp control is enabled.",
+            ),
             appearance,
         )
     }
