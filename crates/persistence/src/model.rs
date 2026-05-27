@@ -990,6 +990,19 @@ impl AgentConversation {
         }
     }
 
+    /// Consumes `self` and returns the owned task list with the optimistic
+    /// stub task (if any) removed. Canonical helper for the conversion
+    /// site in `convert_persisted_conversation_to_ai_conversation_with_metadata`
+    /// that needs to pass `Vec<api::Task>` into
+    /// [`crate::api::AIConversation::new_restored`] without re-implementing
+    /// the stub-removal `retain`.
+    pub fn into_tasks_for_restore(mut self) -> Vec<api::Task> {
+        if let Some(stub_id) = optimistic_stub_task_id(&self.tasks).map(str::to_string) {
+            self.tasks.retain(|task| task.id != stub_id);
+        }
+        self.tasks
+    }
+
     /// Returns the `id` of the optimistic stub task in this conversation, if
     /// the optimistic-stub pattern matches. Wrapper around
     /// [`optimistic_stub_task_id`].

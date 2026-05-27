@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 use itertools::Itertools as _;
-use persistence::model::AgentConversationRecord;
+use persistence::model::{AgentConversation, AgentConversationData, AgentConversationRecord};
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
@@ -25,7 +25,6 @@ use crate::ai::agent::conversation::{
 use crate::ai::agent::task::Task;
 #[cfg(feature = "local_fs")]
 use crate::persistence::agent::read_agent_conversation_by_id;
-use crate::persistence::model::{AgentConversation, AgentConversationData};
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::SerializedBlock;
@@ -65,29 +64,19 @@ pub fn convert_persisted_conversation_to_ai_conversation(
 pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
     persisted_conversation: AgentConversation,
 ) -> Option<AIConversation> {
-    // Detect and drop the optimistic stub task (zero-message root paired with
-    // a real upgraded root) BEFORE consuming the conversation. The pattern is
-    // observed on local-no-harness Oz children that persisted the optimistic
-    // root before the server-issued task arrived; both end up in
-    // `agent_tasks` and the unfiltered list looks like "two root tasks" to
-    // `is_restorable`/`new_restored`.
-    let stub_task_id: Option<String> =
-        persistence::model::optimistic_stub_task_id(&persisted_conversation.tasks)
-            .map(|s| s.to_string());
-
-    let AgentConversation {
-        mut tasks,
-        conversation:
-            AgentConversationRecord {
-                conversation_id,
-                conversation_data,
-                ..
-            },
-    } = persisted_conversation;
-
-    if let Some(stub_id) = stub_task_id.as_deref() {
-        tasks.retain(|task| task.id != stub_id);
-    }
+    // Pull the persisted record fields out of `persisted_conversation.conversation`
+    // (cheap String moves), then consume the rest of the value via
+    // `into_tasks_for_restore` which drops the optimistic stub task in-memory
+    // before we hand the owned `Vec<api::Task>` to `AIConversation::new_restored`.
+    // The stub-removal pattern (zero-message root paired with a real upgraded
+    // root, observed on local-no-harness Oz children) is implemented once on
+    // `AgentConversation`; see [`AgentConversation::into_tasks_for_restore`].
+    let AgentConversationRecord {
+        conversation_id,
+        conversation_data,
+        ..
+    } = persisted_conversation.conversation.clone();
+    let tasks = persisted_conversation.into_tasks_for_restore();
 
     let conversation_id = match AIConversationId::try_from(conversation_id) {
         Ok(id) => id,
