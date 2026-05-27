@@ -11,7 +11,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
 use crate::repository::SubscriberId;
-use crate::{RepoMetadataError, Repository};
+use crate::{CanonicalizedPath, RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -95,12 +95,12 @@ impl DirectoryWatcher {
         }
     }
 
-    /// Given a path, return the watched directory that contains it.
-    ///
-    /// The caller should provide an already-canonical path (e.g. from
-    /// `CanonicalizedPath`) so this lookup avoids filesystem I/O.
-    pub fn get_watched_directory_for_path(&self, path: &Path) -> Option<ModelHandle<Repository>> {
-        let standardized = StandardizedPath::try_from_local(path).ok()?;
+    /// Given a canonical path, return the watched directory that contains it.
+    pub fn get_watched_directory_for_path(
+        &self,
+        path: &CanonicalizedPath,
+    ) -> Option<ModelHandle<Repository>> {
+        let standardized = StandardizedPath::try_from_local(path.as_path()).ok()?;
         self.find_containing_directory(&standardized)
     }
 

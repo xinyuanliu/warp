@@ -7,6 +7,7 @@ use warpui::App;
 
 use crate::repositories::{stub_git_repository, DetectedRepositories, RepoDetectionSource};
 use crate::watcher::DirectoryWatcher;
+use crate::CanonicalizedPath;
 
 #[test]
 fn test_detect_possible_local_git_repo_non_existent_directory() {
@@ -154,7 +155,10 @@ fn test_detect_possible_local_git_repo_nested_repo_created_after_parent_registra
 
             // Verify that querying from the nested directory returns the nested repo, not the parent
             watcher_handle.read(&app, |watcher, ctx| {
-                let found_handle = watcher.get_watched_directory_for_path(&nested_project_contents);
+                let canonical_contents =
+                    CanonicalizedPath::try_from(nested_project_contents.as_path())
+                        .expect("nested_project_contents should be canonicalizable");
+                let found_handle = watcher.get_watched_directory_for_path(&canonical_contents);
                 assert!(found_handle.is_some());
 
                 assert_eq!(

@@ -8,6 +8,8 @@ use anyhow::Result;
 use repo_metadata::repositories::RepoDetectionSource;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+#[cfg(feature = "local_fs")]
+use repo_metadata::CanonicalizedPath;
 use super::GlobalRules;
 
 cfg_if::cfg_if! {
@@ -329,9 +331,13 @@ impl ProjectContextModel {
         use repo_metadata::repositories::DetectedRepositories;
 
         let directory_watcher = DirectoryWatcher::handle(ctx);
-        if directory_watcher
-            .as_ref(ctx)
-            .get_watched_directory_for_path(path)
+        if CanonicalizedPath::try_from(path)
+            .ok()
+            .and_then(|cp| {
+                directory_watcher
+                    .as_ref(ctx)
+                    .get_watched_directory_for_path(&cp)
+            })
             .is_some()
         {
             self.register_watcher_for_path(path, ctx);
@@ -359,8 +365,11 @@ impl ProjectContextModel {
             return;
         }
 
-        let Some(repository_model) =
-            DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(path)
+        let Some(repository_model) = CanonicalizedPath::try_from(path)
+            .ok()
+            .and_then(|cp| {
+                DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(&cp)
+            })
         else {
             return;
         };

@@ -107,6 +107,7 @@ use regex::Regex;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repositories::RepoDetectionSource;
+use repo_metadata::CanonicalizedPath;
 use serde::Serialize;
 use serde_json::json;
 use session_sharing_protocol::common::{
@@ -2563,7 +2564,7 @@ pub struct TerminalView {
     /// Canonical (IO-validated) working directory, cached once when the shell reports a new CWD
     /// via [`ModelEvent::BlockMetadataReceived`]. `None` for remote sessions or when the directory
     /// no longer exists on disk.
-    canonical_pwd: Option<repo_metadata::CanonicalizedPath>,
+    canonical_pwd: Option<CanonicalizedPath>,
 
     block_text_selection_start_position: Option<Vector2F>,
 
@@ -11126,7 +11127,7 @@ impl TerminalView {
                                         };
 
                                         let Ok(active_directory) =
-                                            repo_metadata::CanonicalizedPath::try_from(
+                                            CanonicalizedPath::try_from(
                                                 active_directory,
                                             )
                                         else {
@@ -22428,7 +22429,7 @@ impl TerminalView {
 
     /// Returns the cached canonical CWD without any filesystem I/O.
     /// Populated once per [`ModelEvent::BlockMetadataReceived`] event for local sessions.
-    pub fn canonical_pwd_if_local(&self) -> Option<&repo_metadata::CanonicalizedPath> {
+    pub fn canonical_pwd_if_local(&self) -> Option<&CanonicalizedPath> {
         self.canonical_pwd.as_ref()
     }
 

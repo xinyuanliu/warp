@@ -13,7 +13,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::FutureId;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::{DirectoryWatcher, Repository};
+use crate::{CanonicalizedPath, DirectoryWatcher, Repository};
 
 /// Indicates why a repository detection event was emitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,8 +107,13 @@ impl DetectedRepositories {
             if let Some(ref key) = local_key {
                 if self.repository_roots.contains(key) {
                     if let Some(local_path) = path.to_local_path() {
-                        if let Some(repository) = DirectoryWatcher::as_ref(ctx)
-                            .get_watched_directory_for_path(&local_path)
+                        if let Some(repository) =
+                            CanonicalizedPath::try_from(local_path.as_path())
+                                .ok()
+                                .and_then(|cp| {
+                                    DirectoryWatcher::as_ref(ctx)
+                                        .get_watched_directory_for_path(&cp)
+                                })
                         {
                             ctx.emit(DetectedRepositoriesEvent::DetectedGitRepo {
                                 repository: repository.clone(),
@@ -214,7 +219,8 @@ impl DetectedRepositories {
     ) -> Option<ModelHandle<Repository>> {
         let root = self.get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))?;
         let local_path = root.to_local_path()?;
-        DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(local_path)
+        let canonical = CanonicalizedPath::try_from(local_path).ok()?;
+        DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(&canonical)
     }
 
     /// Given a local or remote path, return its corresponding repo root.
