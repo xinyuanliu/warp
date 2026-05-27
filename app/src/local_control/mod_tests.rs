@@ -9,8 +9,8 @@ use warp_core::features::FeatureFlag;
 
 use super::{
     capabilities, ensure_feature_enabled, ensure_settings_allow_action,
-    outside_warp_control_enabled_for_settings, require_active_window_id, validate_action_params,
-    validate_tab_create_target,
+    outside_warp_control_enabled_for_settings, require_active_window_id_for_action,
+    validate_action_params, validate_tab_create_target,
 };
 use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 
@@ -165,7 +165,6 @@ fn capabilities_advertises_implemented_readonly_and_app_state_actions() {
         ActionKind::SurfaceRightPanelToggle,
         ActionKind::SurfaceVerticalTabsToggle,
         ActionKind::FileOpen,
-        ActionKind::ProjectOpen,
         ActionKind::DriveOpen,
         ActionKind::DriveNotebookOpen,
         ActionKind::DriveEnvVarCollectionOpen,
@@ -203,11 +202,21 @@ fn tab_create_requires_active_window() {
     let active = warpui::WindowId::from_usize(1);
 
     assert_eq!(
-        require_active_window_id(Some(active)).expect("active"),
+        require_active_window_id_for_action(Some(active), ActionKind::TabCreate).expect("active"),
         active
     );
-    let err = require_active_window_id(None).expect_err("missing active window");
+    let err = require_active_window_id_for_action(None, ActionKind::TabCreate)
+        .expect_err("missing active window");
     assert_eq!(err.code, ErrorCode::MissingTarget);
+}
+
+#[test]
+fn active_window_errors_use_requested_action_name() {
+    let err = require_active_window_id_for_action(None, ActionKind::TabActivate)
+        .expect_err("missing active window");
+    assert_eq!(err.code, ErrorCode::MissingTarget);
+    assert!(err.message.contains("tab.activate"));
+    assert!(!err.message.contains("tab.create"));
 }
 
 #[test]

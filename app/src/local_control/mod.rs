@@ -503,7 +503,7 @@ pub(crate) use permissions::{
 };
 #[cfg(test)]
 pub(crate) use resolver::{
-    require_active_window_id, validate_action_params, validate_tab_create_target,
+    require_active_window_id_for_action, validate_action_params, validate_tab_create_target,
 };
 
 #[cfg(test)]

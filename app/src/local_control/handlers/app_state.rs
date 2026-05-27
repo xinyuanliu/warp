@@ -51,7 +51,7 @@ pub(crate) fn handle(
             ctx,
         ),
         ActionKind::PaneSplit => pane_direction_action(instance_id, action, params, ctx),
-        ActionKind::PaneFocus => pane_focus(instance_id, target, ctx),
+        ActionKind::PaneFocus => pane_focus(instance_id, action, target, ctx),
         ActionKind::PaneNavigate => pane_direction_action(instance_id, action, params, ctx),
         ActionKind::PaneResize => pane_resize(instance_id, params, ctx),
         ActionKind::PaneMaximize => pane_maximize(instance_id, true, ctx),
@@ -61,7 +61,7 @@ pub(crate) fn handle(
         }
         ActionKind::PaneRename => pane_rename(instance_id, params, ctx),
         ActionKind::PaneResetName => pane_reset_name(instance_id, ctx),
-        ActionKind::SessionActivate => pane_focus(instance_id, target, ctx),
+        ActionKind::SessionActivate => pane_focus(instance_id, action, target, ctx),
         ActionKind::SessionPrevious => {
             workspace_action(instance_id, action, WorkspaceAction::CyclePrevSession, ctx)
         }
@@ -141,7 +141,11 @@ fn focus_window(
     action: ActionKind,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
-    let window_id = crate::local_control::resolver::target_window_id(ctx)?;
+    let window_id = crate::local_control::resolver::target_window_id_for_target(
+        ctx,
+        &TargetSelector::default(),
+        action,
+    )?;
     ctx.windows().show_window_and_focus_app(window_id);
     Ok(ack(instance_id, action))
 }
@@ -152,7 +156,7 @@ fn workspace_action(
     action: WorkspaceAction,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
-    let workspace = active_workspace(ctx)?;
+    let workspace = active_workspace(action_kind, ctx)?;
     workspace.update(ctx, |workspace, ctx| {
         workspace.handle_action(&action, ctx);
     });
@@ -165,7 +169,7 @@ fn active_tab_index_action(
     ctx: &mut ModelContext<LocalControlBridge>,
     action: impl FnOnce(usize) -> WorkspaceAction,
 ) -> Result<serde_json::Value, ControlError> {
-    let workspace = active_workspace(ctx)?;
+    let workspace = active_workspace(action_kind, ctx)?;
     workspace.update(ctx, |workspace, ctx| {
         let action = action(workspace.active_tab_index());
         workspace.handle_action(&action, ctx);
@@ -184,7 +188,7 @@ fn tab_activate(
         ActionParams::None => TabActivationMode::Target,
         _ => return invalid_params(ActionKind::TabActivate),
     };
-    let workspace = active_workspace(ctx)?;
+    let workspace = active_workspace(ActionKind::TabActivate, ctx)?;
     workspace.update(ctx, |workspace, ctx| {
         let action = match mode {
             TabActivationMode::Target => tab_index_from_target(target, workspace)
@@ -274,6 +278,7 @@ fn pane_direction_action(
 
 fn pane_focus(
     instance_id: &Option<InstanceId>,
+    action_kind: ActionKind,
     target: &TargetSelector,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
@@ -283,7 +288,7 @@ fn pane_focus(
             "pane focus requires a pane target",
         )
     })?;
-    let workspace = active_workspace(ctx)?;
+    let workspace = active_workspace(action_kind, ctx)?;
     let action = workspace.read(ctx, |workspace, ctx| {
         let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
         match pane_target {
@@ -314,9 +319,9 @@ fn pane_focus(
         }
     })?;
     if let Some(action) = action {
-        pane_group_action(instance_id, ActionKind::PaneFocus, action, ctx)?;
+        pane_group_action(instance_id, action_kind, action, ctx)?;
     }
-    Ok(ack(instance_id, ActionKind::PaneFocus))
+    Ok(ack(instance_id, action_kind))
 }
 
 fn pane_resize(
@@ -353,7 +358,7 @@ fn pane_maximize(
     } else {
         ActionKind::PaneUnmaximize
     };
-    let pane_group = active_pane_group(ctx)?;
+    let pane_group = active_pane_group(action_kind, ctx)?;
     let is_maximized = pane_group.read(ctx, |pane_group, ctx| {
         pane_group.is_focused_pane_maximized(ctx)
     });
@@ -371,7 +376,7 @@ fn pane_rename(
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
     let title = rename_param(ActionKind::PaneRename, params)?;
-    let pane_group = active_pane_group(ctx)?;
+    let pane_group = active_pane_group(ActionKind::PaneRename, ctx)?;
     pane_group.update(ctx, |pane_group, ctx| {
         let pane_id = pane_group.focused_pane_id(ctx);
         if let Some(pane) = pane_group.pane_by_id(pane_id) {
@@ -388,7 +393,7 @@ fn pane_reset_name(
     instance_id: &Option<InstanceId>,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
-    let pane_group = active_pane_group(ctx)?;
+    let pane_group = active_pane_group(ActionKind::PaneResetName, ctx)?;
     pane_group.update(ctx, |pane_group, ctx| {
         let pane_id = pane_group.focused_pane_id(ctx);
         if let Some(pane) = pane_group.pane_by_id(pane_id) {
@@ -407,7 +412,7 @@ fn pane_group_action(
     action: PaneGroupAction,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
-    let pane_group = active_pane_group(ctx)?;
+    let pane_group = active_pane_group(action_kind, ctx)?;
     pane_group.update(ctx, |pane_group, ctx| {
         pane_group.handle_action(&action, ctx);
     });
@@ -447,7 +452,7 @@ fn input_mode_set(
         InputMode::Terminal => TerminalAction::SetInputModeTerminal,
         InputMode::Agent => TerminalAction::SetInputModeAgent,
     };
-    let pane_group = active_pane_group(ctx)?;
+    let pane_group = active_pane_group(ActionKind::InputModeSet, ctx)?;
     let terminal_view = pane_group
         .as_ref(ctx)
         .active_session_view(ctx)
@@ -635,23 +640,32 @@ fn drive_object_share_open(
 }
 
 fn active_workspace(
+    action: ActionKind,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<ViewHandle<Workspace>, ControlError> {
-    let window_id = crate::local_control::resolver::target_window_id(ctx)?;
+    let window_id = crate::local_control::resolver::target_window_id_for_target(
+        ctx,
+        &TargetSelector::default(),
+        action,
+    )?;
     ctx.views_of_type::<Workspace>(window_id)
         .and_then(|workspaces| workspaces.into_iter().next())
         .ok_or_else(|| {
             ControlError::new(
                 ErrorCode::MissingTarget,
-                "local-control action requires a workspace in the active window",
+                format!(
+                    "{} requires a workspace in the active window",
+                    action.as_str()
+                ),
             )
         })
 }
 
 fn active_pane_group(
+    action: ActionKind,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<ViewHandle<PaneGroup>, ControlError> {
-    let workspace = active_workspace(ctx)?;
+    let workspace = active_workspace(action, ctx)?;
     Ok(workspace.read(ctx, |workspace, _| {
         workspace.active_tab_pane_group().clone()
     }))
