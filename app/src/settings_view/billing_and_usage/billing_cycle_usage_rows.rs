@@ -76,6 +76,11 @@ pub struct MemberUsageRow {
     pub subject_uid: Option<String>,
     pub display_name: String,
     pub total_credits: i64,
+    /// Credits that draw down the base AI request limit: `BaseLimit` cost type
+    /// in the AI/Compute buckets (mirrors `get_base_limits_usage.sql`). This is
+    /// the numerator for the `used / limit` gauge, so it is not inflated by
+    /// add-on, PAYG, or cloud-only spend the way `total_credits` is.
+    pub base_credits: i64,
     pub total_cost_cents: i64,
     /// Per-user base credit limit, rendered as `used / limit`. None for service
     /// accounts, team-aggregate rows, and unlimited members.
@@ -92,6 +97,26 @@ fn member_base_limit(member: &WorkspaceMember) -> Option<i64> {
     } else {
         Some(member.usage_info.request_limit as i64)
     }
+}
+
+/// Sum of credits that count against the base AI request limit: the `BaseLimit`
+/// cost type in the AI/Compute buckets. Mirrors `get_base_limits_usage.sql` in
+/// warp-server (the quantity the per-user `request_limit` is measured against),
+/// so the `used / limit` gauge reflects base consumption only — add-on (bonus
+/// grant), PAYG, and cloud-only credits live in their own pools and must not
+/// inflate it.
+fn base_limit_credits(segments: &[BarSegment]) -> i64 {
+    segments
+        .iter()
+        .filter(|s| s.cost_type == AiCreditsUsageAndCostType::BaseLimit)
+        .filter(|s| {
+            matches!(
+                s.usage_bucket,
+                AiCreditsUsageBucket::Ai | AiCreditsUsageBucket::Compute
+            )
+        })
+        .map(|s| s.credits)
+        .sum()
 }
 
 fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
@@ -140,6 +165,7 @@ impl MemberUsageRow {
             .collect_vec();
         let (segments, total_credits, total_cost_cents) =
             aggregate_segments(viewer_entries.iter().copied());
+        let base_credits = base_limit_credits(&segments);
 
         Self {
             subject_type: AiCreditsUsageAndCostSubjectType::User,
@@ -147,6 +173,7 @@ impl MemberUsageRow {
             subject_uid: viewer_uid.map(str::to_string),
             display_name: viewer_display_name,
             total_credits,
+            base_credits,
             total_cost_cents,
             base_limit: viewer_base_limit,
             segments,
@@ -173,12 +200,14 @@ impl MemberUsageRow {
         } else {
             Vec::new()
         };
+        let base_credits = base_limit_credits(&segments);
         Self {
             subject_type: AiCreditsUsageAndCostSubjectType::User,
             subject_key: SELF_OWN_KEY.to_string(),
             subject_uid: viewer_uid,
             display_name: viewer_display_name,
             total_credits: used,
+            base_credits,
             total_cost_cents: 0,
             base_limit,
             segments,
@@ -193,6 +222,7 @@ impl MemberUsageRow {
             .iter()
             .filter(|e| e.subject_type == AiCreditsUsageAndCostSubjectType::Team);
         let (segments, total_credits, total_cost_cents) = aggregate_segments(team_entries);
+        let base_credits = base_limit_credits(&segments);
 
         Self {
             subject_type: AiCreditsUsageAndCostSubjectType::Team,
@@ -200,6 +230,7 @@ impl MemberUsageRow {
             subject_uid: None,
             display_name: "Other members".to_string(),
             total_credits,
+            base_credits,
             total_cost_cents,
             base_limit: None,
             segments,
@@ -262,6 +293,7 @@ impl MemberUsageRow {
                 Some(group) => aggregate_segments(group.entries.iter()),
                 None => (Vec::new(), 0, 0),
             };
+            let base_credits = base_limit_credits(&segments);
 
             rows.push(Self {
                 subject_type: AiCreditsUsageAndCostSubjectType::User,
@@ -269,6 +301,7 @@ impl MemberUsageRow {
                 subject_uid: Some(member.uid.as_str().to_string()),
                 display_name: member.email.clone(),
                 total_credits,
+                base_credits,
                 total_cost_cents,
                 base_limit: member_base_limit(member),
                 segments,
@@ -286,12 +319,14 @@ impl MemberUsageRow {
             let subject_uid = group.entries.first().and_then(|e| e.subject_uid.clone());
             let (segments, total_credits, total_cost_cents) =
                 aggregate_segments(group.entries.iter());
+            let base_credits = base_limit_credits(&segments);
             rows.push(Self {
                 subject_type: group.subject_type,
                 subject_key: key,
                 subject_uid,
                 display_name: group.display_name,
                 total_credits,
+                base_credits,
                 total_cost_cents,
                 base_limit: None,
                 segments,
@@ -574,7 +609,7 @@ fn render_row_card(
     let credits_str = match row.base_limit {
         Some(limit) if limit > 0 => format!(
             "{}/{}",
-            format_credits(row.total_credits),
+            format_credits(row.base_credits),
             format_credits(limit)
         ),
         None => format_credits(row.total_credits),
