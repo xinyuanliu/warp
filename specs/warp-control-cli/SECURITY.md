@@ -95,8 +95,8 @@ Warp control has one top-level mode setting based on invocation context:
 - **Enabled within Warp:** default. Controls `warpctrl` invocations from verified Warp-managed terminal sessions once proof verification exists.
 - **Enabled everywhere, including outside Warp:** controls verified Warp-managed terminal invocations and external terminals, scripts, launch agents, IDEs, or other same-user processes.
 The mode should live in a new top-level Settings pane page named **Scripting**. The Scripting page owns the user-facing controls for local scripting surfaces, including Warp control, and should explain the difference between commands run inside Warp and commands run from other apps.
-The visible UI setting is not enough by itself. The authoritative mode must be stored in protected local storage that ordinary same-user apps cannot update by writing a plist, settings database row, registry key, JSON file, or synced cloud preference. This avoids turning outside-Warp control into a feature that any process can silently enable before invoking `warpctrl`.
-Current foundation implementation note: the mode is represented in the typed `LocalControlSettings` group as a private, local-only setting. The implemented setting must use `private: true`, `SyncToCloud::Never`, an explicit private storage key, and no `toml_path`, so it is excluded from `settings.toml`, the generated settings schema, Settings Sync, Warp Drive, and user-editable or server-backed settings surfaces. This private-settings path is an interim storage boundary, not the final protected-storage requirement; before public shipment, this authoritative mode must move to platform protected storage where available.
+The visible UI setting is not enough by itself. The authoritative mode must be stored in the most secure local storage provider available for the platform, with read/write access limited to the Warp application or Warp-owned trusted helper code where the platform supports that restriction. On macOS this means Keychain or an equivalent protected store constrained to Warp-signed code, not ordinary UserDefaults; on Windows this means Credential Manager, DPAPI-backed protected storage, or an equivalent app-controlled protected store; on Linux this means the platform secret service where available, with any owner-only file fallback explicitly documented as weaker. This avoids turning outside-Warp control into a feature that any process can silently enable before invoking `warpctrl`.
+Current foundation implementation note: the mode is represented in the typed `LocalControlSettings` group but is persisted through Warp's secure storage provider rather than ordinary private preferences, `settings.toml`, SQLite, or a synced cloud preference. The implemented setting must use `SyncToCloud::Never`, remain absent from user-visible settings files, generated schemas, Settings Sync, Warp Drive, local-control settings read/write commands, and user-editable or server-backed settings surfaces, and should keep migrating any earlier private-preferences value into secure storage. This is a tamper-resistant platform storage boundary, not a claim that arbitrary same-user compromise is impossible; platforms without a secure provider must document the weaker fallback.
 Enablement requirements:
 - The mode is local-only and must not sync through Settings Sync, Warp Drive, or server-backed user preferences.
 - The implemented foundation setting must remain private and absent from user-visible settings files, generated schemas, local-control settings read/write commands, and any allowlisted settings mutation catalog.
@@ -106,6 +106,7 @@ Enablement requirements:
 - Outside-Warp control requires an intentional user gesture to select the broadest mode; the UI should explain that it allows scripts and automation from other apps to control Warp.
 - The mode should be easy to change from the same UI, and narrowing the mode should revoke or invalidate active local-control credentials for invocation contexts no longer allowed.
 - If enterprise or managed-device policy is added later, policy may force-disable the mode or force a narrower default, but policy should be separate from user-editable local settings.
+Local-control actions that open, focus, or view cloud-backed objects must not create unexpected cloud-synced durable side effects merely because the object was displayed through automation. If an action intentionally mutates synced state, that mutation must be classified under the appropriate state/data category and require the matching grant, authenticated-user authority, and user or policy approval where applicable.
 Disabled-state behavior:
 - Warp should not mint scoped local-control credentials for a request whose invocation context is disabled.
 - The control listener should reject requests from disabled contexts with a structured disabled-state error before authentication, selector resolution, or handler dispatch.
@@ -205,7 +206,7 @@ sequenceDiagram
 
     Invoker->>CLI: Invoke allowlisted command
     CLI->>Registry: Read instance metadata
-    Registry-->>CLI: instance_id, endpoint, protocol version, credential reference
+    Registry-->>CLI: instance_id, endpoint, protocol version, broker reference
     CLI->>Enablement: Check inside/outside context enablement
     Enablement-->>CLI: Enabled or disabled
     alt Disabled
@@ -241,7 +242,7 @@ A discovery record should contain:
 - channel and build metadata;
 - protocol version and supported capability summary;
 - loopback endpoint for the instance-local control listener;
-- credential reference or bootstrap credential metadata, not necessarily the full control credential.
+- credential broker reference that can mint a just-in-time scoped credential for a requested action, not a bearer token or reusable control credential.
 Discovery rules:
 - Records must be readable only by the owning user.
 - POSIX records must use owner-only permissions such as `0600` for files and a non-world-readable directory.
@@ -250,9 +251,11 @@ Discovery rules:
 - The CLI must prune or ignore stale records whose PID is gone or whose health/protocol check fails.
 - If multiple compatible instances are ambiguous, the CLI must require explicit `--instance` selection.
 - Discovery metadata must not expose terminal contents, environment variables, auth tokens for cloud services, raw local-control credentials, or mutating capability grants.
+- Discovery must not publish actionable endpoints or credential broker references for an invocation context unless the protected mode currently enables that context. Future UI should support temporary or session-scoped enablement and a quick path back to disabled so one-off control use does not leave an unexpectedly durable passive discovery surface.
 ## Credential model
 The full `warpctrl` catalog requires scoped credentials. A single shared full-power bearer token is not sufficient once automation, underlying data reads, app-state mutations, metadata/configuration mutations, and underlying data mutations are supported.
 ### Credential properties
+Current foundation implementation note: `warpctrl` discovers an endpoint and then requests a short-lived credential from `/v1/control/credentials` for the specific action it is about to invoke. The discovery record publishes endpoint and broker metadata only; it does not contain bearer tokens, raw credential material, or a stored credential that the CLI unwraps and sends to the discovered port.
 A control credential should encode or reference:
 - issuing Warp instance;
 - protocol version or accepted version range;
@@ -280,8 +283,8 @@ Recommended defaults:
 - Metadata/configuration mutations require an explicit `mutate_metadata` or `mutate_configuration` grant.
 - Underlying data mutations require an explicit `mutate_underlying_data` grant and should require approval or policy for unattended automation.
 - User-authenticated data reads or mutations require an explicit `authenticated_user` grant and an allowed authenticated action family in addition to the data-category grant.
-- Integrations should receive the narrowest grant needed for the configured workflow.
-The broker must not issue broad authority merely because the request came from the signed `warpctrl` binary. It should evaluate the requested permission category, target scope, configured policy, execution context, and whether user approval is required. The CLI must not mint its own authority. It can request, load, and present credentials, but the app bridge remains the enforcement point for these safety grants.
+- Integrations should be granted only the narrowest authority needed for the configured workflow.
+Callers should not manage low-level permission scopes directly. They request a typed action or higher-level capability, and the app-owned broker maps that request to the required permission category, target scope, configured policy, execution context, and any user approval or consent prompt. If a request exceeds the caller's current grant and is not explicitly denied by policy, the app can prompt for the narrower additional grant; if it is denied, the bridge returns a structured error. The broker must not issue broad authority merely because the request came from the signed `warpctrl` binary. The CLI must not mint its own authority. It can request and present broker-issued credentials, but the app bridge remains the enforcement point for these safety grants.
 ### Safety grants, not strong access control
 The category system should be understood as a user-intent and accident-prevention mechanism:
 - A user can ask an agent or script to operate with metadata-read grants so it can inspect structure but cannot read terminal content or mutate state.
@@ -313,9 +316,12 @@ Mitigations:
 These mitigations are about routing high-risk operations through intentional `warpctrl` flows rather than exposing a reusable localhost token to any process. They should not be documented as a guarantee that arbitrary same-user applications cannot cause Warp-visible actions.
 ## Transport authentication
 The default transport is an instance-local loopback listener bound to `127.0.0.1` on an ephemeral per-process port.
+The current just-in-time credential broker avoids the specific stale-record bearer-token phishing failure mode where `warpctrl` unwraps a long-lived Warp-held credential and sends it to a port squatter. If future designs add stored bootstrap credentials, server-held secrets, or reusable credential references that must be presented to the discovered endpoint, the client must verify the server's identity before sending that material, or the local transport should move to Unix domain sockets or an equivalent platform channel with peer identity checks.
 Transport requirements:
 - Bind only to loopback for local control.
 - Do not set permissive CORS headers.
+- Reject any request carrying an `Origin` header.
+- Reject any request whose `Host` header is not exactly `127.0.0.1:<selected-port>` for the selected discovery record.
 - Reject control requests when their inside-Warp or outside-Warp invocation context is disabled, even if the request presents an otherwise valid credential.
 - Authenticate every control request locally in the selected Warp app process before selector resolution or action dispatch.
 - Reject missing, malformed, expired, revoked, or invalid credentials with structured authentication errors.
@@ -418,8 +424,11 @@ Each supported command requires:
 Adding a new action should be additive and reviewable: extend the protocol enum, implement validation, map the action to a state/data category, declare whether it requires an authenticated user, declare its allowed execution contexts, add a handler, and add tests for authentication, safety-policy denial, authenticated-user denial, selector failure, and success behavior.
 ## Browser and localhost protections
 Loopback is not sufficient by itself because browsers can send requests to localhost.
+This section is not a browser-only defense and must not rely on CORS as the primary control. Non-browser local clients can also send HTTP requests, so the local app must enforce credentials, invocation-context gating, app-side authorization, and endpoint hardening for every request.
 Required protections:
 - No permissive CORS on control endpoints.
+- Reject any request that includes an `Origin` header.
+- Reject any request whose `Host` header is not exactly the selected `127.0.0.1:<port>` endpoint.
 - No JSONP or browser-readable fallback formats.
 - Valid scoped credentials required for all sensitive endpoints.
 - Credentials stored outside browser-readable locations.

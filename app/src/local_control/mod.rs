@@ -15,9 +15,8 @@
 //! requested action, and only then hands the request to the main-thread
 //! `LocalControlBridge`.
 //!
-//! The Settings > Scripting gates used here are private, local-only settings.
-//! Broader grants should keep using private settings unless a future action
-//! class requires stronger platform-specific storage guarantees.
+//! The Settings > Scripting gates used here are local-only settings backed by
+//! Warp's secure storage provider.
 //!
 //! Discovery records never include raw bearer tokens: discovery only exposes
 //! endpoint metadata and credential broker references when outside-Warp control
@@ -39,6 +38,7 @@ use ::local_control::{
 };
 use axum::extract::rejection::JsonRejection;
 use axum::extract::State;
+use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -56,6 +56,7 @@ use permissions::{ensure_action_allowed, ensure_feature_enabled};
 struct ControlServerState {
     bridge_spawner: ModelSpawner<LocalControlBridge>,
     instance_id: InstanceId,
+    expected_host: String,
     credentials: Arc<Mutex<HashMap<String, CredentialGrant>>>,
 }
 /// Process-local localhost server running inside Warp for control actions.
@@ -148,6 +149,7 @@ impl LocalControlServer {
         let state = ControlServerState {
             bridge_spawner,
             instance_id,
+            expected_host: format!("{}:{}", control_endpoint.host, control_endpoint.port),
             credentials: Arc::default(),
         };
         let router = Router::new()
@@ -200,8 +202,16 @@ fn discovery_record_for_settings(
 
 async fn handle_credential_request(
     State(state): State<ControlServerState>,
+    headers: HeaderMap,
     payload: Result<Json<CredentialRequest>, JsonRejection>,
 ) -> Response {
+    if let Err(error) = validate_loopback_headers(&headers, &state.expected_host) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponseEnvelope::new(error)),
+        )
+            .into_response();
+    }
     if let Err(error) = ensure_feature_enabled() {
         return (
             StatusCode::FORBIDDEN,
@@ -331,6 +341,13 @@ async fn handle_control_request(
     headers: HeaderMap,
     payload: Result<Json<RequestEnvelope>, JsonRejection>,
 ) -> Response {
+    if let Err(error) = validate_loopback_headers(&headers, &state.expected_host) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ErrorResponseEnvelope::new(error)),
+        )
+            .into_response();
+    }
     if let Err(error) = ensure_feature_enabled() {
         return (
             StatusCode::FORBIDDEN,
@@ -339,7 +356,7 @@ async fn handle_control_request(
             .into_response();
     }
     let auth_header = headers
-        .get(axum::http::header::AUTHORIZATION)
+        .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
     let auth_token = match AuthToken::from_authorization_header(auth_header) {
         Ok(token) => token,
@@ -408,6 +425,34 @@ async fn handle_control_request(
         ControlResponse::Error { .. } => StatusCode::BAD_REQUEST,
     };
     (status, Json(response)).into_response()
+}
+
+pub(crate) fn validate_loopback_headers(
+    headers: &HeaderMap,
+    expected_host: &str,
+) -> Result<(), ControlError> {
+    if headers.contains_key(ORIGIN) {
+        return Err(ControlError::new(
+            ErrorCode::UnauthorizedLocalClient,
+            "browser-origin local-control requests are not allowed",
+        ));
+    }
+    let host = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::UnauthorizedLocalClient,
+                "Host header is required for local-control requests",
+            )
+        })?;
+    if host != expected_host {
+        return Err(ControlError::new(
+            ErrorCode::UnauthorizedLocalClient,
+            "Host header does not match the selected local-control endpoint",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -4,13 +4,15 @@ use ::local_control::protocol::{
     WindowTarget,
 };
 use ::local_control::{ErrorCode, InvocationContext};
+use axum::http::header::{HOST, ORIGIN};
+use axum::http::{HeaderMap, HeaderValue};
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 
 use super::{
     capabilities, ensure_feature_enabled, ensure_settings_allow_action,
     outside_warp_control_enabled_for_settings, require_active_window_id, validate_action_params,
-    validate_tab_create_target,
+    validate_loopback_headers, validate_tab_create_target,
 };
 use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 
@@ -102,6 +104,31 @@ fn capabilities_advertises_only_first_slice_core_actions() {
             ActionKind::TabCreate,
         ]
     );
+}
+
+#[test]
+fn loopback_headers_reject_origin_and_host_mismatch() {
+    let expected_host = "127.0.0.1:1234";
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static(expected_host));
+
+    validate_loopback_headers(&headers, expected_host).expect("matching host should be accepted");
+
+    headers.insert(ORIGIN, HeaderValue::from_static("https://example.com"));
+    let err =
+        validate_loopback_headers(&headers, expected_host).expect_err("origin should be rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+
+    headers.remove(ORIGIN);
+    headers.insert(HOST, HeaderValue::from_static("localhost:1234"));
+    let err = validate_loopback_headers(&headers, expected_host)
+        .expect_err("host mismatch should be rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+
+    let headers = HeaderMap::new();
+    let err = validate_loopback_headers(&headers, expected_host)
+        .expect_err("missing host should be rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
 }
 
 #[test]
