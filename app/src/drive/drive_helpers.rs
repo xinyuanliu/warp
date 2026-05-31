@@ -1,9 +1,9 @@
-use warpui::{SingletonEntity, ViewContext};
+use warp_server_auth::auth_state::AuthState;
+use warp_server_auth::user::PersonalObjectLimits;
+use warp_server_auth::AuthStateProvider;
+use warpui::{AppContext, SingletonEntity};
 
 use crate::auth::auth_manager::AuthManager;
-use crate::auth::auth_state::AuthState;
-use crate::auth::user::PersonalObjectLimits;
-use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::Space;
 
@@ -69,8 +69,9 @@ pub(crate) fn is_feature_gated_anonymous_user_past_env_var_limit(
         AnonymousUserObjectLimit::EnvVarCollection,
     )
 }
-fn has_feature_gated_anonymous_user_reached_limit<V: warpui::View>(
-    ctx: &mut ViewContext<V>,
+
+fn has_feature_gated_anonymous_user_reached_limit(
+    ctx: &mut AppContext,
     num_objects: usize,
     object_limit: AnonymousUserObjectLimit,
 ) -> bool {
@@ -90,9 +91,7 @@ fn has_feature_gated_anonymous_user_reached_limit<V: warpui::View>(
     false
 }
 
-pub fn has_feature_gated_anonymous_user_reached_notebook_limit<V: warpui::View>(
-    ctx: &mut ViewContext<V>,
-) -> bool {
+pub fn has_feature_gated_anonymous_user_reached_notebook_limit(ctx: &mut AppContext) -> bool {
     let count = CloudModel::handle(ctx).read(ctx, |model, ctx| {
         model
             .active_non_welcome_notebooks_in_space(Space::Personal, ctx)
@@ -105,9 +104,7 @@ pub fn has_feature_gated_anonymous_user_reached_notebook_limit<V: warpui::View>(
     )
 }
 
-pub fn has_feature_gated_anonymous_user_reached_workflow_limit<V: warpui::View>(
-    ctx: &mut ViewContext<V>,
-) -> bool {
+pub fn has_feature_gated_anonymous_user_reached_workflow_limit(ctx: &mut AppContext) -> bool {
     let count = CloudModel::handle(ctx).read(ctx, |model, ctx| {
         model
             .active_non_welcome_workflows_in_space(Space::Personal, ctx)
@@ -120,9 +117,7 @@ pub fn has_feature_gated_anonymous_user_reached_workflow_limit<V: warpui::View>(
     )
 }
 
-pub fn has_feature_gated_anonymous_user_reached_env_var_limit<V: warpui::View>(
-    ctx: &mut ViewContext<V>,
-) -> bool {
+pub fn has_feature_gated_anonymous_user_reached_env_var_limit(ctx: &mut AppContext) -> bool {
     let count = CloudModel::handle(ctx).read(ctx, |model, ctx| {
         model
             .active_non_welcome_env_var_collections_in_space(Space::Personal, ctx)
