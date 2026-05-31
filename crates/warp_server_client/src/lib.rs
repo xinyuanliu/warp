@@ -1,5 +1,7 @@
 pub mod auth;
+pub mod base_client;
 pub mod drive;
+pub mod graphql_helpers;
 pub mod ids;
 #[cfg(not(target_family = "wasm"))]
 pub mod persistence;
