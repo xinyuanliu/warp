@@ -222,11 +222,15 @@ impl PromptAlertView {
         let has_admin_permissions = current_team.is_some_and(|team| {
             team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
         });
+        let is_enterprise_workspace = UserWorkspaces::as_ref(app)
+            .current_workspace()
+            .is_some_and(|workspace| workspace.billing_metadata.is_enterprise_plan());
         let can_purchase_addon_credits = current_team
             .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
             .is_some_and(|policy| policy.enabled);
         let suggest_buy_credits = can_purchase_addon_credits
             && has_admin_permissions
+            && !is_enterprise_workspace
             && matches!(
                 state,
                 PromptAlertState::RequestLimitReached
@@ -369,9 +373,6 @@ impl PromptAlertView {
                 text_fragments.push(FormattedTextFragment::plain_text(
                     OUT_OF_REQUESTS_PRIMARY_TEXT,
                 ));
-                let is_enterprise_workspace = UserWorkspaces::as_ref(app)
-                    .current_workspace()
-                    .is_some_and(|workspace| workspace.billing_metadata.is_enterprise_plan());
                 if is_enterprise_workspace {
                     if has_admin_permissions {
                         text_fragments.extend([
@@ -558,3 +559,7 @@ impl TypedActionView for PromptAlertView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "prompt_alert_tests.rs"]
+mod tests;
