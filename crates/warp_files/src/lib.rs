@@ -31,6 +31,12 @@ use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 pub mod text_file_reader;
 pub use text_file_reader::{TextFileReadResult, TextFileSegment};
 
+/// Maximum file size (in bytes) that the code editor will load into a buffer.
+/// Files larger than this are rejected with `FileLoadError::FileTooLarge` to
+/// prevent multi-GB memory usage from tree-sitter parsing, buffer SumTree
+/// allocations, and StyledBufferBlock cloning.
+const MAX_EDITOR_FILE_SIZE_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
+
 #[derive(Debug)]
 pub enum FileModelEvent {
     FileLoaded {
@@ -411,6 +417,26 @@ impl FileModel {
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
+                // Check file size before reading to prevent multi-GB memory
+                // usage from loading very large files into the editor buffer.
+                match async_fs::metadata(&file_path_buf).await {
+                    Ok(metadata) => {
+                        let size = metadata.len();
+                        if size > MAX_EDITOR_FILE_SIZE_BYTES {
+                            return (
+                                file_id,
+                                Err(FileLoadError::FileTooLarge {
+                                    size_bytes: size,
+                                    limit_bytes: MAX_EDITOR_FILE_SIZE_BYTES,
+                                }),
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        // If we can't stat the file, let read_to_string handle
+                        // the error.
+                    }
+                }
                 let contents = async_fs::read_to_string(&file_path_buf)
                     .await
                     .map_err(FileLoadError::from);
@@ -466,6 +492,16 @@ impl FileModel {
     pub async fn read_content_for_file(file_path: &Path) -> Result<String, FileLoadError> {
         if !Self::file_exists(file_path).await {
             return Err(FileLoadError::DoesNotExist);
+        }
+        // Check file size before reading to prevent loading very large files.
+        if let Ok(metadata) = async_fs::metadata(file_path).await {
+            let size = metadata.len();
+            if size > MAX_EDITOR_FILE_SIZE_BYTES {
+                return Err(FileLoadError::FileTooLarge {
+                    size_bytes: size,
+                    limit_bytes: MAX_EDITOR_FILE_SIZE_BYTES,
+                });
+            }
         }
         async_fs::read_to_string(file_path)
             .await
@@ -1101,6 +1137,19 @@ impl FileModel {
             async move {
                 let mut res = Vec::new();
                 for file_path in matching_files {
+                    // Skip files that have grown beyond the editor size limit
+                    // (e.g. a log file that keeps appending).
+                    if let Ok(meta) = async_fs::metadata(&file_path).await {
+                        if meta.len() > MAX_EDITOR_FILE_SIZE_BYTES {
+                            log::warn!(
+                                "Skipping auto-reload for {} ({} bytes exceeds {} byte limit)",
+                                file_path.display(),
+                                meta.len(),
+                                MAX_EDITOR_FILE_SIZE_BYTES
+                            );
+                            continue;
+                        }
+                    }
                     if let Ok(content) = async_fs::read_to_string(&file_path).await {
                         res.push((file_path, content));
                     }
