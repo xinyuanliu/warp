@@ -2572,28 +2572,18 @@ impl AgentDriver {
     /// result and decides how to proceed (commonly `finish_task`, but the
     /// agent may also re-yield, ask the user, or take other action).
     ///
-    /// Implementation note (Wave 2 boundary):
-    ///
-    /// The full upstream emission path (proto `Message::ToolCallResult`
-    /// carrying `WaitForEventsResult{}`, sent as a new tool-call-result
-    /// input on the active task via `BlocklistAIController` so the server
-    /// echoes it back through the response stream and `apply_client_actions`
-    /// triggers `clear_conversation_waiting_for_events`) depends on the
-    /// `AIAgentActionResultType::WaitForEvents(WaitForEventsResult{})`
-    /// variant + matching `convert_to.rs` proto encoding, both of which
-    /// live outside this agent's owned files and are introduced by
-    /// `client-detection`'s Wave 2 work. This method therefore logs the
-    /// fire event with the stored `tool_call_id` and `task_id`; the actual
-    /// upstream emission is wired up at Wave 3 integration time once
-    /// `client-detection`'s variant is in place. Crucially, this method
-    /// does NOT resolve `run_exit` and the watchdog scheduling itself is
-    /// fully tested; that's the lifecycle invariant PRODUCT.md (11) cares
-    /// about.
+    /// Delegates to `BlocklistAIController::submit_wait_for_events_timeout`
+    /// (introduced by `client-detection`'s Wave 2 work), which performs
+    /// the local state transition (`WaitingForEvents` → `InProgress` via
+    /// `clear_conversation_waiting_for_events_if_matches`) and queues the
+    /// outbound `Request.Input.ToolCallResult.WaitForEvents` payload on
+    /// the next request. Crucially, this method does NOT resolve
+    /// `run_exit`.
     fn emit_wait_for_events_timeout_result(
         &self,
         conversation_id: AIConversationId,
         call: UnresolvedWaitForEventsCall,
-        _ctx: &mut ModelContext<Self>,
+        ctx: &mut ModelContext<Self>,
     ) {
         log::info!(
             "Ambient agent waiting watchdog fired: event=wait_for_events_timeout_emitted task_id={:?} conversation_id={conversation_id} tool_call_id={tool_call_id} task_id_for_call={task_id_for_call}",
@@ -2601,29 +2591,20 @@ impl AgentDriver {
             tool_call_id = call.tool_call_id,
             task_id_for_call = call.task_id,
         );
-        // TODO(integration, QUALITY-780): once `client-detection` lands
-        // `AIAgentActionResultType::WaitForEvents(WaitForEventsResult{})`
-        // and the `BlocklistAIController::submit_wait_for_events_timeout(
-        //     conversation_id, tool_call_id, ctx,
-        // )` helper, replace this no-op with:
-        //
-        //     let ai_controller = self
-        //         .terminal_driver
-        //         .as_ref(_ctx)
-        //         .terminal_view()
-        //         .as_ref(_ctx)
-        //         .ai_controller()
-        //         .clone();
-        //     ai_controller.update(_ctx, |controller, ctx| {
-        //         controller.submit_wait_for_events_timeout(
-        //             conversation_id,
-        //             call.tool_call_id.clone(),
-        //             ctx,
-        //         );
-        //     });
-        //
-        // The run continues regardless; we do not resolve `run_exit`.
-        let _ = (conversation_id, call);
+        let ai_controller = self
+            .terminal_driver
+            .as_ref(ctx)
+            .terminal_view()
+            .as_ref(ctx)
+            .ai_controller()
+            .clone();
+        ai_controller.update(ctx, |controller, ctx| {
+            controller.submit_wait_for_events_timeout(
+                conversation_id,
+                call.tool_call_id.clone(),
+                ctx,
+            );
+        });
     }
 
     /// Execute an AI run in the terminal session and wait for it to complete.
