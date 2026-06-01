@@ -385,15 +385,13 @@ impl AgentNotificationsModel {
                     ctx,
                 );
             }
-            // QUALITY-780 placeholder owned by `client-sync-notif`. A yielded
-            // conversation is still active (it just isn't streaming this
-            // instant), so we intentionally do not emit a `Complete` or
-            // `Request` toast here — that would tell the user the run is
-            // done when it actually isn't. `client-sync-notif` will replace
-            // this with the final notification-suppression behavior from
-            // §6 of the client TECH spec.
+            // QUALITY-780 §6: a yielded conversation is still active (it
+            // just isn't streaming right now), so we do not emit a new
+            // toast. Mirror the `InProgress` arm above and clear any stale
+            // notification for this origin so the mailbox doesn't show a
+            // misleading "Task completed" entry while we wait for events.
             ConversationStatus::WaitingForEvents => {
-                // TODO(client-sync-notif)
+                self.remove_notification_by_source(origin, ctx);
             }
         }
     }
@@ -481,13 +479,25 @@ pub enum AgentManagementEvent {
 impl ConversationStatus {
     /// Returns true if the updating the conversation with this status should trigger some
     /// notification to the user.
+    ///
+    /// This is an exhaustive `match` rather than a `matches!` macro so that adding a new
+    /// `ConversationStatus` variant in the future forces a deliberate decision about whether
+    /// it should fire a notification (per QUALITY-780 §6).
     pub fn should_trigger_notification(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ConversationStatus::Success
-                | ConversationStatus::Blocked { .. }
-                | ConversationStatus::Error
-        )
+            | ConversationStatus::Blocked { .. }
+            | ConversationStatus::Error => true,
+            // A run that is still streaming hasn't reached a notable state yet.
+            ConversationStatus::InProgress
+            // A run yielded via `wait_for_events` is quiescent but not terminal —
+            // it's still active and should not produce a "Task completed"-style toast.
+            // PRODUCT.md (16), (18).
+            | ConversationStatus::WaitingForEvents
+            // User-initiated cancellations should not fire a notification
+            // (the user already knows they cancelled).
+            | ConversationStatus::Cancelled => false,
+        }
     }
 }
 

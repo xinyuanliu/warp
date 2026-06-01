@@ -318,9 +318,9 @@ fn map_conversation_status(
         ConversationStatus::InProgress => (AgentTaskState::InProgress, None),
         // QUALITY-780 §5: when the conversation has yielded via
         // `wait_for_events`, the client actively reports `IN_PROGRESS` for
-        // the task. This is the final shape from §5 of the client TECH
-        // spec; `client-sync-notif` may add or refine the status message,
-        // but the `AgentTaskState` and the `None` status message are stable.
+        // the task so the server's `shouldPreserveInProgressOnClientSuccess`
+        // backstop is not relied on. No status message is attached: the
+        // yield is an internal state, not a user-visible status.
         ConversationStatus::WaitingForEvents => (AgentTaskState::InProgress, None),
         ConversationStatus::Success => (AgentTaskState::Succeeded, None),
         ConversationStatus::Error => {

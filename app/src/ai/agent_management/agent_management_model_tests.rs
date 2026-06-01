@@ -4,7 +4,7 @@ use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
 use super::AgentNotificationsModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent_management::notifications::{
     NotificationCategory, NotificationFilter, NotificationOrigin, NotificationSourceAgent,
 };
@@ -253,6 +253,201 @@ fn separate_conversations_have_independent_pending_artifacts() {
             let b = model.flush_pending_artifacts(conv_b);
             assert_eq!(b.len(), 1);
             assert!(matches!(&b[0], Artifact::Plan { title: Some(t), .. } if t == "Plan B"));
+        });
+    });
+}
+
+// --- QUALITY-780 §6: should_trigger_notification exhaustive behavior ---
+//
+// These are pure-function tests on the `ConversationStatus` predicate; they
+// do not require any app setup. They lock in the contract documented in
+// PRODUCT.md (16), (19), (20):
+// - Terminal-error and blocked states always surface to the user.
+// - In-progress, waiting-for-events, and user-cancelled states do not.
+// - The orchestrator's own terminal status is decided locally; descendant
+//   state is *not* consulted (no parameter to consult) — the predicate
+//   takes only `&self` (PRODUCT.md (20)).
+
+#[test]
+fn should_trigger_notification_returns_true_for_success() {
+    assert!(ConversationStatus::Success.should_trigger_notification());
+}
+
+#[test]
+fn should_trigger_notification_returns_true_for_blocked() {
+    assert!(ConversationStatus::Blocked {
+        blocked_action: "approve diff".to_owned(),
+    }
+    .should_trigger_notification());
+}
+
+#[test]
+fn should_trigger_notification_returns_true_for_error() {
+    assert!(ConversationStatus::Error.should_trigger_notification());
+}
+
+#[test]
+fn should_trigger_notification_returns_false_for_in_progress() {
+    assert!(!ConversationStatus::InProgress.should_trigger_notification());
+}
+
+#[test]
+fn should_trigger_notification_returns_false_for_waiting_for_events() {
+    assert!(!ConversationStatus::WaitingForEvents.should_trigger_notification());
+}
+
+#[test]
+fn should_trigger_notification_returns_false_for_cancelled() {
+    assert!(!ConversationStatus::Cancelled.should_trigger_notification());
+}
+
+// --- QUALITY-780 §6: mailbox suppression for non-terminal status updates ---
+//
+// These tests drive `handle_history_event` end-to-end via a real
+// `UpdatedConversationStatus::Changed` event emitted by
+// `AIConversation::update_status`, which is the only path that mutates
+// the private status field on a conversation. They verify the observable
+// behavior of the new mailbox code path for the two non-terminal
+// transitions introduced by QUALITY-780: `* → WaitingForEvents` and the
+// `WaitingForEvents → InProgress` resume.
+//
+// In `App::test` there is no real `AgentViewController`, so
+// `ActiveAgentViewsModel::is_conversation_open` always returns false; the
+// gate at the top of `handle_history_event_for_mailbox` consequently
+// clears any stale notification regardless of status. That is the same
+// outcome as the new `WaitingForEvents` arm and as the existing
+// `InProgress` arm, so the test still captures the user-visible contract:
+// no stale or new "Task completed" toast survives a non-terminal
+// transition.
+
+/// Disables `show_agent_notifications` so subsequent `add_notification`
+/// calls skip the `send_telemetry_from_ctx!` branch — the test app does
+/// not register a `TelemetryContextProvider` singleton and the macro
+/// would otherwise panic.
+fn disable_telemetry_path(app: &mut App) {
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.show_agent_notifications.set_value(false, ctx));
+    });
+}
+
+/// Pre-populates a `Complete` notification for `conversation_id` so that a
+/// subsequent non-terminal status update has something to clear.
+fn seed_stale_notification(
+    notifications: &ModelHandle<AgentNotificationsModel>,
+    app: &mut App,
+    conversation_id: AIConversationId,
+    terminal_view_id: EntityId,
+) {
+    notifications.update(app, |model, ctx| {
+        model.add_notification(
+            "Agent task".to_owned(),
+            "Task completed.".to_owned(),
+            NotificationCategory::Complete,
+            NotificationSourceAgent::Oz { is_ambient: false },
+            NotificationOrigin::Conversation(conversation_id),
+            terminal_view_id,
+            vec![],
+            None,
+            ctx,
+        );
+    });
+}
+
+#[test]
+fn waiting_for_events_clears_stale_notification_and_adds_none() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = EntityId::new();
+        history.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        seed_stale_notification(&notifications, &mut app, conversation_id, terminal_view_id);
+        notifications.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .notifications()
+                    .filtered_count(NotificationFilter::All),
+                1,
+                "precondition: one stale notification queued"
+            );
+        });
+
+        history.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status(ConversationStatus::WaitingForEvents, terminal_view_id, ctx);
+        });
+
+        notifications.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .notifications()
+                    .filtered_count(NotificationFilter::All),
+                0,
+                "WaitingForEvents must clear stale notifications and add no new toast"
+            );
+        });
+    });
+}
+
+#[test]
+fn in_progress_resume_clears_stale_notification_and_adds_none() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (history, notifications) = setup_app(&mut app);
+        disable_telemetry_path(&mut app);
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = EntityId::new();
+        history.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        // First move the conversation into WaitingForEvents, then back into
+        // InProgress. The second transition is the resume signal that
+        // PRODUCT.md (18) requires not to fire a notification.
+        history.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status(ConversationStatus::WaitingForEvents, terminal_view_id, ctx);
+        });
+
+        seed_stale_notification(&notifications, &mut app, conversation_id, terminal_view_id);
+        notifications.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .notifications()
+                    .filtered_count(NotificationFilter::All),
+                1,
+                "precondition: one stale notification queued before the resume transition"
+            );
+        });
+
+        history.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation still exists");
+            conv.update_status(ConversationStatus::InProgress, terminal_view_id, ctx);
+        });
+
+        notifications.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .notifications()
+                    .filtered_count(NotificationFilter::All),
+                0,
+                "WaitingForEvents → InProgress resume must not fire a notification \
+                 (covers PRODUCT.md (18))"
+            );
         });
     });
 }
