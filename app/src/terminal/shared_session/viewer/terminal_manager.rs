@@ -453,7 +453,7 @@ impl TerminalManager {
         let (write_to_pty_events_tx, write_to_pty_events_rx) = async_channel::unbounded();
         self.model
             .lock()
-            .set_write_to_pty_events_for_shared_session_tx(write_to_pty_events_tx);
+            .set_write_to_pty_events_for_shared_session_tx(write_to_pty_events_tx.clone());
         self.model
             .lock()
             .set_shared_session_status(SharedSessionStatus::ViewPending);
@@ -464,6 +464,7 @@ impl TerminalManager {
                 self.network_resources.channel_event_proxy.clone(),
                 self.view.downgrade(),
                 self.model.clone(),
+                write_to_pty_events_tx,
                 write_to_pty_events_rx,
                 initial_load_mode,
                 ctx,
@@ -917,21 +918,29 @@ impl TerminalManager {
             }
             NetworkEvent::FailedToJoin { reason } => {
                 let session_id = network.as_ref(ctx).session_id();
+                if !Self::current_network(&current_network)
+                    .is_some_and(|current| current.as_ref(ctx).session_id() == session_id)
+                {
+                    log::debug!("Ignoring failed join from stale shared session viewer network");
+                    return;
+                }
+                let error = reason.user_facing_error_message().to_string();
                 log::warn!(
                     "viewer TerminalManager: NetworkEvent::FailedToJoin \
-                     session_id={session_id} reason={reason:?}; pane stays in ViewPending \
-                     until manual retry or a fresh ensure_shared_session_viewer_child_pane"
+                     session_id={session_id} reason={reason:?}; exposing same-pane retry"
                 );
+                model
+                    .lock()
+                    .clear_write_to_pty_events_for_shared_session_tx();
+                model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::FailedViewerJoin {
+                        error,
+                    });
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
-                view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.show_persistent_toast(
-                        reason.user_facing_error_message().to_string(),
-                        ToastFlavor::Error,
-                        ctx,
-                    );
-                });
+                view.update(ctx, |_, ctx| ctx.notify());
             }
             NetworkEvent::FailedToReconnect => {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
@@ -1503,9 +1512,26 @@ impl TerminalManager {
                 }
             }
             TerminalViewEvent::RejoinCurrentSession => {
-                Self::update_current_network(&current_network, ctx, |network, ctx| {
-                    network.reauthenticate_viewer(ctx);
-                });
+                let failed_initial_join = model
+                    .lock()
+                    .shared_session_status()
+                    .failed_viewer_join_error()
+                    .is_some();
+                if failed_initial_join {
+                    Self::update_current_network(&current_network, ctx, |network, ctx| {
+                        model.lock().set_write_to_pty_events_for_shared_session_tx(
+                            network.write_to_pty_events_tx(),
+                        );
+                        model
+                            .lock()
+                            .set_shared_session_status(SharedSessionStatus::ViewPending);
+                        network.retry_initial_join(ctx);
+                    });
+                } else {
+                    Self::update_current_network(&current_network, ctx, |network, ctx| {
+                        network.reauthenticate_viewer(ctx);
+                    });
+                }
             }
             TerminalViewEvent::SendAgentPrompt {
                 server_conversation_token,

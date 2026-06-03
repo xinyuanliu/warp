@@ -48,6 +48,15 @@ impl Heartbeat {
         self.reset_idle_timeout(ctx);
         self.periodic_ping(ctx);
     }
+    /// Cancels periodic pings and the idle timeout for a closed websocket attempt.
+    pub fn stop(&mut self) {
+        if let Some(handle) = self.idle_timeout_abort_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.periodic_ping_abort_handle.take() {
+            handle.abort();
+        }
+    }
 
     /// Resets the idle timeout to expire after [`Self::idle_timeout`] from now.
     pub fn reset_idle_timeout(&mut self, ctx: &mut ModelContext<Self>) {
@@ -60,9 +69,7 @@ impl Heartbeat {
             async move { Timer::after(idle_timeout).await },
             |me, _, ctx| {
                 // If the heartbeat has become idle, then don't ping anymore.
-                if let Some(handle) = me.periodic_ping_abort_handle.take() {
-                    handle.abort();
-                }
+                me.stop();
                 ctx.emit(Event::Idle);
             },
         );

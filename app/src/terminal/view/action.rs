@@ -317,6 +317,7 @@ pub enum TerminalAction {
     },
     OpenSharedSessionViewerRoleMenu,
     RequestSharedSessionRole(Role),
+    RetryFailedSharedSessionJoin,
     /// User selected a block inside an AI block's attached block menu so we jump to it and select
     /// it if possible.
     SelectAIAttachedBlock(BlockIndex),
@@ -641,6 +642,7 @@ impl fmt::Debug for TerminalAction {
             }
             OpenSharedSessionViewerRoleMenu => write!(f, "OpenSharedSessionViewerRoleMenu"),
             RequestSharedSessionRole(role) => write!(f, "RequestSharedSessionRole({role:?})"),
+            RetryFailedSharedSessionJoin => write!(f, "RetryFailedSharedSessionJoin"),
             MiddleClickOnGrid { position } => {
                 write!(f, "MiddleClickonGrid {{ position: {position:?} }}")
             }

@@ -68,6 +68,9 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
     18,                          /* max retry count */
 )
 .with_jitter(0.2);
+/// The maximum number of automatic attempts after the initial viewer join attempt fails.
+/// Delays of 1, 2, 4 and 8 seconds keep the total automatic recovery window bounded to 15 seconds.
+const INITIAL_JOIN_MAX_RETRIES: usize = 4;
 
 #[derive(Debug)]
 enum Stage {
@@ -120,11 +123,15 @@ pub struct Network {
     initial_load_mode: SharedSessionInitialLoadMode,
 
     stage: Stage,
+    initial_join_attempt_id: u64,
+    initial_join_retry_count: usize,
+    initial_join_retry_timer: Option<SpawnedFutureHandle>,
 
     /// Intermediate channel to queue up messages to send over
     /// over the websocket to the server.
     ws_proxy_tx: async_channel::Sender<UpstreamMessage>,
     selection_throttled_tx: async_channel::Sender<Selection>,
+    write_to_pty_events_tx: async_channel::Sender<Vec<u8>>,
 
     #[cfg(test)]
     ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
@@ -147,11 +154,15 @@ pub struct Network {
 }
 
 impl Network {
+    // Keep both ends of the PTY channel explicit: the manager installs the sender on the
+    // terminal model while the network retains it to restore the same pane after a failed join.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         session_id: SessionId,
         channel_event_proxy: ChannelEventListener,
         terminal_view: WeakViewHandle<TerminalView>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
+        write_to_pty_events_tx: async_channel::Sender<Vec<u8>>,
         write_to_pty_events_rx: Receiver<Vec<u8>>,
         initial_load_mode: SharedSessionInitialLoadMode,
         ctx: &mut ModelContext<Self>,
@@ -162,7 +173,7 @@ impl Network {
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
         ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
 
-        let model = Network {
+        let mut model = Network {
             heartbeat,
             session_id,
             event_loop: None,
@@ -174,12 +185,16 @@ impl Network {
             initial_load_mode,
             terminal_view,
             stage: Stage::BeforeJoined,
+            initial_join_attempt_id: 0,
+            initial_join_retry_count: 0,
+            initial_join_retry_timer: None,
             id: None,
             cached_latest_state: CachedLatestState {
                 selection: Selection::None,
                 universal_developer_input_context: None,
             },
             selection_throttled_tx,
+            write_to_pty_events_tx,
             selection_event_no: EventNumber::new(),
             next_buffer_seq_no: (BlockId::new(), InputOperationSeqNo::zero()),
             write_to_pty_event_no: WriteToPtySeqNo::zero(),
@@ -189,7 +204,10 @@ impl Network {
         };
 
         model.start_write_to_pty_events_listener(write_to_pty_events_rx, ctx);
-        model.start_websocket(session_id, ws_proxy_rx, ctx);
+        // Discard the placeholder receiver created for field initialization. Every initial join
+        // attempt owns fresh websocket proxy channels to isolate retries from stale sends.
+        drop(ws_proxy_rx);
+        model.start_initial_join_attempt(ctx);
         ctx.spawn_stream_local(
             selection_throttled_rx,
             |network, selection, _ctx| {
@@ -210,6 +228,7 @@ impl Network {
         channel_event_proxy: ChannelEventListener,
         terminal_view: WeakViewHandle<TerminalView>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
+        write_to_pty_events_tx: async_channel::Sender<Vec<u8>>,
         write_to_pty_events_rx: Receiver<Vec<u8>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
@@ -237,12 +256,16 @@ impl Network {
             initial_load_mode: SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
             terminal_view,
             stage: Stage::BeforeJoined,
+            initial_join_attempt_id: 0,
+            initial_join_retry_count: 0,
+            initial_join_retry_timer: None,
             id: Some(viewer_id.clone()),
             cached_latest_state: CachedLatestState {
                 selection: Selection::None,
                 universal_developer_input_context: None,
             },
             selection_throttled_tx,
+            write_to_pty_events_tx,
             selection_event_no: EventNumber::new(),
             next_buffer_seq_no: (BlockId::new(), InputOperationSeqNo::zero()),
             write_to_pty_event_no: WriteToPtySeqNo::zero(),
@@ -284,10 +307,17 @@ impl Network {
             HeartbeatEvent::Ping => {
                 self.send_message_to_server(UpstreamMessage::Ping { data: vec![] });
             }
-            HeartbeatEvent::Idle => {
-                log::info!("Viewer reconnecting: heartbeat idle timeout");
-                self.reconnect_websocket(ctx);
-            }
+            HeartbeatEvent::Idle => match self.stage {
+                Stage::BeforeJoined => {
+                    log::info!("Viewer initial join retrying: heartbeat idle timeout");
+                    self.retry_initial_join_after_transport_failure(ctx);
+                }
+                Stage::JoinedSuccessfully => {
+                    log::info!("Viewer reconnecting: heartbeat idle timeout");
+                    self.reconnect_websocket(ctx);
+                }
+                Stage::Reconnecting { .. } | Stage::Finished => {}
+            },
         }
     }
 
@@ -327,6 +357,7 @@ impl Network {
         ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
         mut sink: impl Sink,
         stream: impl Stream,
+        initial_join_attempt_id: Option<u64>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.heartbeat.update(ctx, |heartbeat, ctx| {
@@ -336,8 +367,14 @@ impl Network {
         // Receive messages from the server.
         ctx.spawn_stream_local(
             stream,
-            |network, item, ctx| match item {
+            move |network, item, ctx| match item {
                 Ok(message) => {
+                    if initial_join_attempt_id
+                        .is_some_and(|attempt_id| attempt_id != network.initial_join_attempt_id)
+                    {
+                        log::debug!("Ignoring stale shared session initial join message");
+                        return;
+                    }
                     network.heartbeat.update(ctx, |heartbeat, ctx| {
                         heartbeat.reset_idle_timeout(ctx);
                     });
@@ -347,8 +384,14 @@ impl Network {
                     log::error!("Got error from shared session viewer websocket: {e}");
                 }
             },
-            |network, ctx| {
+            move |network, ctx| {
                 log::info!("Websocket to session sharing server ended");
+                if initial_join_attempt_id
+                    .is_some_and(|attempt_id| attempt_id != network.initial_join_attempt_id)
+                {
+                    log::debug!("Ignoring stale shared session initial join socket closure");
+                    return;
+                }
                 // Close our current websocket proxy, because we may try to reconnect and that will create a new websocket proxy.
                 // This must be done before trying to reconnect.
                 network.close();
@@ -356,6 +399,12 @@ impl Network {
                     // The connection may have timed out or the server restarted.
                     log::info!("Viewer reconnecting: websocket closed by server");
                     network.reconnect_websocket(ctx);
+                } else if matches!(network.stage, Stage::BeforeJoined)
+                    && initial_join_attempt_id
+                        .is_some_and(|attempt_id| attempt_id == network.initial_join_attempt_id)
+                {
+                    log::info!("Viewer initial join retrying: websocket closed before join ack");
+                    network.retry_initial_join_after_transport_failure(ctx);
                 }
             },
         );
@@ -382,12 +431,23 @@ impl Network {
         }, |_, _, _| {});
     }
 
-    fn start_websocket(
-        &self,
-        session_id: SessionId,
-        ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    fn start_initial_join_attempt(&mut self, ctx: &mut ModelContext<Self>) {
+        if !matches!(self.stage, Stage::BeforeJoined) {
+            return;
+        }
+        if let Some(timer) = self.initial_join_retry_timer.take() {
+            timer.abort();
+        }
+        self.initial_join_attempt_id += 1;
+        let attempt_id = self.initial_join_attempt_id;
+        let session_id = self.session_id;
+        let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
+        self.ws_proxy_tx.close();
+        self.ws_proxy_tx = ws_proxy_tx;
+        #[cfg(test)]
+        {
+            self.ws_proxy_rx = ws_proxy_rx.clone();
+        }
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let iap_headers: Vec<(&'static str, String)> = IapManager::as_ref(ctx)
@@ -405,6 +465,12 @@ impl Network {
             ),
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
+                    if !matches!(network.stage, Stage::BeforeJoined)
+                        || attempt_id != network.initial_join_attempt_id
+                    {
+                        log::debug!("Ignoring stale shared session initial join completion");
+                        return;
+                    }
                     let initialize_message = UpstreamMessage::Initialize(InitPayload {
                         viewer_id: network.id.clone(),
                         user_id,
@@ -422,22 +488,85 @@ impl Network {
                         return;
                     }
 
-                    network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
+                    network.on_websocket_connected(ws_proxy_rx, sink, stream, Some(attempt_id), ctx)
                 }
                 Err(e) => {
-                    log::error!(
-                        "viewer Network::start_websocket: WS connect FAILED for \
-                         session_id={session_id}: {e:#}; emitting FailedToJoin (no automatic retry)"
+                    if !matches!(network.stage, Stage::BeforeJoined)
+                        || attempt_id != network.initial_join_attempt_id
+                    {
+                        return;
+                    }
+                    log::warn!(
+                        "viewer Network::start_initial_join_attempt: WS connect FAILED for \
+                         session_id={session_id}: {e:#}; scheduling bounded retry"
                     );
                     IapManager::handle(ctx).update(ctx, |manager, ctx| {
                         manager.check_ws_connect_error(&e, ctx);
                     });
-                    ctx.emit(NetworkEvent::FailedToJoin {
-                        reason: FailedToJoinReason::FailedToConnectToServer,
-                    });
+                    network.retry_initial_join_after_transport_failure(ctx);
                 }
             },
         );
+    }
+
+    fn initial_join_retry_delay(retry_count: usize) -> Duration {
+        Duration::from_secs(1 << retry_count.saturating_sub(1).min(3))
+    }
+
+    fn stop_heartbeat(&self, ctx: &mut ModelContext<Self>) {
+        self.heartbeat.update(ctx, |heartbeat, _| heartbeat.stop());
+    }
+
+    fn retry_initial_join_after_transport_failure(&mut self, ctx: &mut ModelContext<Self>) {
+        if !matches!(self.stage, Stage::BeforeJoined) {
+            return;
+        }
+        if self.initial_join_retry_timer.is_some() {
+            log::debug!("Initial shared session join retry is already pending");
+            return;
+        }
+        self.stop_heartbeat(ctx);
+        self.ws_proxy_tx.close();
+        if self.initial_join_retry_count >= INITIAL_JOIN_MAX_RETRIES {
+            log::warn!("Failed to initially join shared session after bounded retries");
+            self.stage = Stage::Finished;
+            ctx.emit(NetworkEvent::FailedToJoin {
+                reason: FailedToJoinReason::FailedToConnectToServer,
+            });
+            return;
+        }
+        self.initial_join_retry_count += 1;
+        let retry_count = self.initial_join_retry_count;
+        let delay = Self::initial_join_retry_delay(retry_count);
+        log::info!(
+            "Retrying initial shared session join in {delay:?} \
+             (retry {retry_count}/{INITIAL_JOIN_MAX_RETRIES})"
+        );
+        let timer = ctx.spawn(
+            async move { Timer::after(delay).await },
+            |network, _, ctx| {
+                network.initial_join_retry_timer = None;
+                network.start_initial_join_attempt(ctx);
+            },
+        );
+        self.initial_join_retry_timer = Some(timer);
+    }
+
+    pub fn is_failed_initial_join(&self) -> bool {
+        self.event_loop.is_none() && matches!(self.stage, Stage::Finished)
+    }
+
+    pub fn write_to_pty_events_tx(&self) -> async_channel::Sender<Vec<u8>> {
+        self.write_to_pty_events_tx.clone()
+    }
+
+    pub fn retry_initial_join(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.is_failed_initial_join() {
+            return;
+        }
+        self.initial_join_retry_count = 0;
+        self.stage = Stage::BeforeJoined;
+        self.start_initial_join_attempt(ctx);
     }
 
     /// Initiates attempts to reconnect to the server, with retries.
@@ -499,7 +628,7 @@ impl Network {
                         return;
                     }
 
-                    network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
+                    network.on_websocket_connected(ws_proxy_rx, sink, stream, None, ctx)
                 }
                 RequestState::RequestFailedRetryPending(e) => {
                     IapManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -569,12 +698,16 @@ impl Network {
                     source_type,
                     source_task_id,
                 };
-                if matches!(self.stage, Stage::JoinedSuccessfully) {
+                if !matches!(self.stage, Stage::BeforeJoined) {
                     log::warn!(
-                        "Received unexpected JoinedSuccessfully message when we've already joined"
+                        "Received unexpected JoinedSuccessfully message after initial join ended"
                     );
                     return;
                 }
+                if let Some(timer) = self.initial_join_retry_timer.take() {
+                    timer.abort();
+                }
+                self.initial_join_retry_count = 0;
                 self.id = Some(viewer_id.clone());
                 self.stage = Stage::JoinedSuccessfully;
 
@@ -661,14 +794,25 @@ impl Network {
                     std::mem::discriminant(&self.stage),
                 );
 
-                if let Stage::Reconnecting { abort_handle } = &self.stage {
-                    abort_handle.abort();
-                    self.close_without_reconnection();
-                    ctx.emit(NetworkEvent::FailedToReconnect);
-                } else {
-                    ctx.emit(NetworkEvent::FailedToJoin {
-                        reason: reason.into(),
-                    })
+                match &self.stage {
+                    Stage::Reconnecting { abort_handle } => {
+                        abort_handle.abort();
+                        self.close_without_reconnection();
+                        ctx.emit(NetworkEvent::FailedToReconnect);
+                    }
+                    Stage::BeforeJoined => {
+                        if let Some(timer) = self.initial_join_retry_timer.take() {
+                            timer.abort();
+                        }
+                        self.stop_heartbeat(ctx);
+                        self.close_without_reconnection();
+                        ctx.emit(NetworkEvent::FailedToJoin {
+                            reason: reason.into(),
+                        })
+                    }
+                    Stage::JoinedSuccessfully | Stage::Finished => {
+                        log::warn!("Ignoring FailedToJoin after initial join lifecycle ended");
+                    }
                 }
             }
             DownstreamMessage::ParticipantListUpdated(participant_list) => {

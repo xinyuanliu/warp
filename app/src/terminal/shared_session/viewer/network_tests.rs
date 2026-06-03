@@ -26,6 +26,7 @@ fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
             channel_event_proxy,
             terminal_view,
             terminal_model,
+            write_to_pty_events_tx.clone(),
             write_to_pty_events_rx,
             ctx,
         )
@@ -36,6 +37,31 @@ fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
     });
 
     (network, write_to_pty_events_tx)
+}
+
+#[test]
+fn test_initial_join_retry_uses_bounded_exponential_delays() {
+    assert_eq!(Network::initial_join_retry_delay(1), Duration::from_secs(1));
+    assert_eq!(Network::initial_join_retry_delay(2), Duration::from_secs(2));
+    assert_eq!(Network::initial_join_retry_delay(3), Duration::from_secs(4));
+    assert_eq!(Network::initial_join_retry_delay(4), Duration::from_secs(8));
+    assert_eq!(Network::initial_join_retry_delay(5), Duration::from_secs(8));
+}
+#[test]
+fn test_initial_join_failure_only_schedules_one_pending_retry() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app);
+        network.update(&mut app, |network, ctx| {
+            network.stage = Stage::BeforeJoined;
+            network.retry_initial_join_after_transport_failure(ctx);
+            network.retry_initial_join_after_transport_failure(ctx);
+        });
+
+        network.read(&app, |network, _| {
+            assert_eq!(network.initial_join_retry_count, 1);
+            assert!(network.initial_join_retry_timer.is_some());
+        });
+    });
 }
 
 #[test]
