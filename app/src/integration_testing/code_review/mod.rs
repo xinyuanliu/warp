@@ -1143,3 +1143,219 @@ pub fn assert_composer_imported(file_path: impl Into<String>, expected: bool) ->
         })
     })
 }
+
+// --- Edge cases: outer-list scroll observability (VAL-EDGE-004/005/008, VAL-CROSS-005) ----------
+//
+// Code-review scroll moves the OUTER viewported list, not the inner editor `RenderState.scroll_top`.
+// These helpers expose the outer-list scroll/visibility so a line or inline card can be asserted as
+// actually within (or outside) the viewport after a scroll/jump, and so reserved content space can
+// be checked while a block is off-screen.
+
+/// Scroll the outer code-review list so the editor-content-space `content_y` for `file_path` sits
+/// at the top of the viewport.
+pub fn scroll_code_review_editor_to_content_y(
+    file_path: impl Into<String>,
+    content_y: f32,
+) -> TestStep {
+    let file_path = file_path.into();
+    TestStep::new("Scroll code review editor to a content-space Y").with_action(
+        move |app, window_id, _| {
+            let view = single_code_review_view(app, window_id);
+            view.update(app, |view, ctx| {
+                view.scroll_editor_to_content_y_for_test(&file_path, content_y, ctx);
+            });
+        },
+    )
+}
+
+/// Assert whether the 1-based current `line` of `file_path` is within the outer viewport.
+pub fn assert_line_in_viewport(
+    file_path: impl Into<String>,
+    line: usize,
+    expected: bool,
+) -> AssertionCallback {
+    let file_path = file_path.into();
+    Box::new(move |app, window_id| {
+        let Some(view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure("code review view not yet available".to_string());
+        };
+        view.read(app, |view, ctx| {
+            match view.is_line_in_viewport_for_test(&file_path, line, ctx) {
+                Some(actual) if actual == expected => AssertionOutcome::Success,
+                Some(actual) => AssertionOutcome::failure(format!(
+                    "expected line {line} in-viewport == {expected}, got {actual}"
+                )),
+                None => AssertionOutcome::failure(format!(
+                    "line {line} for {file_path:?} not available"
+                )),
+            }
+        })
+    })
+}
+
+/// Assert whether the WHOLE inline card anchored at `line` of `file_path` is within the viewport.
+pub fn assert_inline_card_in_viewport(
+    file_path: impl Into<String>,
+    line: usize,
+    expected: bool,
+) -> AssertionCallback {
+    let file_path = file_path.into();
+    Box::new(move |app, window_id| {
+        let Some(view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure("code review view not yet available".to_string());
+        };
+        view.read(app, |view, ctx| {
+            match view.is_inline_card_in_viewport_for_test(&file_path, line, ctx) {
+                Some(actual) if actual == expected => AssertionOutcome::Success,
+                Some(actual) => AssertionOutcome::failure(format!(
+                    "expected inline card at line {line} in-viewport == {expected}, got {actual}"
+                )),
+                None => AssertionOutcome::failure(format!(
+                    "expected an inline card at line {line} for {file_path:?}, none present"
+                )),
+            }
+        })
+    })
+}
+
+/// Assert whether the TOP edge of the inline card at `line` of `file_path` is within the viewport.
+pub fn assert_inline_card_top_in_viewport(
+    file_path: impl Into<String>,
+    line: usize,
+    expected: bool,
+) -> AssertionCallback {
+    let file_path = file_path.into();
+    Box::new(move |app, window_id| {
+        let Some(view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure("code review view not yet available".to_string());
+        };
+        view.read(app, |view, ctx| {
+            match view.is_inline_card_top_in_viewport_for_test(&file_path, line, ctx) {
+                Some(actual) if actual == expected => AssertionOutcome::Success,
+                Some(actual) => AssertionOutcome::failure(format!(
+                    "expected inline card top at line {line} in-viewport == {expected}, got {actual}"
+                )),
+                None => AssertionOutcome::failure(format!(
+                    "expected an inline card at line {line} for {file_path:?}, none present"
+                )),
+            }
+        })
+    })
+}
+
+/// Assert whether the BOTTOM edge of the inline card at `line` of `file_path` is within the
+/// viewport.
+pub fn assert_inline_card_bottom_in_viewport(
+    file_path: impl Into<String>,
+    line: usize,
+    expected: bool,
+) -> AssertionCallback {
+    let file_path = file_path.into();
+    Box::new(move |app, window_id| {
+        let Some(view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure("code review view not yet available".to_string());
+        };
+        view.read(app, |view, ctx| {
+            match view.is_inline_card_bottom_in_viewport_for_test(&file_path, line, ctx) {
+                Some(actual) if actual == expected => AssertionOutcome::Success,
+                Some(actual) => AssertionOutcome::failure(format!(
+                    "expected inline card bottom at line {line} in-viewport == {expected}, got {actual}"
+                )),
+                None => AssertionOutcome::failure(format!(
+                    "expected an inline card at line {line} for {file_path:?}, none present"
+                )),
+            }
+        })
+    })
+}
+
+/// Assert the inline card at `line` of `file_path` reserves a height greater than the outer
+/// viewport (so a very tall card is not clamped to the viewport and must be scrolled to be read).
+pub fn assert_inline_card_taller_than_viewport(
+    file_path: impl Into<String>,
+    line: usize,
+) -> AssertionCallback {
+    let file_path = file_path.into();
+    Box::new(move |app, window_id| {
+        let Some(view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure("code review view not yet available".to_string());
+        };
+        view.read(app, |view, ctx| {
+            let Some(height) = view.comment_block_height_for_test(&file_path, line, ctx) else {
+                return AssertionOutcome::failure(format!(
+                    "expected an inline card at line {line} for {file_path:?}, none present"
+                ));
+            };
+            let viewport_height = view.code_review_viewport_height_for_test();
+            if height > viewport_height {
+                AssertionOutcome::Success
+            } else {
+                AssertionOutcome::failure(format!(
+                    "expected card height ({height}) to exceed the viewport ({viewport_height}) so it must be scrolled"
+                ))
+            }
+        })
+    })
+}
+
+/// Mark the first saved line comment outdated, mirroring a relocation/refresh flagging it stale.
+pub fn mark_first_comment_outdated() -> TestStep {
+    TestStep::new("Mark first saved comment outdated").with_action(move |app, window_id, _| {
+        let view = single_code_review_view(app, window_id);
+        view.update(app, |view, ctx| {
+            view.mark_first_line_comment_outdated_for_test(ctx);
+        });
+    })
+}
+
+const FAR_LINE_CONTENT_Y_KEY: &str = "edge_far_line_content_y";
+
+/// Capture the editor-content-space Y of `line` of `file_path` into step data (scroll-independent).
+pub fn capture_line_content_y(file_path: impl Into<String>, line: usize) -> TestStep {
+    let file_path = file_path.into();
+    TestStep::new("Capture far-line content Y").with_action(
+        move |app: &mut App, window_id: WindowId, step_data: &mut StepDataMap| {
+            let view = single_code_review_view(app, window_id);
+            view.read(app, |view, ctx| {
+                if let Some(y) = view.line_viewport_y_for_test(&file_path, line, ctx) {
+                    step_data.insert(FAR_LINE_CONTENT_Y_KEY, y);
+                }
+            });
+        },
+    )
+}
+
+/// Assert the editor-content-space Y of `line` of `file_path` is unchanged (within 1px) from the
+/// captured value — used to prove an off-screen inline block does not collapse the content layout.
+pub fn assert_line_content_y_unchanged(file_path: impl Into<String>, line: usize) -> TestStep {
+    let file_path = file_path.into();
+    TestStep::new("Assert far-line content Y unchanged")
+        .add_named_assertion_with_data_from_prior_step(
+            "far line content Y unchanged (layout intact while block off-screen)",
+            move |app: &mut App, window_id: WindowId, step_data: &mut StepDataMap| {
+                let Some(view) = try_single_code_review_view(app, window_id) else {
+                    return AssertionOutcome::failure(
+                        "code review view not yet available".to_string(),
+                    );
+                };
+                let Some(&prior) = step_data.get::<_, f32>(FAR_LINE_CONTENT_Y_KEY) else {
+                    return AssertionOutcome::failure(
+                        "no captured far-line content Y from a prior step".to_string(),
+                    );
+                };
+                view.read(app, |view, ctx| {
+                    let Some(y) = view.line_viewport_y_for_test(&file_path, line, ctx) else {
+                        return AssertionOutcome::failure(
+                            "far-line content Y not available".to_string(),
+                        );
+                    };
+                    if (y - prior).abs() > 1.0 {
+                        return AssertionOutcome::failure(format!(
+                            "expected far line content Y to stay at {prior}, got {y}"
+                        ));
+                    }
+                    AssertionOutcome::Success
+                })
+            },
+        )
+}

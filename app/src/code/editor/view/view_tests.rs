@@ -714,6 +714,57 @@ fn test_imported_saved_comment_renders_inline() {
     });
 }
 
+/// VAL-EDGE-001: two distinct saved comments anchored to the SAME current line both render inline,
+/// stacked as two distinct blocks; the code line below the anchor is pushed down by the SUM of both
+/// blocks' heights (they do not overlap each other or the code).
+#[test]
+fn test_two_saved_comments_stack_on_same_line() {
+    App::test((), |mut app| async move {
+        let _embedded = FeatureFlag::EmbeddedCodeReviewComments.override_enabled(true);
+
+        let (_window, editor) = initialize_editor(&mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text(MULTILINE_CONTENT), ctx);
+        });
+        await_outer_layout(&mut app, &editor).await;
+        let baseline_line_3 = line_offset(&app, &editor, 3);
+
+        let (id_a, id_b) = (CommentId::new(), CommentId::new());
+        editor.update(&mut app, |view, ctx| {
+            view.set_comment_locations(
+                vec![
+                    editor_comment(id_a, 2, "first comment"),
+                    editor_comment(id_b, 2, "second comment"),
+                ]
+                .into_iter(),
+                ctx,
+            );
+        });
+        settle_saved_layout(&mut app, &editor).await;
+
+        // Both same-line comments render as their own inline block.
+        assert_eq!(
+            comment_block_count(&app, &editor),
+            2,
+            "two same-line comments must render as two distinct blocks"
+        );
+
+        // The line below the anchor is pushed down by the SUM of both cards' heights.
+        let summed_height = app.read(|ctx| {
+            let view = editor.as_ref(ctx);
+            view.inline_comments
+                .values()
+                .map(|inline| inline.as_ref(ctx).inline_height(ctx).as_f32())
+                .sum::<f32>()
+        });
+        let delta = line_offset(&app, &editor, 3) - baseline_line_3;
+        assert!(
+            (delta - summed_height).abs() < 1.0,
+            "line below should shift by the summed card heights: delta={delta}, summed={summed_height}"
+        );
+    });
+}
+
 /// VAL-COMPOSER-015: opening the composer on a line that already has a saved card REPLACES the card
 /// (exactly one inline block — the composer), and cancelling restores the single saved card.
 #[test]

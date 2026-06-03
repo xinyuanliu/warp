@@ -1866,3 +1866,59 @@ fn embedded_comment_blocks_mix_current_and_temporary_anchors_and_survive_refresh
         "current-line comment unchanged across refresh + re-sync"
     );
 }
+
+/// VAL-EDGE-001: two comments anchored to the SAME current line stack vertically without
+/// overlapping each other or the code. The second comment's top equals the first's top plus the
+/// first's reserved height, and the first code line below the anchor is pushed down by the SUM of
+/// both heights.
+#[test]
+fn embedded_comment_blocks_stack_on_same_current_line() {
+    let render_state = five_line_render_state();
+
+    let baseline_paragraphs = paragraph_offsets(&render_state);
+    let baseline_total = render_state.height();
+
+    // Two distinct comments both anchored at line 2 (same current line).
+    let first_height = 30.0;
+    let second_height = 45.0;
+    render_state.apply_comment_blocks(vec![
+        comment_block(2, first_height),
+        comment_block(2, second_height),
+    ]);
+
+    // Both render as their own block at that line — neither collapses into the other.
+    assert_eq!(
+        count_comments(&render_state),
+        2,
+        "both same-line comments must render as distinct blocks"
+    );
+
+    // The two comment blocks are consecutive in the content tree, directly below line 2.
+    let comment_tops: Vec<Pixels> = block_kinds_with_offsets(&render_state)
+        .into_iter()
+        .filter(|(kind, _)| *kind == "comment")
+        .map(|(_, y)| y)
+        .collect();
+    assert_eq!(comment_tops.len(), 2);
+    // The first sits at the old top of line 3 (the bottom of line 2)...
+    assert_eq!(comment_tops[0], baseline_paragraphs[2]);
+    // ...and the second stacks immediately below it (its top == first top + first height), so they
+    // do not overlap.
+    assert_eq!(
+        comment_tops[1],
+        comment_tops[0] + first_height.into_pixels(),
+        "second comment must stack directly below the first (no overlap)"
+    );
+
+    // The code line below the anchor is pushed down by the SUM of both heights.
+    let summed = (first_height + second_height).into_pixels();
+    let shifted_paragraphs = paragraph_offsets(&render_state);
+    assert_eq!(shifted_paragraphs[0], baseline_paragraphs[0]);
+    assert_eq!(shifted_paragraphs[1], baseline_paragraphs[1]);
+    assert_eq!(
+        shifted_paragraphs[2],
+        baseline_paragraphs[2] + summed,
+        "the line below the anchor shifts down by the summed height of both stacked comments"
+    );
+    assert_eq!(render_state.height(), baseline_total + summed);
+}

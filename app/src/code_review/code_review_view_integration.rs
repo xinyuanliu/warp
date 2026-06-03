@@ -498,6 +498,190 @@ impl CodeReviewView {
             .comment_block_height_for_test(line, ctx)
     }
 
+    // --- Outer-list scroll observability ------------------------------------------------------
+    //
+    // Code-review scroll moves the OUTER viewported list, not the inner editor
+    // `RenderState.scroll_top` (which stays at 0). Inner viewport-Y getters are therefore
+    // scroll-independent, so on-screen visibility must be derived from the outer list's scroll
+    // offset + viewport. These getters expose that observability so tests can assert a line or an
+    // inline card is actually within the viewport after a scroll/jump.
+
+    /// The outer code-review list's scroll offset, in pixels, within its scrolled-to file item
+    /// (file-header + editor-content space).
+    pub fn code_review_scroll_offset_for_test(&self) -> f32 {
+        self.viewported_list_state.get_scroll_offset().as_f32()
+    }
+
+    /// The outer code-review list's scrolled-to file index.
+    pub fn code_review_scroll_index_for_test(&self) -> usize {
+        self.viewported_list_state.get_scroll_index()
+    }
+
+    /// The outer code-review list's viewport height, in pixels.
+    pub fn code_review_viewport_height_for_test(&self) -> f32 {
+        self.viewported_list_state.get_viewport_height().as_f32()
+    }
+
+    /// The outer-list item index of the file at `path`, matched the same way scrolling does
+    /// (against `file_diff.file_path`).
+    fn editor_list_index_for_test(&self, path: &str) -> Option<usize> {
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return None;
+        };
+        state
+            .file_states
+            .iter()
+            .position(|(_, file_state)| file_state.file_diff.file_path == path)
+    }
+
+    /// Whether the editor-content-space range `[top_content_y, bottom_content_y]` for the file at
+    /// list `editor_index` falls within the outer list's visible viewport (accounting for the file
+    /// header above the editor content).
+    fn is_editor_content_range_in_viewport(
+        &self,
+        editor_index: usize,
+        top_content_y: f32,
+        bottom_content_y: f32,
+    ) -> bool {
+        self.viewported_list_state.is_vertical_range_visible(
+            editor_index,
+            Pixels::new(FILE_HEADER_HEIGHT + top_content_y),
+            Pixels::new(FILE_HEADER_HEIGHT + bottom_content_y),
+        )
+    }
+
+    /// Whether the 1-based current `line` of `path` is within the outer list's visible viewport.
+    pub fn is_line_in_viewport_for_test(
+        &self,
+        path: &str,
+        line: usize,
+        ctx: &AppContext,
+    ) -> Option<bool> {
+        let editor_index = self.editor_list_index_for_test(path)?;
+        let editor = self.code_editor_for_test(path, ctx)?;
+        let top = editor.as_ref(ctx).line_viewport_y_for_test(line, ctx)?;
+        let line_height = editor.as_ref(ctx).base_line_height_for_test(ctx);
+        Some(self.is_editor_content_range_in_viewport(editor_index, top, top + line_height))
+    }
+
+    /// Whether the WHOLE inline comment card anchored at the 1-based current `line` of `path` is
+    /// within the outer list's visible viewport (top and bottom both visible).
+    pub fn is_inline_card_in_viewport_for_test(
+        &self,
+        path: &str,
+        line: usize,
+        ctx: &AppContext,
+    ) -> Option<bool> {
+        let editor_index = self.editor_list_index_for_test(path)?;
+        let editor = self.code_editor_for_test(path, ctx)?;
+        let top = editor
+            .as_ref(ctx)
+            .comment_block_content_top_for_test(line, ctx)?;
+        let height = editor
+            .as_ref(ctx)
+            .comment_block_height_for_test(line, ctx)?;
+        Some(self.is_editor_content_range_in_viewport(editor_index, top, top + height))
+    }
+
+    /// Whether the TOP edge of the inline card anchored at the 1-based current `line` of `path` is
+    /// within the outer list's visible viewport. Useful for cards taller than the viewport, whose
+    /// top and bottom cannot be visible simultaneously.
+    pub fn is_inline_card_top_in_viewport_for_test(
+        &self,
+        path: &str,
+        line: usize,
+        ctx: &AppContext,
+    ) -> Option<bool> {
+        let editor_index = self.editor_list_index_for_test(path)?;
+        let editor = self.code_editor_for_test(path, ctx)?;
+        let top = editor
+            .as_ref(ctx)
+            .comment_block_content_top_for_test(line, ctx)?;
+        Some(self.is_editor_content_range_in_viewport(editor_index, top, top))
+    }
+
+    /// Whether the BOTTOM edge of the inline card anchored at the 1-based current `line` of `path`
+    /// is within the outer list's visible viewport.
+    pub fn is_inline_card_bottom_in_viewport_for_test(
+        &self,
+        path: &str,
+        line: usize,
+        ctx: &AppContext,
+    ) -> Option<bool> {
+        let editor_index = self.editor_list_index_for_test(path)?;
+        let editor = self.code_editor_for_test(path, ctx)?;
+        let top = editor
+            .as_ref(ctx)
+            .comment_block_content_top_for_test(line, ctx)?;
+        let height = editor
+            .as_ref(ctx)
+            .comment_block_height_for_test(line, ctx)?;
+        Some(self.is_editor_content_range_in_viewport(editor_index, top + height, top + height))
+    }
+
+    /// Content-space top offset of the inline card anchored at the 1-based current `line` of
+    /// `path` (scroll-independent), or `None` if no card is anchored there.
+    pub fn inline_card_content_top_for_test(
+        &self,
+        path: &str,
+        line: usize,
+        ctx: &AppContext,
+    ) -> Option<f32> {
+        self.code_editor_for_test(path, ctx)?
+            .as_ref(ctx)
+            .comment_block_content_top_for_test(line, ctx)
+    }
+
+    /// Scroll the outer code-review list so the given editor-content-space `content_y` for `path`
+    /// sits at the top of the viewport (mirrors how `scroll_to_line_for_test` positions content,
+    /// and persists the scroll context so it survives the next layout). Returns false if the file
+    /// editor isn't available.
+    pub fn scroll_editor_to_content_y_for_test(
+        &mut self,
+        path: &str,
+        content_y: f32,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(editor_index) = self.editor_list_index_for_test(path) else {
+            return false;
+        };
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return false;
+        };
+        let Some(editor) = state
+            .file_states
+            .get_index(editor_index)
+            .and_then(|(_, file_state)| file_state.editor_state.as_ref())
+            .map(|editor_state| editor_state.editor().clone())
+        else {
+            return false;
+        };
+        self.viewported_list_state
+            .scroll_to_with_offset(editor_index, Pixels::new(FILE_HEADER_HEIGHT + content_y));
+        if let Some(context) = self.compute_scroll_context_for_index(editor_index, &editor, ctx) {
+            self.viewported_list_state.set_scroll_context(Some(context));
+        }
+        ctx.notify();
+        true
+    }
+
+    /// Mark the first saved line comment outdated (mirrors a relocation/refresh flagging it stale),
+    /// keeping it in the batch (so the bottom panel still shows it) while it drops out of the inline
+    /// (editor) set. Returns the affected comment id, or `None` if no saved line comment exists.
+    pub fn mark_first_line_comment_outdated_for_test(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<CommentId> {
+        let (comment_id, _) = self.first_line_comment_for_test(ctx)?;
+        let model = self.active_comment_model.as_ref()?.clone();
+        let mut comment = model.read(ctx, |batch, _| {
+            batch.comments.iter().find(|c| c.id == comment_id).cloned()
+        })?;
+        comment.outdated = true;
+        model.update(ctx, |batch, ctx| batch.upsert_comment(comment, ctx));
+        Some(comment_id)
+    }
+
     /// Whether the general/diffset (header-anchored) comment composer overlay is currently open.
     pub fn general_composer_overlay_present_for_test(&self) -> bool {
         self.comment_composer.is_some()

@@ -134,6 +134,29 @@ impl CodeEditorView {
             .map(|position| position.content_height.as_f32())
     }
 
+    /// Content-space top offset of the inline comment block anchored at the given 1-based current
+    /// line (independent of the inner editor scroll, which code-review never moves), or `None` if
+    /// no block is anchored there.
+    pub fn comment_block_content_top_for_test(&self, line: usize, app: &AppContext) -> Option<f32> {
+        self.model
+            .as_ref(app)
+            .render_state()
+            .as_ref(app)
+            .comment_block_position(RenderLineLocation::Current(LineCount::from(line)))
+            .map(|position| position.start_y_offset.as_f32())
+    }
+
+    /// The editor's single-line height (used to derive a line's content-space bottom edge).
+    pub fn base_line_height_for_test(&self, app: &AppContext) -> f32 {
+        self.model
+            .as_ref(app)
+            .render_state()
+            .as_ref(app)
+            .styles()
+            .base_line_height()
+            .as_f32()
+    }
+
     /// Open the inline composer on the given 1-based current line (mirrors a gutter add-comment
     /// click / `NewCommentOnLine`).
     pub fn open_comment_line_for_test(&mut self, line: usize, ctx: &mut ViewContext<Self>) {

@@ -78,3 +78,7 @@ impl EditorLineLocation {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "line_tests.rs"]
+mod tests;

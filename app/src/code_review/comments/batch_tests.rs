@@ -155,3 +155,42 @@ fn editor_comments_for_file_includes_only_line_comments() {
         });
     });
 }
+
+/// VAL-EDGE-003: outdated comments are filtered out of the editor (inline) set while remaining in
+/// the batch (the bottom panel's source). A current line comment is included; an outdated one is
+/// not, even though both stay in `batch.comments`.
+#[test]
+fn editor_comments_for_file_excludes_outdated() {
+    App::test((), |mut app| async move {
+        // Outdated filtering is gated on the PR-comments slash command flag.
+        let _pr_comments =
+            crate::features::FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
+
+        let model = app.add_model(|_| ReviewCommentBatch::default());
+
+        let current = line_comment("/repo/src/lib.rs", 7, "current");
+        let mut outdated = line_comment("/repo/src/lib.rs", 9, "stale");
+        outdated.outdated = true;
+
+        model.update(&mut app, |batch, ctx| {
+            batch.upsert_comment(current.clone(), ctx);
+            batch.upsert_comment(outdated.clone(), ctx);
+        });
+
+        model.read(&app, |batch, _| {
+            let editor_comments = batch.editor_comments_for_file(&LocalOrRemotePath::Local(
+                PathBuf::from("/repo/src/lib.rs"),
+            ));
+            // Only the current comment renders inline; the outdated one is filtered out.
+            assert_eq!(editor_comments.len(), 1);
+            assert_eq!(editor_comments[0].id, current.id);
+
+            // Both comments remain in the batch (the bottom panel still shows the outdated one).
+            assert_eq!(batch.comments.len(), 2);
+            assert!(batch
+                .comments
+                .iter()
+                .any(|c| c.id == outdated.id && c.outdated));
+        });
+    });
+}

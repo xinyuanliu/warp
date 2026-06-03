@@ -1811,6 +1811,23 @@ impl CodeEditorView {
         render_state_ref.line_number_to_offset_range(line_number)
     }
 
+    /// Content-space top offset and reserved height of the inline comment block anchored at `line`,
+    /// or `None` if no inline block is anchored there (e.g. the comment is outdated or the inline
+    /// feature is off). Used to scroll the card itself — not just its bare line — into view.
+    pub fn comment_block_content_bounds(
+        &self,
+        line: &EditorLineLocation,
+        ctx: &AppContext,
+    ) -> Option<(Pixels, Pixels)> {
+        let render_location = line.clone().into_render_line_location();
+        self.model
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .comment_block_position(render_location)
+            .map(|position| (position.start_y_offset, position.content_height))
+    }
+
     pub fn offset_to_lsp_position(
         &self,
         offset: CharOffset,

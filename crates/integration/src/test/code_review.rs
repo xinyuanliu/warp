@@ -7,7 +7,9 @@ use warp::features::FeatureFlag;
 use warp::integration_testing::code_review::{
     assert_code_review_anchor, assert_code_review_line_text, assert_code_review_loaded,
     assert_code_review_scroll_region, assert_composer_imported, assert_floating_overlay_present,
-    assert_general_composer_overlay_present, assert_inline_card_count,
+    assert_general_composer_overlay_present, assert_inline_card_bottom_in_viewport,
+    assert_inline_card_count, assert_inline_card_in_viewport,
+    assert_inline_card_taller_than_viewport, assert_inline_card_top_in_viewport,
     assert_inline_comment_block_body, assert_inline_comment_block_count,
     assert_inline_composer_body, assert_inline_composer_body_contains,
     assert_inline_composer_closed, assert_inline_composer_focused,
@@ -16,14 +18,15 @@ use warp::integration_testing::code_review::{
     assert_inline_composer_open, assert_inline_composer_primary_label,
     assert_inline_composer_pushes_line_below, assert_inline_composer_save_disabled,
     assert_inline_composer_shows_remove, assert_inline_panel_parity, assert_line_below_y_unchanged,
-    assert_panel_total_comments, assert_saved_comment_count, cancel_inline_composer,
-    capture_inline_composer_height, capture_line_below_baseline, cmd_enter_inline_composer,
-    escape_inline_composer, jump_to_first_saved_comment, open_general_composer,
-    open_inline_composer, remove_inline_comment, reopen_saved_inline_comment, save_inline_composer,
-    scroll_code_review_to_deleted_range, scroll_code_review_to_footer,
-    scroll_code_review_to_header, scroll_code_review_to_line, seed_general_comment,
-    seed_imported_line_comment, seed_saved_line_comment, set_inline_composer_body,
-    type_into_inline_composer, ScrollRegion,
+    assert_line_content_y_unchanged, assert_line_in_viewport, assert_panel_total_comments,
+    assert_saved_comment_count, cancel_inline_composer, capture_inline_composer_height,
+    capture_line_below_baseline, capture_line_content_y, cmd_enter_inline_composer,
+    escape_inline_composer, jump_to_first_saved_comment, mark_first_comment_outdated,
+    open_general_composer, open_inline_composer, remove_inline_comment,
+    reopen_saved_inline_comment, save_inline_composer, scroll_code_review_to_deleted_range,
+    scroll_code_review_to_footer, scroll_code_review_to_header, scroll_code_review_to_line,
+    seed_general_comment, seed_imported_line_comment, seed_saved_line_comment,
+    set_inline_composer_body, type_into_inline_composer, ScrollRegion,
 };
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
@@ -698,6 +701,82 @@ fn setup_single_file_repo(utils: &mut TestSetupUtils) {
 
     fs::write(repo_dir.join(TEST_FILE_NAME), initial_diff_contents())
         .expect("should write initial diff contents");
+}
+
+// A small file whose changes are spaced so that, with the code review's 4-line context window,
+// EVERY line stays visible (no collapsed/hidden sections). This lets boundary comments — on the
+// FIRST and LAST lines — render inline, which the 400-line `TEST_FILE_NAME` cannot do because its
+// file boundaries fall inside hidden (collapsed) regions.
+const EDGE_FILE_NAME: &str = "edge_target.txt";
+const EDGE_LINE_COUNT: usize = 40;
+
+fn edge_line_is_modified(line_number: usize) -> bool {
+    // Changes every 8 lines (4, 12, 20, 28, 36); a 4-line context each side covers the whole file.
+    line_number % 8 == 4
+}
+
+fn edge_committed_contents() -> String {
+    (1..=EDGE_LINE_COUNT)
+        .map(|line_number| format!("edge {line_number:03}\n"))
+        .collect()
+}
+
+fn edge_diff_contents() -> String {
+    (1..=EDGE_LINE_COUNT)
+        .map(|line_number| {
+            if edge_line_is_modified(line_number) {
+                format!("edge {line_number:03} modified\n")
+            } else {
+                format!("edge {line_number:03}\n")
+            }
+        })
+        .collect()
+}
+
+fn setup_edge_repo(utils: &mut TestSetupUtils) {
+    let test_dir = utils.test_dir();
+    let repo_dir = test_dir.join("repo");
+    fs::create_dir_all(&repo_dir).expect("should create repo subdirectory");
+    let repo_dir_string = repo_dir
+        .to_str()
+        .expect("repo directory should be valid utf-8");
+
+    write_all_rc_files_for_test(&test_dir, format!("cd {repo_dir_string}"));
+
+    fs::write(repo_dir.join(EDGE_FILE_NAME), edge_committed_contents())
+        .expect("should write initial committed contents");
+    run_git(&repo_dir, &["init", "-b", "main"]);
+    run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
+    run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+    run_git(&repo_dir, &["add", EDGE_FILE_NAME]);
+    run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
+
+    fs::write(repo_dir.join(EDGE_FILE_NAME), edge_diff_contents())
+        .expect("should write initial diff contents");
+}
+
+/// A loaded code review over `EDGE_FILE_NAME` (every line visible) with the inline-comments flag on.
+fn edge_builder() -> Builder {
+    FeatureFlag::EmbeddedCodeReviewComments.set_enabled(true);
+
+    new_builder()
+        .use_tmp_filesystem_for_test_root_directory()
+        .with_setup(setup_edge_repo)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            TestStep::new("Wait for the terminal to detect the git repository")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_repo_detected()),
+        )
+        .with_step(
+            TestStep::new("Open the code review panel")
+                .with_action(|app, window_id, _| open_code_review_panel(app, window_id)),
+        )
+        .with_step(
+            TestStep::new("Wait for the code review panel to load file diffs")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_loaded()),
+        )
 }
 
 /// A loaded single-file code review with the inline-comments flag set to `flag_enabled`.
@@ -1439,6 +1518,282 @@ pub fn test_code_review_saved_comment_imported_from_github() -> Builder {
         )
 }
 
+/// VAL-EDGE-009: a comment anchored to the FIRST line renders correctly — line 1 is not pushed off
+/// the top (it stays at the content top, still in view), the card sits below it, and line 2 is
+/// pushed down by the card height.
+pub fn test_code_review_comment_on_first_line() -> Builder {
+    edge_builder()
+        .with_step(
+            seed_saved_line_comment(EDGE_FILE_NAME, 1, "first line note")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("First-line card renders below line 1 without pushing it off-top")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_comment_block_count(EDGE_FILE_NAME, 1))
+                // Line 1 is still on-screen at the top (not scrolled/pushed off).
+                .add_assertion(assert_line_in_viewport(EDGE_FILE_NAME, 1, true))
+                // The card sits below line 1 and pushes line 2 down by its full height (no overlap).
+                .add_assertion(assert_inline_composer_pushes_line_below(EDGE_FILE_NAME, 1)),
+        )
+}
+
+/// VAL-EDGE-004: a comment anchored to the LAST line renders correctly — it reserves its full height
+/// below the final line (no clipping at EOF) and is reachable by scrolling to the bottom.
+pub fn test_code_review_comment_on_last_line() -> Builder {
+    edge_builder()
+        .with_step(
+            seed_saved_line_comment(EDGE_FILE_NAME, EDGE_LINE_COUNT, "last line note")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Last-line card renders as a single block")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_comment_block_count(EDGE_FILE_NAME, 1)),
+        )
+        // Scroll to the very bottom (the footer, below the trailing card) so the card is reachable.
+        .with_step(
+            scroll_code_review_to_footer(EDGE_FILE_NAME)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Last-line card is fully visible (not clipped at EOF)")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                // The whole card (top AND bottom) is within the viewport — not clipped at the file
+                // end — proving its full height is reserved below the final line.
+                .add_assertion(assert_inline_card_in_viewport(
+                    EDGE_FILE_NAME,
+                    EDGE_LINE_COUNT,
+                    true,
+                )),
+        )
+}
+
+/// VAL-EDGE-005: an off-screen inline block keeps its reserved space (the editor content height and
+/// the absolute Y of unrelated lines do not change while it's out of view), and the card reappears
+/// intact when scrolled back.
+pub fn test_code_review_offscreen_block_reserves_space() -> Builder {
+    // A line AFTER the comment that is itself reliably rendered (inside the second visible hunk);
+    // its content-space Y would move UP if the off-screen block's reserved space collapsed.
+    const FAR_LINE: usize = 250;
+    composer_builder(true)
+        .with_step(
+            seed_saved_line_comment(TEST_FILE_NAME, TARGET_LINE_NUMBER, "offscreen note")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        // Record the far line's content-space Y while the card is on-screen.
+        .with_step(
+            capture_line_content_y(TEST_FILE_NAME, FAR_LINE)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2),
+        )
+        // Scroll far below so the card at line 70 is above the viewport.
+        .with_step(
+            scroll_code_review_to_line(TEST_FILE_NAME, FAR_LINE + 30)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Off-screen card keeps reserved space and layout")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                // The card is no longer visible...
+                .add_assertion(assert_inline_card_in_viewport(
+                    TEST_FILE_NAME,
+                    TARGET_LINE_NUMBER,
+                    false,
+                ))
+                // ...but the block is still present in the content tree (reserved).
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1)),
+        )
+        // The reserved space is intact: the far line's absolute content-space Y is unchanged (it did
+        // not move up, which it would have if the off-screen block had collapsed its height).
+        .with_step(
+            assert_line_content_y_unchanged(TEST_FILE_NAME, FAR_LINE)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2),
+        )
+        // Scroll back: the card reappears intact (in view, with its original body).
+        .with_step(
+            scroll_code_review_to_line(TEST_FILE_NAME, TARGET_LINE_NUMBER)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Card reappears intact on return")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_card_in_viewport(
+                    TEST_FILE_NAME,
+                    TARGET_LINE_NUMBER,
+                    true,
+                ))
+                .add_assertion(assert_inline_comment_block_body(
+                    TEST_FILE_NAME,
+                    TARGET_LINE_NUMBER,
+                    "offscreen note",
+                )),
+        )
+}
+
+/// VAL-EDGE-006: opening the composer on a line that already has a saved card REPLACES the card
+/// (exactly one inline block — the composer), and cancelling restores the single saved card.
+pub fn test_code_review_composer_replaces_saved_card_on_same_line() -> Builder {
+    composer_builder(true)
+        .with_step(
+            seed_saved_line_comment(TEST_FILE_NAME, COMPOSER_LINE, "saved body")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Saved card renders before opening the composer")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1)),
+        )
+        .with_step(
+            open_inline_composer(TEST_FILE_NAME, COMPOSER_LINE)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250))
+                .add_assertion(assert_inline_composer_open(
+                    TEST_FILE_NAME,
+                    Some(COMPOSER_LINE),
+                ))
+                // The composer REPLACES the saved card: still exactly one inline block.
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1)),
+        )
+        .with_step(
+            cancel_inline_composer(TEST_FILE_NAME)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250))
+                .add_assertion(assert_inline_composer_closed(TEST_FILE_NAME))
+                // Cancelling restores the single saved card.
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1))
+                .add_assertion(assert_inline_comment_block_body(
+                    TEST_FILE_NAME,
+                    COMPOSER_LINE,
+                    "saved body",
+                )),
+        )
+}
+
+/// VAL-EDGE-003/007: a current->outdated transition removes the inline block while the panel keeps
+/// the comment. Outdated filtering is gated on the PR-comments slash command flag.
+pub fn test_code_review_current_to_outdated_removes_inline_block() -> Builder {
+    FeatureFlag::PRCommentsSlashCommand.set_enabled(true);
+    composer_builder(true)
+        .with_step(
+            seed_saved_line_comment(TEST_FILE_NAME, COMPOSER_LINE, "will go stale")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Current comment renders inline and appears in the panel")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1))
+                .add_assertion(assert_panel_total_comments(1)),
+        )
+        .with_step(
+            mark_first_comment_outdated()
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Outdated comment drops out of the editor but stays in the panel")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                // The inline block is removed once the comment is outdated...
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 0))
+                // ...while the bottom panel still shows it.
+                .add_assertion(assert_panel_total_comments(1)),
+        )
+}
+
+/// VAL-EDGE-008: a comment taller than the viewport reserves its full height (it is not clamped to
+/// the viewport) and is fully scrollable — both its top and its bottom edge can be brought into
+/// view, and the following code begins only after the card's full height.
+pub fn test_code_review_very_tall_comment_is_scrollable() -> Builder {
+    let tall_body = (1..=160)
+        .map(|i| format!("tall comment line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    composer_builder(true)
+        .with_step(
+            seed_saved_line_comment(TEST_FILE_NAME, COMPOSER_LINE, tall_body)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Tall card reserves its full height (not clamped to the viewport)")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1))
+                .add_assertion(assert_inline_card_taller_than_viewport(
+                    TEST_FILE_NAME,
+                    COMPOSER_LINE,
+                ))
+                // The following code line begins only after the card's full reserved height.
+                .add_assertion(assert_inline_composer_pushes_line_below(
+                    TEST_FILE_NAME,
+                    COMPOSER_LINE,
+                )),
+        )
+        // Bring the anchor line to the top: the card's TOP edge is then in view.
+        .with_step(
+            scroll_code_review_to_line(TEST_FILE_NAME, COMPOSER_LINE)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Scrolling to the anchor reveals the card's top")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_card_top_in_viewport(
+                    TEST_FILE_NAME,
+                    COMPOSER_LINE,
+                    true,
+                )),
+        )
+        // Bring the line just after the card to the top: the card's BOTTOM edge is then in view.
+        .with_step(
+            scroll_code_review_to_line(TEST_FILE_NAME, COMPOSER_LINE + 1)
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .set_post_step_pause(Duration::from_millis(250)),
+        )
+        .with_step(
+            TestStep::new("Scrolling further reveals the card's bottom")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_card_bottom_in_viewport(
+                    TEST_FILE_NAME,
+                    COMPOSER_LINE,
+                    true,
+                )),
+        )
+}
+
 /// VAL-CROSS-005: jumping to a saved comment from the panel scrolls its inline card into view (the
 /// card travels with its line and remains rendered after the jump).
 pub fn test_code_review_saved_comment_jump_scrolls_card_into_view() -> Builder {
@@ -1456,6 +1811,16 @@ pub fn test_code_review_saved_comment_jump_scrolls_card_into_view() -> Builder {
                 .set_post_step_pause(Duration::from_millis(250)),
         )
         .with_step(
+            TestStep::new("Inline card is off-screen before the jump")
+                .set_timeout(Duration::from_secs(10))
+                .set_retries(2)
+                .add_assertion(assert_inline_card_in_viewport(
+                    TEST_FILE_NAME,
+                    TARGET_LINE_NUMBER,
+                    false,
+                )),
+        )
+        .with_step(
             jump_to_first_saved_comment()
                 .set_timeout(Duration::from_secs(10))
                 .set_retries(2)
@@ -1466,8 +1831,14 @@ pub fn test_code_review_saved_comment_jump_scrolls_card_into_view() -> Builder {
                 .set_timeout(Duration::from_secs(10))
                 .set_retries(2)
                 // Jumping routes through the panel handler and scrolls to the comment line; the
-                // card travels with its line and is still rendered as a single inline block.
+                // card travels with its line and is still rendered as a single inline block...
                 .add_assertion(assert_inline_card_count(TEST_FILE_NAME, 1))
-                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1)),
+                .add_assertion(assert_inline_comment_block_count(TEST_FILE_NAME, 1))
+                // ...and, crucially, the card is now actually WITHIN the outer-list viewport.
+                .add_assertion(assert_inline_card_in_viewport(
+                    TEST_FILE_NAME,
+                    TARGET_LINE_NUMBER,
+                    true,
+                )),
         )
 }
