@@ -145,9 +145,9 @@ fn visible_model_usage_metadata(
         token_usage: vec![],
         tool_usage_metadata: None,
         warp_token_usage: HashMap::from([(
-            "visible-model".to_string(),
+            "gpt-5-4-xhigh".to_string(),
             api::response_event::stream_finished::ModelTokenUsage {
-                model_id: "visible-model".to_string(),
+                model_id: "gpt-5-4-xhigh".to_string(),
                 total_tokens: 4,
                 token_usage_by_category: HashMap::new(),
                 long_context_used,
@@ -231,12 +231,13 @@ fn child_conversation_detection_uses_parent_agent_id() {
 #[test]
 fn restored_conversation_uses_persisted_long_context_usage() {
     let conversation_data: AgentConversationData = serde_json::from_str(
-        r#"{"server_conversation_token":null,"conversation_usage_metadata":{"was_summarized":false,"context_window_usage":0.0,"credits_spent":0.0,"token_usage":[{"model_id":"visible-model","long_context_used":true}]}}"#,
+        r#"{"server_conversation_token":null,"conversation_usage_metadata":{"was_summarized":false,"context_window_usage":0.0,"credits_spent":0.0,"token_usage":[{"model_id":"gpt-5-4-xhigh","long_context_used":true}]}}"#,
     )
     .unwrap();
 
     let conversation = restored_conversation(Some(conversation_data));
 
+    assert_eq!(conversation.token_usage()[0].model_id, "gpt-5-4-xhigh");
     assert!(conversation.token_usage()[0].long_context_used);
 }
 
@@ -350,7 +351,7 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
 }
 
 #[test]
-fn update_cost_and_usage_ingests_visible_model_long_context_usage() {
+fn update_cost_and_usage_ingests_stable_public_model_id_with_long_context_usage() {
     App::test((), |mut app| async move {
         initialize_custom_endpoint_usage_test_app(&mut app);
         app.add_singleton_model(LLMPreferences::new);
@@ -368,6 +369,7 @@ fn update_cost_and_usage_ingests_visible_model_long_context_usage() {
                 .expect("visible model usage should update");
         });
 
+        assert_eq!(conversation.token_usage()[0].model_id, "gpt-5-4-xhigh");
         assert!(conversation.token_usage()[0].long_context_used);
     });
 }
@@ -405,9 +407,9 @@ fn footer_model_token_usage_merges_visible_model_long_context_usage_with_or() {
 
         let mut usage_metadata = visible_model_usage_metadata(false);
         usage_metadata.byok_token_usage.insert(
-            "visible-model".to_string(),
+            "gpt-5-4-xhigh".to_string(),
             api::response_event::stream_finished::ModelTokenUsage {
-                model_id: "visible-model".to_string(),
+                model_id: "gpt-5-4-xhigh".to_string(),
                 total_tokens: 6,
                 token_usage_by_category: HashMap::new(),
                 long_context_used: true,

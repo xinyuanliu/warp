@@ -262,6 +262,44 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
 }
 
 #[test]
+fn model_usage_display_label_resolves_public_id_and_preserves_legacy_label() {
+    let info: LLMInfo = serde_json::from_str(
+        r#"{
+            "display_name": "gpt-5.4 (xhigh)",
+            "id": "gpt-5-4-xhigh",
+            "usage_metadata": { "request_multiplier": 1, "credit_multiplier": null },
+            "provider": "OpenAI"
+        }"#,
+    )
+    .expect("model config should deserialize");
+    let available = AvailableLLMs {
+        default_id: info.id.clone(),
+        choices: vec![info],
+        preferred_codex_model_id: None,
+    };
+    let preferences = LLMPreferences {
+        models_by_feature: ModelsByFeature {
+            agent_mode: available.clone(),
+            coding: available,
+            cli_agent: None,
+            computer_use: None,
+        },
+        last_update: None,
+        base_llm_for_terminal_view: HashMap::new(),
+        custom_llms: vec![],
+    };
+
+    assert_eq!(
+        preferences.model_usage_display_label("gpt-5-4-xhigh"),
+        "gpt-5.4 (xhigh)"
+    );
+    assert_eq!(
+        preferences.model_usage_display_label("GPT-5.4 (extra high reasoning)"),
+        "GPT-5.4 (extra high reasoning)"
+    );
+}
+
+#[test]
 fn custom_llm_infos_skip_endpoints_with_empty_api_key() {
     let keys = ai::api_keys::ApiKeys {
         custom_endpoints: vec![

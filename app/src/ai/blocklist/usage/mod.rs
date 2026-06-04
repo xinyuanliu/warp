@@ -11,9 +11,7 @@ pub mod rollup;
 
 pub fn has_long_context_usage(model_usage: &[ModelTokenUsage], llm: &LLMInfo) -> bool {
     model_usage.iter().any(|usage| {
-        let is_active_model =
-            usage.model_id == llm.display_name || usage.model_id == llm.id.as_str();
-        is_active_model
+        usage.model_id == llm.id.as_str()
             && usage.long_context_used
             && (usage.warp_tokens > 0 || usage.byok_tokens > 0)
     })

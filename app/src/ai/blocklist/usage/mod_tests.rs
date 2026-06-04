@@ -55,7 +55,7 @@ fn context_window_icon_remains_percentage_based() {
 }
 
 #[test]
-fn long_context_usage_detects_active_model_signal() {
+fn long_context_usage_does_not_match_display_name() {
     let active_model = model(LLMProvider::OpenAI, true);
     let model_usage = vec![
         ModelTokenUsage {
@@ -69,7 +69,7 @@ fn long_context_usage_detects_active_model_signal() {
             ..Default::default()
         },
     ];
-    assert!(has_long_context_usage(&model_usage, &active_model));
+    assert!(!has_long_context_usage(&model_usage, &active_model));
 }
 
 #[test]
@@ -86,10 +86,12 @@ fn long_context_usage_ignores_other_model_signal() {
 }
 
 #[test]
-fn long_context_usage_matches_active_model_id() {
-    let active_model = model(LLMProvider::OpenAI, true);
+fn long_context_usage_matches_gpt54_xhigh_public_id_despite_different_names() {
+    let mut active_model = model(LLMProvider::OpenAI, true);
+    active_model.id = "gpt-5-4-xhigh".into();
+    active_model.display_name = "gpt-5.4 (xhigh)".to_string();
     let model_usage = vec![ModelTokenUsage {
-        model_id: active_model.id.to_string(),
+        model_id: "gpt-5-4-xhigh".to_string(),
         byok_tokens: 1,
         long_context_used: true,
         ..Default::default()
@@ -114,7 +116,7 @@ fn long_context_usage_ignores_custom_endpoint_signal() {
 fn warning_requires_server_signal_and_configurable_openai_model() {
     let openai_model = model(LLMProvider::OpenAI, true);
     let model_usage = vec![ModelTokenUsage {
-        model_id: openai_model.display_name.clone(),
+        model_id: openai_model.id.to_string(),
         warp_tokens: 1,
         long_context_used: true,
         ..Default::default()

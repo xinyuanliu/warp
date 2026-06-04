@@ -325,7 +325,7 @@ fn model_token_usage_legacy_payload_defaults_long_context_used_to_false() {
 #[test]
 fn model_token_usage_roundtrips_long_context_used() {
     let usage = ModelTokenUsage {
-        model_id: "warp-model".to_string(),
+        model_id: "gpt-5-4-xhigh".to_string(),
         long_context_used: true,
         ..Default::default()
     };
@@ -333,6 +333,7 @@ fn model_token_usage_roundtrips_long_context_used() {
     let json = serde_json::to_string(&usage).expect("serialize");
     let roundtripped: ModelTokenUsage = serde_json::from_str(&json).expect("deserialize");
 
+    assert_eq!(roundtripped.model_id, "gpt-5-4-xhigh");
     assert!(roundtripped.long_context_used);
 }
 
@@ -340,15 +341,17 @@ fn model_token_usage_roundtrips_long_context_used() {
 #[test]
 fn model_token_usage_replays_long_context_used_for_visible_models() {
     let usage = ModelTokenUsage {
-        model_id: "warp-model".to_string(),
+        model_id: "gpt-5-4-xhigh".to_string(),
         warp_tokens: 4,
         long_context_used: true,
         ..Default::default()
     };
 
-    let (_, proto) = usage
+    let (key, proto) = usage
         .to_proto_warp_usage()
         .expect("warp usage should serialize for replay");
 
+    assert_eq!(key, "gpt-5-4-xhigh");
+    assert_eq!(proto.model_id, "gpt-5-4-xhigh");
     assert!(proto.long_context_used);
 }

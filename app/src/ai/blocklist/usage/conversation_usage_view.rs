@@ -23,6 +23,7 @@ use crate::ai::blocklist::usage::rollup::{
 };
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::llms::LLMPreferences;
 use crate::appearance::Appearance;
 use crate::persistence::model::{
     token_usage_category_display_name, ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY,
@@ -391,10 +392,19 @@ impl ConversationUsageView {
 
             // Build comma-separated list of models, with external-key indicator using Icon::Key
             let mut model_elements: Vec<Box<dyn Element>> = vec![];
-            let mut sorted_models: Vec<_> = models.iter().collect();
+            let llm_preferences = LLMPreferences::as_ref(app);
+            let mut sorted_models: Vec<_> = models
+                .iter()
+                .map(|(model_id, is_byok)| {
+                    (
+                        llm_preferences.model_usage_display_label(model_id),
+                        *is_byok,
+                    )
+                })
+                .collect();
             sorted_models.sort_by(|a, b| a.0.cmp(&b.0));
 
-            for (i, (model_id, is_byok)) in sorted_models.iter().enumerate() {
+            for (i, (model_display_name, is_byok)) in sorted_models.iter().enumerate() {
                 if i > 0 {
                     model_elements.push(
                         Text::new(", ".to_string(), appearance.ui_font_family(), font_size)
@@ -412,18 +422,26 @@ impl ConversationUsageView {
                     );
                     model_elements.push(
                         Container::new(
-                            Text::new((*model_id).clone(), appearance.ui_font_family(), font_size)
-                                .with_color(text_color)
-                                .finish(),
+                            Text::new(
+                                model_display_name.clone(),
+                                appearance.ui_font_family(),
+                                font_size,
+                            )
+                            .with_color(text_color)
+                            .finish(),
                         )
                         .with_margin_left(4.)
                         .finish(),
                     );
                 } else {
                     model_elements.push(
-                        Text::new((*model_id).clone(), appearance.ui_font_family(), font_size)
-                            .with_color(text_color)
-                            .finish(),
+                        Text::new(
+                            model_display_name.clone(),
+                            appearance.ui_font_family(),
+                            font_size,
+                        )
+                        .with_color(text_color)
+                        .finish(),
                     );
                 }
             }

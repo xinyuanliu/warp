@@ -839,6 +839,15 @@ impl LLMPreferences {
             .unwrap_or_else(|| CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL.to_string())
     }
 
+    /// User-facing label for standard usage keyed by a public model ID.
+    /// Unknown IDs and legacy readable-name keys remain unchanged.
+    pub fn model_usage_display_label(&self, model_id: &str) -> String {
+        let id = LLMId::from(model_id);
+        self.get_llm_info(&id)
+            .map(|info| info.display_name.clone())
+            .unwrap_or_else(|| model_id.to_string())
+    }
+
     fn custom_llm_info_for_id_if_enabled(&self, id: &LLMId, app: &AppContext) -> Option<&LLMInfo> {
         Self::custom_inference_enabled(app)
             .then(|| self.custom_llm_info_for_id(id))
