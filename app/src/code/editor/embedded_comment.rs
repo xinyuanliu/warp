@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::{Vector2F, vec2f};
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde_yaml::Mapping;
 use uuid::Uuid;
 use warp_editor::content::markdown::MarkdownStyle;
@@ -30,7 +30,7 @@ use crate::code_review::comments::CommentId;
 /// Upper bound on a saved inline comment card's laid-out height. Unlike the composer (capped at
 /// [`MAX_COMMENT_HEIGHT`] so its draft scrolls internally), a saved card reserves its full height so
 /// the whole comment is visible/scrollable inline; this is just a generous layout constraint.
-const SAVED_COMMENT_MAX_HEIGHT: f32 = 100_000.0;
+const UNBOUNDED_COMMENT_HEIGHT: f32 = 100_000.0;
 
 const COMMENT_ID_MAPPING_KEY: &str = "comment_id";
 const ENTITY_ID_MAPPING_KEY: &str = "entity_id";
@@ -183,11 +183,19 @@ impl LaidOutEmbeddedItem for LaidOutEmbeddedCommentSpace {
         match self.comment_editor(ctx) {
             Some(editor) => {
                 let child = ChildView::new(&editor).finish();
-                Box::new(RenderableInlineComment::new(
+                let window_id = self.window_id;
+                let entity_id = self.editor_entity_id;
+                Box::new(RenderableHostedComment::new(
                     viewport_item,
                     child,
-                    self.editor_entity_id,
-                    self.window_id,
+                    MAX_COMMENT_HEIGHT,
+                    Box::new(move |measured, app| {
+                        if let Some(editor) =
+                            app.view_with_id::<CommentEditor>(window_id, entity_id)
+                        {
+                            editor.read(app, |editor, _| editor.set_laid_out_size(measured));
+                        }
+                    }),
                 ))
             }
             None => Box::new(RenderableEmbeddedCommentSpace::new(viewport_item)),
@@ -203,34 +211,37 @@ impl LaidOutEmbeddedItem for LaidOutEmbeddedCommentSpace {
     }
 }
 
-/// Hosts a [`CommentEditor`]'s element inside a per-view inline comment block. It lays out the
-/// child against the block's content width (capped at [`MAX_COMMENT_HEIGHT`]), writes the measured
-/// size back to the editor so the next layout reserves exactly the child's height, and paints and
-/// routes events to the child in content space (so it scrolls with its anchored line).
-pub struct RenderableInlineComment {
+type SizeWriteBack = Box<dyn Fn(Vector2F, &AppContext)>;
+
+/// Hosts an inline comment view's element (either the active composer or a saved-comment card)
+/// inside a per-view inline comment block. It lays out the child against the block's content width
+/// (capped at `max_height`), writes the measured size back via `write_back_size` so the next layout
+/// reserves exactly the child's height, and paints and routes events to the child in content space
+/// (so it scrolls with its anchored line).
+pub struct RenderableHostedComment {
     viewport_item: ViewportItem,
     child: Box<dyn Element>,
-    editor_entity_id: EntityId,
-    window_id: WindowId,
+    max_height: f32,
+    write_back_size: SizeWriteBack,
 }
 
-impl RenderableInlineComment {
+impl RenderableHostedComment {
     fn new(
         viewport_item: ViewportItem,
         child: Box<dyn Element>,
-        editor_entity_id: EntityId,
-        window_id: WindowId,
+        max_height: f32,
+        write_back_size: SizeWriteBack,
     ) -> Self {
         Self {
             viewport_item,
             child,
-            editor_entity_id,
-            window_id,
+            max_height,
+            write_back_size,
         }
     }
 }
 
-impl RenderableBlock for RenderableInlineComment {
+impl RenderableBlock for RenderableHostedComment {
     fn viewport_item(&self) -> &ViewportItem {
         &self.viewport_item
     }
@@ -238,18 +249,12 @@ impl RenderableBlock for RenderableInlineComment {
     fn layout(&mut self, _model: &RenderState, ctx: &mut LayoutContext, app: &AppContext) {
         let width = self.viewport_item.content_size.x();
         let measured = self.child.layout(
-            SizeConstraint::new(vec2f(0., 0.), vec2f(width, MAX_COMMENT_HEIGHT)),
+            SizeConstraint::new(vec2f(0., 0.), vec2f(width, self.max_height)),
             ctx,
             app,
         );
 
-        // Feed the measured size back so the reserved block height tracks the editor's content as
-        // the draft grows or shrinks (honoring the max-height cap).
-        if let Some(editor) =
-            app.view_with_id::<CommentEditor>(self.window_id, self.editor_entity_id)
-        {
-            editor.read(app, |editor, _| editor.set_laid_out_size(measured));
-        }
+        (self.write_back_size)(measured, app);
     }
 
     fn paint(&mut self, _model: &RenderState, ctx: &mut RenderContext, app: &AppContext) {
@@ -383,11 +388,19 @@ impl LaidOutEmbeddedItem for LaidOutInlineSavedComment {
         match self.inline_view(ctx) {
             Some(view) => {
                 let child = ChildView::new(&view).finish();
-                Box::new(RenderableSavedComment::new(
+                let window_id = self.window_id;
+                let entity_id = self.view_entity_id;
+                Box::new(RenderableHostedComment::new(
                     viewport_item,
                     child,
-                    self.view_entity_id,
-                    self.window_id,
+                    UNBOUNDED_COMMENT_HEIGHT,
+                    Box::new(move |measured, app| {
+                        if let Some(view) =
+                            app.view_with_id::<InlineCommentView>(window_id, entity_id)
+                        {
+                            view.read(app, |view, _| view.set_laid_out_size(measured));
+                        }
+                    }),
                 ))
             }
             None => Box::new(RenderableEmbeddedCommentSpace::new(viewport_item)),
@@ -403,79 +416,6 @@ impl LaidOutEmbeddedItem for LaidOutInlineSavedComment {
     }
 }
 
-/// Hosts a saved-comment [`InlineCommentView`]'s element inside a per-view inline comment block. It
-/// lays out the child against the block's content width (reserving its full height), writes the
-/// measured size back to the view so the next layout reserves exactly the card's height, and paints
-/// and routes events to the child in content space (so it scrolls with its anchored line and its
-/// edit affordance / body selection are interactive).
-pub struct RenderableSavedComment {
-    viewport_item: ViewportItem,
-    child: Box<dyn Element>,
-    view_entity_id: EntityId,
-    window_id: WindowId,
-}
-
-impl RenderableSavedComment {
-    fn new(
-        viewport_item: ViewportItem,
-        child: Box<dyn Element>,
-        view_entity_id: EntityId,
-        window_id: WindowId,
-    ) -> Self {
-        Self {
-            viewport_item,
-            child,
-            view_entity_id,
-            window_id,
-        }
-    }
-}
-
-impl RenderableBlock for RenderableSavedComment {
-    fn viewport_item(&self) -> &ViewportItem {
-        &self.viewport_item
-    }
-
-    fn layout(&mut self, _model: &RenderState, ctx: &mut LayoutContext, app: &AppContext) {
-        let width = self.viewport_item.content_size.x();
-        let measured = self.child.layout(
-            SizeConstraint::new(vec2f(0., 0.), vec2f(width, SAVED_COMMENT_MAX_HEIGHT)),
-            ctx,
-            app,
-        );
-
-        if let Some(view) =
-            app.view_with_id::<InlineCommentView>(self.window_id, self.view_entity_id)
-        {
-            view.read(app, |view, _| view.set_laid_out_size(measured));
-        }
-    }
-
-    fn paint(&mut self, _model: &RenderState, ctx: &mut RenderContext, app: &AppContext) {
-        let origin = viewport_pinned_origin(&self.viewport_item, ctx);
-        ctx.paint.scene.start_layer(warpui::ClipBounds::ActiveLayer);
-        self.child.paint(origin, ctx.paint, app);
-        ctx.paint.scene.stop_layer();
-    }
-
-    fn after_layout(&mut self, ctx: &mut warpui::AfterLayoutContext, app: &AppContext) {
-        self.child.after_layout(ctx, app);
-    }
-
-    fn dispatch_event(
-        &mut self,
-        _model: &RenderState,
-        event: &DispatchedEvent,
-        ctx: &mut EventContext,
-        app: &AppContext,
-    ) -> bool {
-        self.child.dispatch_event(event, ctx, app)
-    }
-
-    fn is_embedded_comment(&self) -> bool {
-        true
-    }
-}
 
 /// The embedded item transformation for comments.
 #[cfg_attr(not(test), allow(unused))] // TODO(CODE-1464): use this

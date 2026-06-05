@@ -2636,20 +2636,19 @@ impl RenderState {
         self.set_comment_blocks(Vec::new());
     }
 
-    /// Content-space position and reserved height of the inline comment block anchored at
-    /// `location`, if one is present. `start_y_offset` is in content space (not viewport space)
-    /// and `content_height` is the hosted element's laid-out height.
-    pub fn comment_block_position(
+    /// Find the first inline comment block at `location` and map it through `f`. A comment is
+    /// matched by the FULL `RenderLineLocation` it carries, not by its line alone. Because the
+    /// anchor (including a `Temporary` removed-line slot index) travels on the block itself, two
+    /// comments sharing an `at_line` resolve unambiguously and the match holds even after
+    /// `reset_temporary_block` rebuilds the surrounding removed-line blocks.
+    fn with_comment_block_at<T>(
         &self,
         location: RenderLineLocation,
-    ) -> Option<CommentBlockPosition> {
+        f: impl FnOnce(Pixels, &BlockItem) -> T,
+    ) -> Option<T> {
         let content = self.content.borrow();
         let mut cursor = content.cursor::<LineCount, LayoutSummary>();
         cursor.descend_to_first_item(&content, |_| true);
-        // A comment is matched by the FULL `RenderLineLocation` it carries, not by its line alone.
-        // Because the anchor (including a `Temporary` removed-line slot index) travels on the block
-        // itself, two comments sharing an `at_line` resolve unambiguously and the match holds even
-        // after `reset_temporary_block` rebuilds the surrounding removed-line blocks.
         while let Some(positioned) = cursor.positioned_item() {
             if let BlockItem::EmbeddedComment {
                 location: block_location,
@@ -2657,14 +2656,24 @@ impl RenderState {
             } = positioned.item
                 && *block_location == location
             {
-                return Some(CommentBlockPosition {
-                    start_y_offset: positioned.start_y_offset,
-                    content_height: positioned.item.content_height(),
-                });
+                return Some(f(positioned.start_y_offset, positioned.item));
             }
             cursor.next();
         }
         None
+    }
+
+    /// Content-space position and reserved height of the inline comment block anchored at
+    /// `location`, if one is present. `start_y_offset` is in content space (not viewport space)
+    /// and `content_height` is the hosted element's laid-out height.
+    pub fn comment_block_position(
+        &self,
+        location: RenderLineLocation,
+    ) -> Option<CommentBlockPosition> {
+        self.with_comment_block_at(location, |start_y_offset, item| CommentBlockPosition {
+            start_y_offset,
+            content_height: item.content_height(),
+        })
     }
 
     /// The app-supplied hosted item of the inline comment block anchored at `location`, or `None`
@@ -2674,21 +2683,11 @@ impl RenderState {
         &self,
         location: RenderLineLocation,
     ) -> Option<Arc<dyn LaidOutEmbeddedItem>> {
-        let content = self.content.borrow();
-        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
-        cursor.descend_to_first_item(&content, |_| true);
-        while let Some(positioned) = cursor.positioned_item() {
-            if let BlockItem::EmbeddedComment {
-                location: block_location,
-                item,
-            } = positioned.item
-                && *block_location == location
-            {
-                return Some(item.clone());
-            }
-            cursor.next();
-        }
-        None
+        self.with_comment_block_at(location, |_, item| match item {
+            BlockItem::EmbeddedComment { item, .. } => item.clone(),
+            // `with_comment_block_at` only calls `f` for `EmbeddedComment` items.
+            _ => unreachable!(),
+        })
     }
 
     /// Number of inline comment blocks ([`BlockItem::EmbeddedComment`]) currently in this view's

@@ -17,12 +17,12 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
-use crate::code::editor::EditorReviewComment;
 use crate::code::editor::comment_editor::{
-    COMMENT_CHROME_HEIGHT, create_editable_comment_markdown_editor, inline_comment_background,
-    render_inline_comment_shell,
+    create_editable_comment_markdown_editor, inline_comment_background,
+    render_inline_comment_shell, COMMENT_CHROME_HEIGHT, MAX_COMMENT_HEIGHT,
 };
 use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::EditorReviewComment;
 use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
@@ -91,9 +91,6 @@ impl InlineCommentView {
     pub fn new(comment: EditorReviewComment, ctx: &mut ViewContext<Self>) -> Self {
         let body_editor =
             create_editable_comment_markdown_editor(Some(&comment.comment_content), ctx);
-        body_editor.update(ctx, |editor, ctx| {
-            editor.set_interaction_state(InteractionState::Selectable, ctx);
-        });
         Self::new_inner(
             comment.id,
             comment.line,
@@ -120,6 +117,7 @@ impl InlineCommentView {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_inner(
         id: CommentId,
         line: EditorLineLocation,
@@ -282,11 +280,6 @@ impl InlineCommentView {
         self.laid_out_size.replace(Some(value));
     }
 
-    #[allow(unused)]
-    pub fn get_laid_out_size(&self) -> Option<Vector2F> {
-        self.laid_out_size.borrow().as_ref().cloned()
-    }
-
     #[cfg(feature = "integration_tests")]
     pub fn rendered_body(&self, app: &AppContext) -> String {
         self.comment_text(app)
@@ -349,7 +342,19 @@ impl InlineCommentView {
             }
             EditorViewEvent::CmdEnter => self.save(ctx),
             EditorViewEvent::EscapePressed => self.cancel(ctx),
-            _ => {}
+            EditorViewEvent::Focused
+            | EditorViewEvent::Navigate(_)
+            | EditorViewEvent::OpenFile { .. }
+            | EditorViewEvent::RunWorkflow(_)
+            | EditorViewEvent::EditWorkflow(_)
+            | EditorViewEvent::OpenedBlockInsertionMenu(_)
+            | EditorViewEvent::OpenedEmbeddedObjectSearch
+            | EditorViewEvent::OpenedFindBar
+            | EditorViewEvent::InsertedEmbeddedObject(_)
+            | EditorViewEvent::CopiedBlock { .. }
+            | EditorViewEvent::NavigatedCommands
+            | EditorViewEvent::ChangedSelectionMode(_)
+            | EditorViewEvent::TextSelectionChanged => {}
         }
     }
 
@@ -493,7 +498,8 @@ impl View for InlineCommentView {
         render_inline_comment_shell(
             ChildView::new(&self.body_editor).finish(),
             footer_row,
-            if self.is_editing() { Some(200.) } else { None },
+            if self.is_editing() { Some(MAX_COMMENT_HEIGHT) } else { None },
+            12.,
             appearance,
         )
     }

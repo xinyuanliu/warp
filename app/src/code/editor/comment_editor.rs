@@ -19,6 +19,7 @@ use warpui::{
 };
 
 use crate::code::editor::comments::{EditorCommentsModel, PendingCommentEvent};
+use crate::features::FeatureFlag;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::editor::InteractionState;
@@ -58,6 +59,7 @@ pub(crate) fn render_inline_comment_shell(
     body: Box<dyn Element>,
     footer_row: Box<dyn Element>,
     max_height: Option<f32>,
+    footer_horizontal_padding: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let background = inline_comment_background(appearance);
@@ -79,7 +81,7 @@ pub(crate) fn render_inline_comment_shell(
         .with_child(
             Container::new(footer_row)
                 .with_vertical_padding(4.)
-                .with_horizontal_padding(12.)
+                .with_horizontal_padding(footer_horizontal_padding)
                 .with_border(Border::top(1.).with_border_fill(border_color))
                 .finish(),
         )
@@ -158,43 +160,6 @@ impl CommentEditor {
             remove_button,
             line: None,
             show_remove_button: false,
-            save_button_disabled: true,
-            laid_out_size: RefCell::new(None),
-            is_imported_comment: false,
-        };
-        me.update_save_button_state(ctx);
-        me
-    }
-
-    #[allow(unused)] // TODO(CODE-1464): use this
-    pub fn new_embedded(
-        ctx: &mut ViewContext<Self>,
-        comment_model: ModelHandle<EditorCommentsModel>,
-        comment_id: Option<CommentId>,
-        line: EditorLineLocation,
-    ) -> Self {
-        let editor = create_editable_comment_markdown_editor(None, ctx);
-
-        ctx.subscribe_to_view(&editor, |me, _, event, ctx| {
-            me.handle_editor_event(event, ctx);
-        });
-
-        ctx.subscribe_to_model(&comment_model, |me, _, event, ctx| {
-            me.handle_comment_model_event(event, ctx);
-        });
-
-        let (save_button, close_button, remove_button) = Self::create_buttons(ctx);
-
-        let show_remove_button = comment_id.is_some();
-
-        let mut me = Self {
-            comment_id,
-            editor,
-            save_button,
-            close_button,
-            remove_button,
-            line: Some(line),
-            show_remove_button,
             save_button_disabled: true,
             laid_out_size: RefCell::new(None),
             is_imported_comment: false,
@@ -333,7 +298,6 @@ impl CommentEditor {
         self.inline_height(app).as_f32() >= MAX_COMMENT_HEIGHT - 0.5
     }
 
-    #[allow(unused)] // TODO(CODE-1464): use this
     pub fn set_laid_out_size(&self, value: Vector2F) {
         self.laid_out_size.replace(Some(value));
     }
@@ -420,7 +384,19 @@ impl CommentEditor {
             EditorViewEvent::EscapePressed => {
                 self.handle_escape(ctx);
             }
-            _ => {}
+            EditorViewEvent::Focused
+            | EditorViewEvent::Navigate(_)
+            | EditorViewEvent::OpenFile { .. }
+            | EditorViewEvent::RunWorkflow(_)
+            | EditorViewEvent::EditWorkflow(_)
+            | EditorViewEvent::OpenedBlockInsertionMenu(_)
+            | EditorViewEvent::OpenedEmbeddedObjectSearch
+            | EditorViewEvent::OpenedFindBar
+            | EditorViewEvent::InsertedEmbeddedObject(_)
+            | EditorViewEvent::CopiedBlock { .. }
+            | EditorViewEvent::NavigatedCommands
+            | EditorViewEvent::ChangedSelectionMode(_)
+            | EditorViewEvent::TextSelectionChanged => {}
         }
     }
 
@@ -596,10 +572,16 @@ impl View for CommentEditor {
 
         let footer_row = self.render_footer_row(appearance, background);
 
+        let footer_padding = if FeatureFlag::EmbeddedCodeReviewComments.is_enabled() {
+            12.
+        } else {
+            4.
+        };
         render_inline_comment_shell(
             ChildView::new(&self.editor).finish(),
             footer_row,
             Some(MAX_COMMENT_HEIGHT),
+            footer_padding,
             appearance,
         )
     }

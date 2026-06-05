@@ -13,7 +13,7 @@ use num_traits::SaturatingSub;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use string_offset::CharOffset;
-use vec1::{Vec1, vec1};
+use vec1::{vec1, Vec1};
 use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
 use warp_core::platform::SessionPlatform;
 use warp_editor::content::buffer::{
@@ -29,10 +29,10 @@ use warp_editor::render::element::{
     DisplayOptions, DisplayStateHandle, RichTextElement, VerticalExpansionBehavior,
 };
 use warp_editor::render::model::{
-    AutoScrollMode, BlockSpacing, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, CommentBlock,
-    Decoration, ExpansionType, LineCount, ParagraphStyles, RichTextStyles,
+    AutoScrollMode, BlockSpacing, CommentBlock, Decoration, ExpansionType, LineCount,
+    ParagraphStyles, RichTextStyles, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES,
 };
-use warp_editor::search::{MATCH_FILL, SELECTED_MATCH_FILL, SearchEvent, Searcher};
+use warp_editor::search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL};
 use warp_util::content_version::ContentVersion;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::new_scrollable::{
@@ -55,7 +55,6 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
-use crate::code::editor::EditorReviewComment;
 use crate::code::editor::comment_editor::{
     CommentEditor, CommentEditorEvent, DEFAULT_COMMENT_MAX_WIDTH,
 };
@@ -75,6 +74,7 @@ use crate::code::editor::model::{
 };
 use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
 use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
+use crate::code::editor::EditorReviewComment;
 use crate::code::{
     DiffResult, NoopCommentEditorProvider, NoopFindReferencesCardProvider,
     ShowCommentEditorProvider, ShowFindReferencesCardProvider,
@@ -87,9 +87,8 @@ use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings}
 use crate::view_components::find::FindDirection;
 
 mod actions;
-pub(super) use actions::CodeEditorViewAction;
 pub use actions::init;
-
+pub(super) use actions::CodeEditorViewAction;
 
 mod vim_handler;
 
@@ -1142,6 +1141,9 @@ impl CodeEditorView {
     ///
     /// This only ever runs in `&mut self`, never in `render`, so the hosted views are never created
     /// during rendering (they are reconciled in `set_comment_locations`).
+    // TODO: consider a dirty flag to avoid redundant full reconciliation passes — the current
+    // frequency (every keystroke, render-state observation, save, cancel, etc.) is acceptable for
+    // the comment counts expected in the initial rollout.
     fn sync_inline_comment_blocks(&mut self, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::EmbeddedCodeReviewComments.is_enabled() {
             self.model.update(ctx, |model, ctx| {
@@ -2476,8 +2478,8 @@ impl View for CodeEditorView {
             let render_state_ref = render_state.as_ref(app);
             let softwrap_point = render_state_ref.offset_to_softwrap_point(*offset);
             let line_number = LineCount::from(softwrap_point.row() as usize + 1); // Convert 0-indexed to 1-indexed
-            // Create a simple EditorLineLocation::Current with the line number
-            // We don't have hunk range info here, so use a single-line range
+                                                                                  // Create a simple EditorLineLocation::Current with the line number
+                                                                                  // We don't have hunk range info here, so use a single-line range
             let anchor_line = EditorLineLocation::Current {
                 line_number,
                 line_range: line_number..line_number + LineCount::from(1),

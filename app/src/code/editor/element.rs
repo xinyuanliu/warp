@@ -1,23 +1,23 @@
 mod gutter_button;
 use std::ops::Range;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 pub use gutter_button::{AddAsContextButton, CommentButton, RevertHunkButton};
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{Vector2F, vec2f};
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
 use warp_editor::editor::EditorView;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
 use warp_editor::render::model::{
-    BlockItem, BlockLocation, ExpansionType, LineCount, RenderLineLocation, RenderState,
-    gutter_expansion_button_types,
+    gutter_expansion_button_types, BlockItem, BlockLocation, ExpansionType, LineCount,
+    RenderLineLocation, RenderState,
 };
 use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui::elements::{
