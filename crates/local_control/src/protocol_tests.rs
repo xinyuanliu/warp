@@ -96,6 +96,22 @@ fn core_smoke_metadata_has_explicit_read_metadata_category() {
         assert_eq!(metadata.target_scope, TargetScope::Instance);
     }
 }
+#[test]
+fn implemented_catalog_is_exactly_the_first_slice() {
+    let actions = ActionKind::implemented_metadata()
+        .into_iter()
+        .map(|metadata| metadata.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actions,
+        vec![
+            ActionKind::InstanceList,
+            ActionKind::AppPing,
+            ActionKind::AppVersion,
+            ActionKind::TabCreate,
+        ]
+    );
+}
 
 #[test]
 fn action_metadata_serializes_security_categories() {

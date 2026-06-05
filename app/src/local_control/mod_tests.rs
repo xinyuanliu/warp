@@ -1,23 +1,30 @@
 use std::collections::HashMap;
 
-use ::local_control::auth::CredentialGrant;
+#[cfg(unix)]
+use super::ensure_peer_uid;
+use ::local_control::auth::{CredentialGrant, CredentialRequest};
 use ::local_control::protocol::ActionKind;
 use ::local_control::protocol::{
     Action, PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector,
     WindowTarget,
 };
-use ::local_control::{ErrorCode, InstanceId, InvocationContext};
-use axum::http::header::{HOST, ORIGIN};
+use ::local_control::{ErrorCode, InstanceId, InvocationContext, RequestEnvelope};
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderValue};
 use chrono::Duration;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
+use warpui::SingletonEntity as _;
 
 use super::{
     capabilities, ensure_feature_enabled, ensure_protocol_version, ensure_settings_allow_action,
-    insert_credential, outside_warp_control_enabled_for_settings, require_active_window_id,
-    validate_action_params, validate_loopback_headers, validate_request_authority,
-    validate_tab_create_target, MAX_ACTIVE_CREDENTIALS,
+    handle_control_request, insert_credential, issue_credential, lookup_credential,
+    outside_warp_control_enabled_for_settings, require_active_window_id, resolve_index_from_ids,
+    resolve_title_from_matches, validate_action_params, validate_loopback_headers,
+    validate_request_authority, validate_tab_create_target, ControlServerState, LocalControlBridge,
+    MAX_ACTIVE_CREDENTIALS,
 };
 use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 
@@ -25,6 +32,28 @@ fn settings_with_mode(mode: LocalControlMode) -> LocalControlSettings {
     LocalControlSettings {
         local_control_mode: LocalControlModeSetting::new(Some(mode)),
     }
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn credential_broker_rejects_peer_from_different_user() {
+    let (stream, _peer) = tokio::net::UnixStream::pair().expect("socket pair");
+    let actual_uid = stream.peer_cred().expect("peer credentials").uid();
+    let different_uid = if actual_uid == u32::MAX {
+        actual_uid - 1
+    } else {
+        actual_uid + 1
+    };
+
+    let err = ensure_peer_uid(&stream, different_uid).expect_err("different user is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn credential_broker_accepts_peer_from_same_user() {
+    let (stream, _peer) = tokio::net::UnixStream::pair().expect("socket pair");
+    let actual_uid = stream.peer_cred().expect("peer credentials").uid();
+
+    ensure_peer_uid(&stream, actual_uid).expect("same user is accepted");
 }
 
 #[test]
@@ -172,6 +201,28 @@ fn tab_create_requires_active_window() {
 }
 
 #[test]
+fn window_title_resolution_distinguishes_missing_and_ambiguous_targets() {
+    let missing = resolve_title_from_matches(&[], ActionKind::TabCreate)
+        .expect_err("zero-match title is missing");
+    assert_eq!(missing.code, ErrorCode::MissingTarget);
+
+    let matches = [
+        warpui::WindowId::from_usize(1),
+        warpui::WindowId::from_usize(2),
+    ];
+    let ambiguous = resolve_title_from_matches(&matches, ActionKind::TabCreate)
+        .expect_err("multi-match title is ambiguous");
+    assert_eq!(ambiguous.code, ErrorCode::AmbiguousTarget);
+}
+
+#[test]
+fn missing_window_index_returns_missing_target() {
+    let err = resolve_index_from_ids(std::iter::empty(), 0, ActionKind::TabCreate)
+        .expect_err("zero-match index is missing");
+    assert_eq!(err.code, ErrorCode::MissingTarget);
+}
+
+#[test]
 fn feature_flag_disabled_denies_local_control() {
     let _flag = FeatureFlag::WarpControlCli.override_enabled(false);
     let err = ensure_feature_enabled().expect_err("feature flag disabled");
@@ -314,4 +365,98 @@ fn credential_insertion_prunes_expired_and_caps_active_grants() {
     }
     assert_eq!(credentials.len(), MAX_ACTIVE_CREDENTIALS);
     assert!(credentials.contains_key(&format!("active-{}", MAX_ACTIVE_CREDENTIALS - 1)));
+}
+
+#[test]
+fn expired_credential_is_rejected_and_pruned_before_request_decode() {
+    let mut credentials = HashMap::new();
+    let token = ::local_control::AuthToken::from_secret("expired");
+    credentials.insert(
+        token.secret().to_owned(),
+        CredentialGrant::new(
+            InstanceId("inst_test".to_owned()),
+            ActionKind::TabCreate,
+            InvocationContext::OutsideWarp,
+            Duration::minutes(-1),
+        ),
+    );
+
+    let err = lookup_credential(
+        &mut credentials,
+        &token,
+        &InstanceId("inst_test".to_owned()),
+    )
+    .expect_err("expired grant is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+    assert!(!credentials.contains_key(token.secret()));
+}
+
+#[test]
+fn mode_narrowing_invalidates_existing_outside_warp_grant_and_prevents_new_grants() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    warpui::App::test((), |mut app| async move {
+        crate::test_util::settings::initialize_settings_for_tests(&mut app);
+        app.update(|ctx| {
+            LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .local_control_mode
+                    .set_value(LocalControlMode::EnabledEverywhere, ctx)
+            })
+        })
+        .expect("outside-Warp control should enable");
+
+        let instance_id = InstanceId("inst_test".to_owned());
+        let expected_host = "127.0.0.1:1234".to_owned();
+        let bridge = app.add_singleton_model(LocalControlBridge::new);
+        let state = bridge.update(&mut app, |bridge, ctx| {
+            bridge.set_instance_id(instance_id.clone());
+            ControlServerState {
+                bridge_spawner: ctx.spawner(),
+                instance_id: instance_id.clone(),
+                expected_host: expected_host.clone(),
+                credentials: Default::default(),
+            }
+        });
+        let credential = issue_credential(
+            &state,
+            CredentialRequest::new(ActionKind::AppPing, InvocationContext::OutsideWarp),
+        )
+        .await
+        .expect("outside-Warp credential should be issued");
+
+        app.update(|ctx| {
+            LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .local_control_mode
+                    .set_value(LocalControlMode::EnabledWithinWarp, ctx)
+            })
+        })
+        .expect("mode should narrow");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HOST,
+            HeaderValue::from_str(&expected_host).expect("valid host"),
+        );
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&credential.authorization_value()).expect("valid credential"),
+        );
+        let request = RequestEnvelope::new(Action::new(ActionKind::AppPing));
+        let response = handle_control_request(
+            State(state.clone()),
+            headers,
+            Bytes::from(serde_json::to_vec(&request).expect("request serializes")),
+        )
+        .await;
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+
+        let err = issue_credential(
+            &state,
+            CredentialRequest::new(ActionKind::AppPing, InvocationContext::OutsideWarp),
+        )
+        .await
+        .expect_err("narrowed mode should prevent new outside-Warp grants");
+        assert_eq!(err.code, ErrorCode::LocalControlDisabled);
+    });
 }

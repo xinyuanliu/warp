@@ -168,7 +168,7 @@ impl SettingsWidget for LocalControlModeWidget {
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
             Some(
-                "Enabling scripting allows for programmatic and agentic control of Warp. Please refer to the docs for more info."
+                "Disabled blocks all Warp control. Enabled within Warp is reserved for verified Warp terminals and currently rejects requests. Enabled everywhere also allows scripts and automation from other apps to control Warp."
                     .to_owned(),
             ),
         )

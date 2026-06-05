@@ -67,6 +67,20 @@ fn scoped_credential_rejects_different_instance() {
         .expect_err("other instance is rejected");
     assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
 }
+#[test]
+fn scoped_credential_rejects_expired_grant() {
+    let grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::TabCreate,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(-1),
+    );
+
+    let err = grant
+        .verify_for_action(&grant.instance_id, ActionKind::TabCreate)
+        .expect_err("expired grant is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+}
 
 #[test]
 fn scoped_credential_carries_authenticated_user_metadata() {

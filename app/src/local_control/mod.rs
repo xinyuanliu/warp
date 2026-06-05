@@ -1,19 +1,17 @@
 //! Local HTTP server entry point for Warp control requests.
 //!
 //! This module owns the in-process listener, discovery registration, credential
-//! broker endpoint, and request handoff from Axum into the WarpUI model graph.
+//! broker socket, and request handoff from Axum into the WarpUI model graph.
 //!
-//! Authentication is split into two localhost endpoints. Clients first request a
-//! short-lived scoped credential from `/v1/control/credentials`; the localhost
-//! server running inside Warp checks the feature flag, requested invocation
-//! context, action metadata, execution-context proof, and Settings > Scripting
-//! permissions before minting a bearer token. Outside-Warp clients use the
-//! localhost credential broker directly; verified inside-Warp terminal
-//! credentials remain future work until the app-issued proof broker is
-//! implemented. The client then presents that bearer token to `/v1/control`,
-//! where the server looks up the in-memory grant, verifies it still matches the
-//! requested action, and only then hands the request to the main-thread
-//! `LocalControlBridge`.
+//! Clients first request a short-lived scoped credential from an owner-authenticated
+//! Unix-domain-socket broker. The broker checks the caller's peer UID, feature
+//! flag, requested invocation context, action metadata, execution-context proof,
+//! and Settings > Scripting permissions before minting a bearer token. Verified
+//! inside-Warp terminal credentials remain future work until the app-issued proof
+//! broker is implemented. The client then presents that bearer token to
+//! `/v1/control`, where the server looks up the in-memory grant, verifies it still
+//! matches the requested action, and only then hands the request to the
+//! main-thread `LocalControlBridge`.
 //!
 //! The Settings > Scripting gates used here are local-only settings backed by
 //! Warp's secure storage provider.
@@ -27,7 +25,11 @@ mod permissions;
 mod resolver;
 
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::fs::Permissions;
 use std::net::SocketAddr;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::sync::{Arc, Mutex};
 
 use ::local_control::auth::{CredentialGrant, CredentialRequest, ScopedCredential};
@@ -36,7 +38,7 @@ use ::local_control::{
     ErrorResponseEnvelope, InstanceId, InstanceRecord, RegisteredInstance, RequestEnvelope,
     ResponseEnvelope,
 };
-use axum::extract::rejection::JsonRejection;
+use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::header::{AUTHORIZATION, HOST, ORIGIN};
 use axum::http::{HeaderMap, StatusCode};
@@ -44,6 +46,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use chrono::Duration;
+#[cfg(unix)]
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
@@ -175,6 +179,8 @@ impl LocalControlServer {
             ctx.spawner()
         });
         let registered_instance = RegisteredInstance::register(record)?;
+        #[cfg(unix)]
+        let broker_listener = bind_credential_broker(registered_instance.record())?;
         let state = ControlServerState {
             bridge_spawner,
             instance_id,
@@ -183,13 +189,14 @@ impl LocalControlServer {
         };
         let router = Router::new()
             .route("/v1/control", post(handle_control_request))
-            .route("/v1/control/credentials", post(handle_credential_request))
-            .with_state(state);
+            .with_state(state.clone());
         runtime.spawn(async move {
             if let Err(err) = axum::serve(listener, router).await {
                 log::warn!("local-control listener stopped: {err:#}");
             }
         });
+        #[cfg(unix)]
+        runtime.spawn(run_credential_broker(broker_listener, state));
         Ok(Self {
             _runtime: Some(runtime),
             control_endpoint: Some(control_endpoint),
@@ -209,6 +216,7 @@ impl LocalControlServer {
         };
         let mut record = discovery_record_for_settings(ctx, control_endpoint);
         record.instance_id = registered_instance.record().instance_id.clone();
+        record.credential_broker = registered_instance.record().credential_broker.clone();
         registered_instance.update(record)
     }
 }
@@ -229,111 +237,171 @@ fn discovery_record_for_settings(
     )
 }
 
-async fn handle_credential_request(
-    State(state): State<ControlServerState>,
-    headers: HeaderMap,
-    payload: Result<Json<CredentialRequest>, JsonRejection>,
-) -> Response {
-    if let Err(error) = validate_loopback_headers(&headers, &state.expected_host) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(error)),
-        )
-            .into_response();
+#[cfg(unix)]
+fn bind_credential_broker(
+    record: &InstanceRecord,
+) -> Result<tokio::net::UnixListener, ControlError> {
+    let socket_path = record.broker_socket_path()?;
+    if socket_path.exists() {
+        std::fs::remove_file(&socket_path).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::Internal,
+                "failed to remove stale local-control credential broker socket",
+                err.to_string(),
+            )
+        })?;
     }
-    if let Err(error) = ensure_feature_enabled() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(error)),
+    let listener = tokio::net::UnixListener::bind(&socket_path).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::Internal,
+            "failed to bind owner-authenticated local-control credential broker",
+            err.to_string(),
         )
-            .into_response();
+    })?;
+    std::fs::set_permissions(&socket_path, Permissions::from_mode(0o600)).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::Internal,
+            "failed to protect local-control credential broker socket",
+            err.to_string(),
+        )
+    })?;
+    Ok(listener)
+}
+
+#[cfg(unix)]
+async fn run_credential_broker(listener: tokio::net::UnixListener, state: ControlServerState) {
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_credential_broker_connection(stream, state).await {
+                log::warn!("local-control credential broker connection failed: {err:#}");
+            }
+        });
     }
-    let request = match payload {
-        Ok(Json(request)) => request,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponseEnvelope::new(ControlError::with_details(
+}
+
+#[cfg(unix)]
+async fn handle_credential_broker_connection(
+    mut stream: tokio::net::UnixStream,
+    state: ControlServerState,
+) -> Result<(), ControlError> {
+    let response = match ensure_same_user_peer(&stream) {
+        Ok(()) => {
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).await.map_err(|err| {
+                ControlError::with_details(
+                    ErrorCode::InvalidRequest,
+                    "failed to read local-control credential request",
+                    err.to_string(),
+                )
+            })?;
+            match serde_json::from_slice::<CredentialRequest>(&bytes) {
+                Ok(request) => issue_credential(&state, request)
+                    .await
+                    .and_then(|credential| serialize_credential_broker_response(&credential)),
+                Err(err) => Err(ControlError::with_details(
                     ErrorCode::InvalidRequest,
                     "failed to decode local-control credential request",
                     err.to_string(),
-                ))),
-            )
-                .into_response();
+                )),
+            }
         }
+        Err(error) => Err(error),
     };
-    if let Err(error) = ensure_protocol_version(request.protocol_version) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponseEnvelope::new(error)),
+    let bytes = match response {
+        Ok(bytes) => bytes,
+        Err(error) => serialize_credential_broker_response(&ErrorResponseEnvelope::new(error))?,
+    };
+    stream.write_all(&bytes).await.map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to write local-control credential response",
+            err.to_string(),
         )
-            .into_response();
+    })
+}
+
+#[cfg(unix)]
+fn ensure_same_user_peer(stream: &tokio::net::UnixStream) -> Result<(), ControlError> {
+    ensure_peer_uid(stream, unsafe { libc::geteuid() })
+}
+
+#[cfg(unix)]
+fn ensure_peer_uid(stream: &tokio::net::UnixStream, expected_uid: u32) -> Result<(), ControlError> {
+    let peer = stream.peer_cred().map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::UnauthorizedLocalClient,
+            "failed to identify local-control credential broker peer",
+            err.to_string(),
+        )
+    })?;
+    if peer.uid() != expected_uid {
+        return Err(ControlError::new(
+            ErrorCode::UnauthorizedLocalClient,
+            "local-control credential broker peer belongs to a different OS user",
+        ));
     }
+    Ok(())
+}
+
+fn serialize_credential_broker_response(
+    response: &impl serde::Serialize,
+) -> Result<Vec<u8>, ControlError> {
+    serde_json::to_vec(response).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::Internal,
+            "failed to serialize local-control credential response",
+            err.to_string(),
+        )
+    })
+}
+
+async fn issue_credential(
+    state: &ControlServerState,
+    request: CredentialRequest,
+) -> Result<ScopedCredential, ControlError> {
+    ensure_feature_enabled()?;
+    ensure_protocol_version(request.protocol_version)?;
     let metadata = request.action.metadata();
     if !request.action.is_implemented() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponseEnvelope::new(ControlError::new(
-                ErrorCode::UnsupportedAction,
-                format!(
-                    "{} is not implemented by this local-control bridge",
-                    request.action.as_str()
-                ),
-            ))),
-        )
-            .into_response();
+        return Err(ControlError::new(
+            ErrorCode::UnsupportedAction,
+            format!(
+                "{} is not implemented by this local-control bridge",
+                request.action.as_str()
+            ),
+        ));
     }
     if !metadata
         .allowed_invocation_contexts
         .contains(&request.invocation_context)
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(ControlError::new(
-                ErrorCode::ExecutionContextNotAllowed,
-                format!(
-                    "{} cannot run from the requested invocation context",
-                    request.action.as_str()
-                ),
-            ))),
-        )
-            .into_response();
+        return Err(ControlError::new(
+            ErrorCode::ExecutionContextNotAllowed,
+            format!(
+                "{} cannot run from the requested invocation context",
+                request.action.as_str()
+            ),
+        ));
     }
-    if let Err(error) = request.verify_execution_context_proof() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponseEnvelope::new(error)),
-        )
-            .into_response();
-    }
-    let settings_check = state
+    request.verify_execution_context_proof()?;
+    state
         .bridge_spawner
         .spawn({
             let action = request.action;
             let invocation_context = request.invocation_context;
             move |_, ctx| ensure_action_allowed(invocation_context, action, ctx)
         })
-        .await;
-    match settings_check {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponseEnvelope::new(error)),
+        .await
+        .map_err(|_| {
+            ControlError::new(
+                ErrorCode::BridgeUnavailable,
+                "local-control app bridge is unavailable",
             )
-                .into_response();
-        }
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponseEnvelope::new(ControlError::new(
-                    ErrorCode::BridgeUnavailable,
-                    "local-control app bridge is unavailable",
-                ))),
-            )
-                .into_response();
-        }
-    }
+        })??;
     let auth_token = AuthToken::generate();
     let grant = CredentialGrant::new(
         state.instance_id.clone(),
@@ -341,35 +409,27 @@ async fn handle_credential_request(
         request.invocation_context,
         Duration::minutes(5),
     );
-    let mut credentials = match state.credentials.lock() {
-        Ok(credentials) => credentials,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponseEnvelope::new(ControlError::new(
-                    ErrorCode::Internal,
-                    "local-control credential broker is unavailable",
-                ))),
-            )
-                .into_response();
-        }
-    };
+    let mut credentials = state.credentials.lock().map_err(|_| {
+        ControlError::new(
+            ErrorCode::Internal,
+            "local-control credential broker is unavailable",
+        )
+    })?;
     insert_credential(
         &mut credentials,
         auth_token.secret().to_owned(),
         grant.clone(),
     );
-    Json(ScopedCredential {
+    Ok(ScopedCredential {
         bearer_token: auth_token.secret().to_owned(),
         grant,
     })
-    .into_response()
 }
 
 async fn handle_control_request(
     State(state): State<ControlServerState>,
     headers: HeaderMap,
-    payload: Result<Json<RequestEnvelope>, JsonRejection>,
+    payload: Bytes,
 ) -> Response {
     if let Err(error) = validate_loopback_headers(&headers, &state.expected_host) {
         return (
@@ -398,22 +458,8 @@ async fn handle_control_request(
                 .into_response();
         }
     };
-    let request = match payload {
-        Ok(Json(request)) => request,
-        Err(err) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponseEnvelope::new(ControlError::with_details(
-                    ErrorCode::InvalidRequest,
-                    "failed to decode local-control request",
-                    err.to_string(),
-                ))),
-            )
-                .into_response();
-        }
-    };
     let grant = match state.credentials.lock() {
-        Ok(credentials) => credentials.get(auth_token.secret()).cloned(),
+        Ok(mut credentials) => lookup_credential(&mut credentials, &auth_token, &state.instance_id),
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -425,15 +471,29 @@ async fn handle_control_request(
                 .into_response();
         }
     };
-    let Some(grant) = grant else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponseEnvelope::new(ControlError::new(
-                ErrorCode::UnauthorizedLocalClient,
-                "local-control credential is invalid",
-            ))),
-        )
-            .into_response();
+    let grant = match grant {
+        Ok(grant) => grant,
+        Err(error) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponseEnvelope::new(error)),
+            )
+                .into_response();
+        }
+    };
+    let request = match serde_json::from_slice::<RequestEnvelope>(&payload) {
+        Ok(request) => request,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponseEnvelope::new(ControlError::with_details(
+                    ErrorCode::InvalidRequest,
+                    "failed to decode local-control request",
+                    err.to_string(),
+                ))),
+            )
+                .into_response();
+        }
     };
     let request_id = request.request_id;
     let response = match state
@@ -475,6 +535,29 @@ fn insert_credential(
     credentials.insert(secret, grant);
 }
 
+fn lookup_credential(
+    credentials: &mut HashMap<String, CredentialGrant>,
+    auth_token: &AuthToken,
+    instance_id: &InstanceId,
+) -> Result<CredentialGrant, ControlError> {
+    if credentials
+        .get(auth_token.secret())
+        .is_some_and(CredentialGrant::is_expired)
+    {
+        credentials.remove(auth_token.secret());
+    }
+    let grant = credentials
+        .get(auth_token.secret())
+        .cloned()
+        .ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::UnauthorizedLocalClient,
+                "local-control credential is invalid",
+            )
+        })?;
+    grant.verify_for_action(instance_id, grant.action)?;
+    Ok(grant)
+}
 fn outside_warp_publication_supported() -> bool {
     cfg!(not(target_os = "windows"))
 }
@@ -521,7 +604,8 @@ pub(crate) use permissions::{
 };
 #[cfg(test)]
 pub(crate) use resolver::{
-    require_active_window_id, validate_action_params, validate_tab_create_target,
+    require_active_window_id, resolve_index_from_ids, resolve_title_from_matches,
+    validate_action_params, validate_tab_create_target,
 };
 
 #[cfg(test)]

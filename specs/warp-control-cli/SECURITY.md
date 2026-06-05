@@ -1,10 +1,10 @@
 # warpctrl security architecture
 `warpctrl` is a local-control CLI for an already-running Warp app instance. Its security architecture is designed to support the control catalog: discovery, structural metadata reads, underlying data reads, app-state mutations, metadata/configuration mutations, underlying data mutations, input-buffer staging, file/path app-state intents, Warp Drive operations, and explicitly authenticated execution-underlying actions. Accepted-command submission and agent-prompt submission remain future high-risk capabilities that require separate product/security review. Local file content operations are intentionally excluded from the public `warpctrl` catalog because native agent file tools are the preferred surface for file content reads and writes.
-The correct architecture is not a single shared localhost bearer token with client-side conventions. The CLI, app bridge, and protocol must treat security as a local app-enforced capability system: discovery finds compatible instances, secure storage protects raw credential material, broker-issued credentials identify the granted scopes, the running Warp app's local-control bridge enforces action categories before dispatch, and target resolution never silently retargets a request.
+The correct architecture is not a single shared localhost bearer token with client-side conventions. The CLI, app bridge, and protocol must treat security as a local app-enforced capability system: discovery finds compatible instances, protected storage safeguards the authoritative mode and any future long-lived proof secrets, broker-issued credentials identify the granted scopes, the running Warp app's local-control bridge enforces action categories before dispatch, and target resolution never silently retargets a request.
 The action-category model is primarily a safety and intent mechanism, not a hard security boundary against malicious same-user software. It lets a user, script, or agent intentionally request metadata-only, data-read, app-state mutation, metadata/configuration mutation, or underlying-data mutation access so it does not accidentally mutate state, expose sensitive content, or execute commands. It should not be described as strong access control against a process that can already run arbitrary commands as the user.
-`warpctrl` has two distinct authorization dimensions: local-control authority and authenticated scripting authority. Local-control authority proves the request is allowed to control the local app. Authenticated scripting authority proves the Warp user or automation identity that is allowed to act on user-authenticated data such as Warp Drive objects, AI conversation traces, synced settings, cloud-backed user state, and execution-underlying actions. Logged-out users should retain a smaller local-only control surface, but authenticated-user and high-risk underlying-data mutation actions require either a verified Warp-terminal grant tied to the selected app's logged-in user or an external Warp-issued API-key grant.
+`warpctrl` has two distinct authorization dimensions: local-control authority and authenticated scripting authority. Local-control authority proves the request is allowed to control the local app. Authenticated scripting authority proves the logged-in Warp user that is allowed to act on user-authenticated data such as Warp Drive objects, AI conversation traces, synced settings, cloud-backed user state, and execution-underlying actions. Logged-out users should retain a smaller local-only control surface, but authenticated-user and high-risk underlying-data mutation actions require a verified Warp-terminal grant tied to the selected app's logged-in user.
 ## Current foundation status
-The current foundation implementation stores a single local-control mode with three choices: disabled by default, enabled within Warp, and enabled everywhere including outside Warp. Verified inside-Warp invocation is specified as future work because the app-issued terminal-session proof broker, proof injection path, and session registry do not exist yet. Until those pieces land, `InvocationContext::InsideWarp` requests must be rejected with `execution_context_not_allowed`, implemented action metadata must not advertise inside-Warp support, and external requests must receive credentials only when the user selects the broadest mode. Windows outside-Warp publication remains disabled until discovery-record ACL enforcement lands.
+The current foundation implementation stores a single local-control mode with three choices: disabled by default, enabled within Warp, and enabled everywhere including outside Warp. Verified inside-Warp invocation is specified as future work because the app-issued terminal-session proof broker, proof injection path, and session registry do not exist yet. Until those pieces land, `InvocationContext::InsideWarp` requests must be rejected with `execution_context_not_allowed`, implemented action metadata must not advertise inside-Warp support, and external requests must receive credentials only when the user selects the broadest mode. On Unix, the broker authenticates the connecting OS user through kernel peer credentials before decoding credential requests, then mints short-lived scoped credentials in memory without a stored or bootstrap local-control secret. The current broker therefore trusts the owning OS user rather than authenticating Warp-signed client code. Windows outside-Warp publication remains disabled until discovery-record ACL enforcement and an equivalent authenticated broker transport land.
 ## Security goals
 - Allow trusted local users and approved automation to control a running Warp instance through a stable, scriptable interface.
 - Prevent unauthenticated localhost clients from invoking read or mutating control actions.
@@ -14,13 +14,13 @@ The current foundation implementation stores a single local-control mode with th
 - Require explicit in-app user enablement before local control scripting from outside Warp can issue credentials or accept control requests.
 - Allow local control scripting from verified Warp-managed terminal sessions once proof verification exists and the user selects a mode that permits that context, subject to action policy.
 - Store the authoritative local-control mode in protected local storage so external apps cannot enable outside-Warp control by editing ordinary settings.
-- Keep raw credential material out of plaintext discovery records and protect it with platform secure storage where available.
+- Keep credentials out of plaintext discovery records, mint the current short-lived local-control credentials in memory, and protect any future long-lived proof or bootstrap secrets with platform secure storage where available.
 - Distinguish verified `warpctrl` invocations that originate from a Warp-managed terminal session from external same-user invocations.
 - When the broadest mode enables outside-Warp control, allow external invocations only for the action set explicitly allowed by the action catalog and granted credential.
 - Allow in-Warp invocations to receive authenticated-user grants when the selected Warp app has a true logged-in user and the user's local-control mode and action policy permit that grant.
 - Support least-privilege safety modes for automation and interactive use without relying on an unenforceable identity label.
 - Classify every action by state/data category and enforce the required permission category in the local app bridge, not in the CLI frontend.
-- Classify every action by whether it requires an authenticated Warp user. New actions should default to requiring an authenticated user unless they are deliberately reviewed as safe for logged-out or external use.
+- Classify every action by whether it requires an authenticated Warp user. New actions should default to requiring an authenticated user unless they are deliberately reviewed as logged-out-safe and therefore eligible for external use.
 - Prevent `warpctrl` from becoming an ambient full-power confused deputy that any same-user process can invoke for high-risk actions.
 - Require authenticated scripting identity, underlying-data-mutation permission, explicit target resolution, and audit records before terminal command execution or typed workflow execution can ship; accepted-command submission and agent-prompt submission remain prohibited until separately reviewed.
 - Preserve deterministic targeting so a request never silently mutates or reads the wrong window, tab, pane, session, file/path intent, or Warp Drive object.
@@ -37,11 +37,11 @@ The local-control design can provide meaningful protection for those cases by bi
 The boundary is much weaker for a different local app running as the same OS user. Same-user local apps may already have access to user-owned files such as logs, may be able to observe the screen or UI through OS permissions such as Accessibility or Screen Recording, and can often invoke user-installed command-line tools. `warpctrl` should not imply strong isolation from such software.
 For same-user local apps, the realistic goal is narrower:
 - do not leave a raw bearer token in plaintext discovery records;
-- prevent arbitrary direct HTTP calls to the localhost control listener by requiring a credential those apps cannot simply read;
-- use platform secure storage, such as macOS Keychain, so raw credentials are accessible only to Warp-owned signed code where practical;
+- prevent ambient direct HTTP calls to the localhost control listener by requiring a just-in-time broker-issued scoped credential;
+- use platform secure storage, such as macOS Keychain, for future long-lived proof or bootstrap secrets so they are accessible only to Warp-owned signed code where practical;
 - make high-risk operations go through `warpctrl` or a Warp-owned helper where user approval, configured policy, and safety grants can be applied;
 - avoid giving `warpctrl` ambient non-interactive full-control authority.
-In other words, the security model can make arbitrary direct localhost protocol calls fail, and it can make direct credential theft harder. It cannot make a same-user malicious app safe if that app can invoke `warpctrl`, automate the user's desktop, read other local state, or wait for the user to approve prompts.
+In other words, the security model can make ambient direct localhost protocol calls fail, and future protected secrets can make direct credential theft harder. The current Unix broker still allows any process running as the owning OS user to request eligible scoped credentials. It cannot make a same-user malicious app safe if that app can invoke `warpctrl`, connect to the broker, automate the user's desktop, read other local state, or wait for the user to approve prompts.
 ## Comparison with other local scripting models
 Other developer tools expose local automation through a few recurring patterns. The `warpctrl` design should borrow the parts that match Warp's needs while avoiding designs that assume localhost or same-user access is enough by itself.
 ### VS Code
@@ -96,7 +96,7 @@ Warp control has one top-level mode setting based on invocation context:
 - **Enabled everywhere, including outside Warp:** controls verified Warp-managed terminal invocations and external terminals, scripts, launch agents, IDEs, or other same-user processes.
 The mode should live in a new top-level Settings pane page named **Scripting**. The Scripting page owns the user-facing controls for local scripting surfaces, including Warp control, and should explain the difference between commands run inside Warp and commands run from other apps.
 The visible UI setting is not enough by itself. The authoritative mode must be stored in the most secure local storage provider available for the platform, with read/write access limited to the Warp application or Warp-owned trusted helper code where the platform supports that restriction. On macOS this means Keychain or an equivalent protected store constrained to Warp-signed code, not ordinary UserDefaults; on Windows this means Credential Manager, DPAPI-backed protected storage, or an equivalent app-controlled protected store; on Linux this means the platform secret service where available, with any owner-only file fallback explicitly documented as weaker. This avoids turning outside-Warp control into a feature that any process can silently enable before invoking `warpctrl`.
-Current foundation implementation note: the mode is represented in the typed `LocalControlSettings` group but is persisted through Warp's secure storage provider rather than ordinary private preferences, `settings.toml`, SQLite, or a synced cloud preference. The implemented setting must use `SyncToCloud::Never`, remain absent from user-visible settings files, generated schemas, Settings Sync, Warp Drive, local-control settings read/write commands, and user-editable or server-backed settings surfaces, and should keep migrating any earlier private-preferences value into secure storage. This is a tamper-resistant platform storage boundary, not a claim that arbitrary same-user compromise is impossible; platforms without a secure provider must document the weaker fallback.
+Current foundation implementation note: the mode is represented in the typed `LocalControlSettings` group and prefers Warp's secure storage provider over ordinary private preferences, `settings.toml`, SQLite, or a synced cloud preference. The implemented setting uses `SyncToCloud::Never` and remains absent from user-visible settings files, generated schemas, Settings Sync, Warp Drive, local-control settings read/write commands, and user-editable or server-backed settings surfaces. During migration, an earlier private-preferences value is cleared only after the protected write succeeds; when secure storage is unavailable, the value is intentionally preserved as an explicitly weaker owner-only private-preferences fallback. This is a tamper-resistant platform storage preference, not a claim that arbitrary same-user compromise is impossible.
 Enablement requirements:
 - The mode is local-only and must not sync through Settings Sync, Warp Drive, or server-backed user preferences.
 - The implemented foundation setting must remain private and absent from user-visible settings files, generated schemas, local-control settings read/write commands, and any allowlisted settings mutation catalog.
@@ -116,12 +116,12 @@ Disabled-state behavior:
 These enablement gates do not create perfect same-user malicious-app isolation. A hostile process with Accessibility or Screen Recording permission might still try to automate the Warp UI. The outside-Warp gate is still important because it closes the much easier paths where external apps silently edit local preferences, call a config CLI, or write synced settings to enable a powerful control surface.
 ### Permission categories and grants
 The foundation stack should not expose separate per-risk toggles under Settings > Scripting. Once the selected mode allows a request context, the broker and app bridge still enforce each action's catalog classification and the credential's grants:
-- **Metadata reads:** inspect non-sensitive local app structure and configuration metadata such as instances, windows, tabs, panes, app version, theme names, setting keys, action metadata, and Drive object IDs/names/types without content.
+- **Metadata reads:** inspect non-sensitive local app structure and configuration metadata such as instances, windows, tabs, panes, protocol and build identity metadata, theme names, setting keys, action metadata, and Drive object IDs/names/types without content.
 - **Underlying data reads:** read terminal output, scrollback, input buffers, command history, session traces, Warp Drive object contents, AI conversation content, and other content-bearing state.
 - **App-state mutations:** change local UI/layout/focus such as opening windows, creating tabs, closing tabs, focusing panes, splitting panes, opening panels, opening files/views, and staging text in the input buffer without executing it.
 - **Metadata/configuration mutations:** change persistent metadata or configuration such as tab/pane names, tab colors, themes, font size, zoom, allowlisted settings, and keybindings.
 - **Underlying data mutations:** mutate Warp Drive objects, share personal objects to a team, mutate AI conversation data, run terminal commands, run typed workflows, or perform any other allowlisted action that can change user data or cause external side effects.
-The single mode setting is an invocation-context gate, not a replacement for action classification. App-state mutation permission must not imply metadata/configuration mutation or underlying data mutation permission. Authenticated-user actions remain separately gated by verified Warp-terminal or external API-key identity and by the selected app's logged-in user state where required.
+The single mode setting is an invocation-context gate, not a replacement for action classification. App-state mutation permission must not imply metadata/configuration mutation or underlying data mutation permission. Authenticated-user actions remain separately gated by verified Warp-terminal identity and by the selected app's logged-in user state where required.
 ## Trust boundaries
 `warpctrl` has several distinct trust boundaries.
 ### Operating-system user boundary
@@ -135,27 +135,21 @@ Acceptable designs include a short-lived per-session capability, an app-owned br
 Verified in-Warp context can raise the maximum eligible grant set, especially for authenticated-user actions. It does not by itself bypass the selected local-control mode, action categories, target scopes, or logged-in-user requirements.
 ### Authenticated scripting boundary
 Actions that touch user-authenticated Warp data or perform high-risk underlying-data mutations require authenticated scripting authority. This includes Warp Drive object contents, object mutation, the v0 personal-to-team sharing path, AI conversation traces, cloud-backed user settings, team/account data, typed workflow execution, terminal command execution, and any other surface whose normal app access depends on the user's Warp account or can cause external side effects.
-There are two supported authenticated scripting modes:
-- **Verified Warp-terminal mode:** `warpctrl` presents an app-issued terminal-session proof. If the selected app is logged into Warp and Settings > Scripting mode plus action policy permit authenticated actions from verified Warp terminals, the broker may mint an authenticated-user grant tied to the selected app's current user subject.
-- **External API-key mode:** `warpctrl` presents a Warp-issued scripting API key or a short-lived token exchanged from that key. If the broadest mode and external authenticated grants are enabled, the broker verifies the key, scopes, expiry, revocation state, and user subject before minting a local authenticated-user grant.
-For app-backed authenticated actions, the app bridge should execute on behalf of the selected app's logged-in user through existing app auth state. For explicitly API-key-backed actions, the API key subject and scopes must be recorded in the local grant and the handler must not export raw Firebase, server, OAuth, or cloud API tokens to shell scripts. If the selected app logs out, switches users, or no longer matches a grant that requires app-user identity, authenticated actions fail with structured errors rather than falling back to logged-out behavior.
+Authenticated scripting uses verified Warp-terminal mode: `warpctrl` presents an app-issued terminal-session proof. If the selected app is logged into Warp and Settings > Scripting mode plus action policy permit authenticated actions from verified Warp terminals, the broker may mint an authenticated-user grant tied to the selected app's current user subject. External API-key authenticated scripting is not part of the selected public contract and requires a separate product/security review before it can be allowlisted.
+For app-backed authenticated actions, the app bridge should execute on behalf of the selected app's logged-in user through existing app auth state. If the selected app logs out, switches users, or no longer matches a grant that requires app-user identity, authenticated actions fail with structured errors rather than falling back to logged-out behavior.
 Logged-out users may still use the smaller local-only action set explicitly marked as not requiring authenticated scripting authority.
 ### Authenticated scripting protocol
-`warpctrl` should provide auth/status flows for both interactive app login and external API-key automation. The CLI must not collect Warp passwords and must not print or persist raw API keys outside approved secret storage.
+`warpctrl` should provide auth/status flows for interactive app login. The CLI must not collect Warp passwords.
 Requirements:
-- `warpctrl auth status [selectors]` reports whether the selected app instance is logged in, whether verified Warp-terminal authenticated grants are available, and whether an external API-key identity is configured. It may return stable, non-secret subject/scope metadata when the caller has the required grant.
+- `warpctrl auth status [selectors]` reports whether the selected app instance is logged in and whether verified Warp-terminal authenticated grants are available. It may return stable, non-secret subject/scope metadata when the caller has the required grant.
 - `warpctrl auth login [selectors]` focuses or opens the selected Warp app's normal sign-in UI and waits, or exits with actionable instructions, until the user signs in through Warp itself.
-- `warpctrl auth api-key set --key-env <env_var>|--key-stdin [selectors]` stores or references a Warp-issued scripting API key in platform secure storage. Non-interactive scripts may provide the key through a secret-manager-injected environment variable.
-- `warpctrl auth api-key status [selectors]` reports non-secret subject, expiry, and scope metadata for the configured API key.
-- `warpctrl auth api-key revoke [selectors]` removes the local key reference and revokes the server-side key where supported.
 - The credential broker may mint an app-user authenticated grant only after confirming the selected app has a true logged-in Warp user and the selected mode plus action policy allow the verified invocation context.
-- The credential broker may mint an external API-key grant only after validating the key or exchanging it for a short-lived assertion, confirming that the broadest mode and external authenticated grants are enabled, and checking that the key scope covers the requested action family and permission category.
 - Authenticated credentials are bound to the selected instance, subject, grant mode, scopes, expiry, and optional target/resource restrictions. If the app logs out, switches users, loses authenticated state, or the presented credential subject no longer matches a grant that requires app-user identity, authenticated actions fail with `authenticated_user_mismatch` or another structured authenticated-user error.
-- Raw Firebase, server, OAuth, cloud API tokens, and raw API keys must not be exported to `warpctrl` output, shell completions, generated docs, logs, discovery records, or local-control JSON responses.
+- Raw Firebase, server, OAuth, and cloud API tokens must not be exported to `warpctrl` output, shell completions, generated docs, logs, discovery records, or local-control JSON responses.
 Logged-out-safe actions continue to use local-control credentials without requiring authenticated scripting identity.
 ### Application identity boundary
-On platforms with secure credential storage, especially macOS, the raw local-control credential should be readable only by Warp-owned, correctly signed code. On macOS this means storing raw credential material in Keychain with access constrained by Warp's signing identity, designated requirement, Keychain access group, or equivalent platform mechanism. This narrows token extraction from “any same-user process can read a file” to “only trusted Warp-signed code can unwrap the secret.”
-This boundary protects the credential from direct theft and prevents arbitrary apps from making authenticated raw HTTP requests to the local-control listener. It also lets the authoritative mode be stored somewhere harder to modify than ordinary user preferences. It does not prove that the user personally intended the specific action. Any same-user process may still be able to invoke the trusted `warpctrl` binary or automate the Warp UI. That confused-deputy risk is reduced by explicit in-app enablement, scoped credential issuance, action-category policy, and local app-side bridge enforcement, but it is not eliminated as a hard same-user security boundary.
+On platforms with secure credential storage, especially macOS, future long-lived proof or bootstrap secrets should be readable only by Warp-owned, correctly signed code. On macOS this means storing that material in Keychain with access constrained by Warp's signing identity, designated requirement, Keychain access group, or equivalent platform mechanism. This narrows extraction from “any same-user process can read a file” to “only trusted Warp-signed code can unwrap the secret.”
+This future boundary protects stored secrets from direct theft and can prevent arbitrary apps from using those secrets to make authenticated raw HTTP requests to the local-control listener. It also lets the authoritative mode be stored somewhere harder to modify than ordinary user preferences. The current Unix foundation does not implement this application-identity boundary for local-control credential issuance: it verifies the broker peer's OS user and mints short-lived credentials in memory. Neither model proves that the user personally intended the specific action. Any same-user process may still be able to invoke the trusted `warpctrl` binary or automate the Warp UI. That confused-deputy risk is reduced by explicit in-app enablement, scoped credential issuance, action-category policy, and local app-side bridge enforcement, but it is not eliminated as a hard same-user security boundary.
 ### Action boundary
 Every action belongs to a state/data category. The bridge must map the requested action to a required permission category and compare that category to the presented credential before selector resolution or handler dispatch.
 ### Target boundary
@@ -184,7 +178,7 @@ The full security model has eight layers. The current foundation branch implemen
 The security model has eight layers:
 1. **Protected enablement:** Use protected local storage for the single local-control mode, with all contexts disabled by default, inside-Warp allowed only when the user selects the within-Warp or broadest mode after proof support lands, and outside-Warp off unless the broadest mode is selected.
 2. **Discovery:** Find compatible live Warp instances without granting broad authority.
-3. **Secure credential storage:** Store raw secrets outside plaintext discovery records and restrict access to trusted Warp-owned code where the platform supports it.
+3. **Secret handling:** Mint the current short-lived local-control credentials in memory, keep all secrets outside plaintext discovery records, and restrict future stored proof or bootstrap secrets to trusted Warp-owned code where the platform supports it.
 4. **Execution context verification:** Distinguish verified Warp-terminal invocations from external same-user invocations without trusting caller-declared labels.
 5. **Credential issuance:** Issue scope-specific credentials with explicit grants and lifetimes only when the selected mode allows the request's invocation context and the requested action/category is allowed.
 6. **Transport authentication:** Reject disabled or unauthenticated requests before reading or mutating app state.
@@ -198,7 +192,6 @@ sequenceDiagram
     participant Enablement as Protected enablement state
     participant Context as Execution context proof
     participant Broker as Credential broker
-    participant Store as Secure credential storage
     participant Auth as App auth state
     participant HTTP as Warp control listener
     participant Bridge as App bridge + safety policy
@@ -219,8 +212,7 @@ sequenceDiagram
         Broker->>Auth: Verify logged-in Warp user + setting
         Auth-->>Broker: User subject or unavailable
     end
-    Broker->>Store: Load or unwrap raw secret with Warp-signed access
-    Store-->>Broker: Raw secret or credential capability
+    Broker->>Broker: Mint short-lived scoped credential in memory
     Broker-->>CLI: Scoped credential with grants, context, user scope, expiry
     CLI->>HTTP: Authenticated typed request
     HTTP->>Bridge: Verify credential and protocol envelope
@@ -255,7 +247,7 @@ Discovery rules:
 ## Credential model
 The full `warpctrl` catalog requires scoped credentials. A single shared full-power bearer token is not sufficient once automation, underlying data reads, app-state mutations, metadata/configuration mutations, and underlying data mutations are supported.
 ### Credential properties
-Current foundation implementation note: `warpctrl` discovers an endpoint and then requests a short-lived credential from `/v1/control/credentials` for the specific action it is about to invoke. The discovery record publishes endpoint and broker metadata only; it does not contain bearer tokens, raw credential material, or a stored credential that the CLI unwraps and sends to the discovered port.
+Current foundation implementation note: `warpctrl` discovers a loopback control endpoint and an instance-bound Unix-domain-socket broker reference, then requests a short-lived credential over that socket for the specific action it is about to invoke. The broker authenticates the connecting peer's OS user before decoding the request. The discovery record does not contain bearer tokens, raw credential material, or a stored credential that the CLI unwraps and sends to the discovered port.
 A control credential should encode or reference:
 - issuing Warp instance;
 - protocol version or accepted version range;
@@ -274,9 +266,9 @@ Warp should issue credentials through an app-owned local broker or equivalent tr
 Recommended defaults:
 - Credential issuance is unavailable unless the protected enablement state allows the request's invocation context: inside Warp or outside Warp.
 - Commands should start from least privilege and request only the grant needed for the requested action.
-- External same-user invocations should default to the smaller logged-out-safe local action set unless policy or explicit approval grants more.
+- External same-user invocations are limited to the smaller logged-out-safe local action set. Policy or explicit approval may grant narrower or broader permission categories only within that set; neither can grant authenticated-user authority to an external invocation.
 - Verified Warp-terminal invocations may receive broader local-control grants when the selected mode and action policy allow them.
-- App-user authenticated grants are available only when the selected Warp app has a true logged-in Warp user and the requested execution context is allowed by local-control settings. External API-key authenticated grants are available only after key validation/exchange and only when external authenticated scripting is enabled.
+- App-user authenticated grants are available only when the selected Warp app has a true logged-in Warp user and a verified Warp-terminal execution context allowed by local-control settings.
 - Metadata reads require an explicit `read_metadata` grant.
 - Underlying data reads require an explicit `read_underlying_data` grant.
 - App-state mutations require an explicit `mutate_app_state` grant.
@@ -294,7 +286,7 @@ The category system should be understood as a user-intent and accident-preventio
 - Underlying data mutations can require explicit approval or configured policy so surprising operations pause before they execute commands or change user data.
 This model does not make untrusted same-user software safe. A malicious local process may invoke `warpctrl`, simulate user workflows, or use other OS-level capabilities outside `warpctrl`. The category model is still valuable because it lets honest clients, agents, and scripts constrain themselves and gives Warp a structured point to prompt, deny, or audit risky actions.
 ### Credential storage
-Credential storage should be platform-appropriate:
+The current Unix foundation stores no bootstrap or long-lived local-control secret; it mints short-lived scoped credentials in memory. Future credential and proof storage should be platform-appropriate:
 - Local discovery may store a credential reference rather than the credential itself.
 - The authoritative local-control mode should use the same class of protected local storage as raw credential material, but it should be accessible to the Warp app for the Settings > Scripting UI and not writable by `warpctrl` or arbitrary external apps.
 - Raw long-lived credentials should prefer platform-secure storage such as macOS Keychain or Windows Credential Manager when practical.
@@ -303,7 +295,7 @@ Credential storage should be platform-appropriate:
 - Short-lived credentials may be stored in owner-only local state if their lifetime and scope are narrow.
 - Credentials must never be printed in human-readable output, JSON output, logs, errors, or shell completion data.
 ### Confused-deputy mitigation
-Secure storage prevents arbitrary apps from reading the token; it does not prevent arbitrary apps from asking trusted Warp code to use the token on their behalf.
+When future secrets use application-identity-constrained secure storage, it can prevent arbitrary apps from reading the token; it does not prevent arbitrary apps from asking trusted Warp code to use the token on their behalf. The current owner-authenticated Unix broker provides no Warp-signed-code boundary against same-user clients.
 For example, if `warpctrl` can silently unwrap a full-power credential and execute any action, another same-user process can invoke `warpctrl input run ...` without reading the credential directly. That makes `warpctrl` a confused deputy.
 Mitigations:
 - Do not give `warpctrl` ambient non-interactive access to an unrestricted full-control credential.
@@ -317,13 +309,13 @@ Mitigations:
 These mitigations are about routing high-risk operations through intentional `warpctrl` flows rather than exposing a reusable localhost token to any process. They should not be documented as a guarantee that arbitrary same-user applications cannot cause Warp-visible actions.
 ## Transport authentication
 The default transport is an instance-local loopback listener bound to `127.0.0.1` on an ephemeral per-process port.
-The current just-in-time credential broker avoids the specific stale-record bearer-token phishing failure mode where `warpctrl` unwraps a long-lived Warp-held credential and sends it to a port squatter. If future designs add stored bootstrap credentials, server-held secrets, or reusable credential references that must be presented to the discovered endpoint, the client must verify the server's identity before sending that material, or the local transport should move to Unix domain sockets or an equivalent platform channel with peer identity checks.
+The current just-in-time credential broker avoids the specific stale-record bearer-token phishing failure mode where `warpctrl` unwraps a long-lived Warp-held credential and sends it to a port squatter. It uses an instance-bound Unix-domain socket inside the owner-only discovery directory and checks the peer OS user before reading the credential request. If future designs add stored bootstrap credentials, server-held secrets, or reusable credential references that must be presented to the discovered endpoint, the client must verify the server's identity before sending that material.
 Transport requirements:
 - Bind only to loopback for local control.
 - Do not set permissive CORS headers.
 - Reject any request carrying an `Origin` header.
 - Reject any request whose `Host` header is not exactly `127.0.0.1:<selected-port>` for the selected discovery record.
-- Reject discovery records unless the published control and credential-broker endpoints are equal and both use exactly `127.0.0.1`.
+- Reject discovery records unless the published control endpoint uses exactly `127.0.0.1` and the broker socket reference is the selected instance's expected filename inside the owner-only discovery directory.
 - Reject control requests when their inside-Warp or outside-Warp invocation context is disabled, even if the request presents an otherwise valid credential.
 - Authenticate every control request locally in the selected Warp app process before selector resolution or action dispatch.
 - Reject missing, malformed, expired, revoked, or invalid credentials with structured authentication errors.
@@ -332,7 +324,7 @@ Transport requirements:
 Remote URL support is a separate future transport mode. It should not reuse the local same-user credential model without additional identity, encryption, replay protection, and remote approval/policy design.
 ## Logged-in user requirements
 Local-control validation always begins with local protocol state: discovery records, secure local credential references, scoped safety grants, execution-context proof, protocol version, request shape, allowlisted actions, typed parameters, and deterministic target selectors.
-Some actions additionally require authenticated scripting authority: either a true logged-in Warp user in the selected app or an external API-key-backed subject with sufficient scopes. The action allowlist must declare this explicitly with a `requires_authenticated_user` or equivalent authenticated-scripting requirement field.
+Some actions additionally require authenticated scripting authority from a true logged-in Warp user in the selected app and a verified Warp-terminal invocation. The action allowlist must declare this explicitly with a `requires_authenticated_user` or equivalent authenticated-scripting requirement field.
 Default rule for new actions:
 - New actions require an authenticated Warp user unless the implementer deliberately classifies them as logged-out-safe.
 - The logged-out-safe set should remain meaningfully smaller and limited to local app structure, local appearance metadata, and other surfaces that do not depend on the user's cloud-backed Warp identity.
@@ -340,22 +332,21 @@ Default rule for new actions:
 - Actions that execute user-authored cloud-backed content, such as running typed Warp Drive workflows, require both authenticated scripting authority and the appropriate high-risk action category. Agent-prompt submission remains excluded until separately reviewed.
 When an authenticated-user or authenticated-scripting action is requested:
 - app-user mode requires the selected app to have an active logged-in Warp user;
-- API-key mode requires a validated key or exchanged assertion with sufficient scopes, subject, expiry, and revocation state;
-- the presented local-control credential must include an authenticated grant for that user or API-key-backed subject;
-- the selected mode, action policy, and authenticated-scripting policy must allow authenticated actions for the verified execution context or external API-key mode;
+- the presented local-control credential must include an authenticated grant for that user;
+- the selected mode, action policy, and authenticated-scripting policy must allow authenticated actions for the verified Warp-terminal execution context;
 - the app bridge should execute app-user actions through the app's existing authenticated state rather than exporting raw cloud auth credentials to `warpctrl`.
 If these conditions are not met, the app returns a structured error. It must not fall back to logged-out behavior or silently omit user-authenticated data from a result that claims success.
 ## Safety policy model
 Safety grants are enforced in the app bridge after transport authentication and before target resolution or handler dispatch. This provides consistent “do not accidentally do more than requested” behavior for honest clients, not a sandbox for hostile same-user code.
-The bridge must:
-1. Parse the typed request envelope.
-2. Verify protocol version compatibility.
-3. Authenticate the credential.
+The bridge path must:
+1. Authenticate the transport credential before decoding the typed request envelope.
+2. Parse the typed request envelope.
+3. Verify protocol version compatibility.
 4. Determine granted permission categories, execution context, target scopes, and authenticated-user grants.
 5. Map the requested action to a required permission category, action family, execution-context requirement, and authenticated-user requirement.
 6. Check optional target-family restrictions.
 7. Reject requests that exceed the credential's grants with `insufficient_permissions`.
-8. Reject authenticated-user or API-key-backed actions without the required app-user login, API-key validation, scopes, or authenticated grant with a structured authenticated-user/API-key error.
+8. Reject authenticated-user actions without the required app-user login or authenticated grant with a structured authenticated-user error.
 9. Only then resolve selectors and invoke the allowlisted handler.
 The CLI frontend may provide helpful preflight errors, but those checks are advisory. Local app-side bridge enforcement is mandatory because other tools can bypass the official CLI and speak the protocol directly.
 ## Action permission categories
@@ -461,8 +452,7 @@ Important errors include:
 - `local_control_disabled` when the relevant inside-Warp or outside-Warp scripting context is disabled in Settings > Scripting or has been disabled after credentials were issued;
 - `unauthorized_local_client` for missing, malformed, expired, revoked, or invalid credentials;
 - `insufficient_permissions` for valid credentials that lack the requested permission category or target scope;
-- `authenticated_user_required` when an action requires authenticated scripting authority but the credential lacks an authenticated-user or API-key-backed grant;
-- `api_key_required`, `api_key_invalid`, `api_key_expired`, `api_key_revoked`, and `api_key_insufficient_scope` for external API-key scripting failures, or equivalent structured variants if consolidated under existing authenticated-user errors;
+- `authenticated_user_required` when an action requires authenticated scripting authority but the credential lacks an authenticated-user grant;
 - `authenticated_user_unavailable` when the selected Warp app has no logged-in Warp user or cannot access the required authenticated user state;
 - `authenticated_user_mismatch` when an authenticated-user credential is bound to a different user subject than the user currently logged in to the selected Warp app;
 - `execution_context_not_allowed` when the action or requested grant is not allowed from the verified invocation context, such as an external client attempting an in-Warp-only authenticated-user action;
@@ -497,9 +487,9 @@ Before shipping each action family, verify that these controls are implemented f
 ## Platform requirements
 ### macOS and Linux
 Discovery files must be stored in a per-user directory with owner-only permissions.
-On macOS, raw credential material and the authoritative local-control mode should live in Keychain, not in the discovery record or an ordinary preferences file. Keychain access should be constrained to Warp-owned signed binaries or helpers using code-signing based access control. The mode should be writable by the Warp app's Settings > Scripting flow and not writable by `warpctrl`. The discovery record should hold only metadata and a credential reference when the selected mode allows the relevant invocation context.
-On Linux, raw credentials and the authoritative mode should prefer platform-secure storage where available; otherwise short-lived scoped credentials may live in owner-only local state with strict file and directory permissions. If the mode falls back to owner-only local state, the weaker same-user protection should be documented.
-Unix domain sockets with peer credential checks may be considered for stronger same-machine identity than bearer tokens alone.
+On macOS, the authoritative local-control mode and any future long-lived proof or bootstrap secrets should live in Keychain, not in the discovery record or an ordinary preferences file. Keychain access should be constrained to Warp-owned signed binaries or helpers using code-signing based access control. The mode should be writable by the Warp app's Settings > Scripting flow and not writable by `warpctrl`. The discovery record should hold only metadata and a credential reference when the selected mode allows the relevant invocation context.
+On Linux, the authoritative mode and any future long-lived proof or bootstrap secrets should prefer platform-secure storage where available; otherwise short-lived scoped credentials may live in owner-only local state with strict file and directory permissions. If the mode falls back to owner-only local state, the weaker same-user protection should be documented.
+The current Unix foundation uses an instance-bound Unix-domain-socket credential broker with peer credential checks before request decoding.
 ### Windows
 Discovery records and credential material must live under the current user's app data directory with ACLs restricted to the current user, Administrators, and SYSTEM.
 The authoritative mode should use Credential Manager, DPAPI-backed protected storage, or an equivalent app-controlled protected store rather than normal registry settings that arbitrary same-user processes can write.

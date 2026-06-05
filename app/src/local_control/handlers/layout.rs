@@ -1,4 +1,7 @@
 //! Layout mutation handlers for local-control actions.
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod tests;
 use ::local_control::protocol::TargetSelector;
 use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
 use serde::Serialize;

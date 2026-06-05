@@ -31,6 +31,29 @@ fn parses_first_slice_tab_create() {
     };
     assert_eq!(target.instance.as_deref(), Some("inst_123"));
 }
+#[test]
+fn rejects_conflicting_instance_selectors() {
+    let err = ControlArgs::try_parse_from([
+        "warpctrl",
+        "tab",
+        "create",
+        "--instance",
+        "inst_123",
+        "--pid",
+        "123",
+    ])
+    .expect_err("instance and pid conflict");
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+#[test]
+fn parses_pid_instance_selector() {
+    let args = ControlArgs::try_parse_from(["warpctrl", "app", "ping", "--pid", "123"])
+        .expect("pid selector parses");
+    let ControlCommand::App(AppCommand::Ping(target)) = args.command else {
+        panic!("expected app ping command");
+    };
+    assert_eq!(target.pid, Some(123));
+}
 
 #[test]
 fn parses_first_slice_instance_list() {
@@ -46,6 +69,40 @@ fn parses_first_slice_instance_list() {
 fn parses_first_slice_app_smoke_metadata_commands() {
     assert!(ControlArgs::try_parse_from(["warpctrl", "app", "ping"]).is_ok());
     assert!(ControlArgs::try_parse_from(["warpctrl", "app", "version"]).is_ok());
+}
+
+#[test]
+fn every_implemented_catalog_action_has_a_parser_route() {
+    let routes = [
+        (
+            local_control::protocol::ActionKind::InstanceList,
+            vec!["warpctrl", "instance", "list"],
+        ),
+        (
+            local_control::protocol::ActionKind::AppPing,
+            vec!["warpctrl", "app", "ping"],
+        ),
+        (
+            local_control::protocol::ActionKind::AppVersion,
+            vec!["warpctrl", "app", "version"],
+        ),
+        (
+            local_control::protocol::ActionKind::TabCreate,
+            vec!["warpctrl", "tab", "create"],
+        ),
+    ];
+    let implemented = local_control::protocol::ActionKind::implemented_metadata()
+        .into_iter()
+        .map(|metadata| metadata.kind)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        implemented,
+        routes.iter().map(|(action, _)| *action).collect::<Vec<_>>()
+    );
+    for (_, args) in routes {
+        ControlArgs::try_parse_from(args).expect("implemented action parser route exists");
+    }
 }
 #[test]
 fn parses_control_mode_args_after_hidden_flag() {

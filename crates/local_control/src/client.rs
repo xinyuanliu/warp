@@ -5,6 +5,14 @@ use crate::protocol::{
     Action, ActionKind, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope,
     InvocationContext, RequestEnvelope, ResponseEnvelope,
 };
+#[cfg(unix)]
+use std::io::{Read as _, Write as _};
+#[cfg(unix)]
+use std::net::Shutdown;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::path::Path;
 
 pub fn send_request(
     instance: &InstanceRecord,
@@ -59,39 +67,78 @@ pub fn send_request(
     ))
 }
 
-pub fn request_credential(
+#[cfg(unix)]
+fn request_credential_over_owner_ipc(
     instance: &InstanceRecord,
-    action: crate::protocol::ActionKind,
-    invocation_context: InvocationContext,
-) -> Result<ScopedCredential, ControlError> {
-    instance.validate_local_control_authority()?;
-    let credential_broker = instance.credential_broker.as_ref().ok_or_else(|| {
-        ControlError::new(
-            ErrorCode::LocalControlDisabled,
-            "outside-Warp local control credential broker is disabled for this instance",
+    request: &CredentialRequest,
+) -> Result<String, ControlError> {
+    let path = instance.broker_socket_path()?;
+    request_credential_over_socket(&path, request)
+}
+
+#[cfg(unix)]
+fn request_credential_over_socket(
+    path: &Path,
+    request: &CredentialRequest,
+) -> Result<String, ControlError> {
+    let mut stream = UnixStream::connect(path).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to connect to the owner-authenticated local-control credential broker",
+            err.to_string(),
         )
     })?;
-    let client = reqwest::blocking::Client::new();
-    let request = CredentialRequest::new(action, invocation_context);
-    let response = client
-        .post(credential_broker.endpoint.credential_url())
-        .json(&request)
-        .send()
-        .map_err(|err| {
-            ControlError::with_details(
-                ErrorCode::TransportUnavailable,
-                "failed to request local-control credential",
-                err.to_string(),
-            )
-        })?;
-    let status = response.status();
-    let text = response.text().map_err(|err| {
+    let request = serde_json::to_vec(request).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::InvalidRequest,
+            "failed to serialize local-control credential request",
+            err.to_string(),
+        )
+    })?;
+    stream.write_all(&request).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to write local-control credential request",
+            err.to_string(),
+        )
+    })?;
+    stream.shutdown(Shutdown::Write).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to finish local-control credential request",
+            err.to_string(),
+        )
+    })?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(|err| {
         ControlError::with_details(
             ErrorCode::TransportUnavailable,
             "failed to read local-control credential response",
             err.to_string(),
         )
     })?;
+    Ok(response)
+}
+
+#[cfg(not(unix))]
+fn request_credential_over_owner_ipc(
+    _instance: &InstanceRecord,
+    _request: &CredentialRequest,
+) -> Result<String, ControlError> {
+    Err(ControlError::new(
+        ErrorCode::LocalControlDisabled,
+        "outside-Warp local control requires an owner-authenticated credential broker",
+    ))
+}
+
+pub fn request_credential(
+    instance: &InstanceRecord,
+    action: crate::protocol::ActionKind,
+    invocation_context: InvocationContext,
+) -> Result<ScopedCredential, ControlError> {
+    instance.validate_local_control_authority()?;
+    let request = CredentialRequest::new(action, invocation_context);
+    let text = request_credential_over_owner_ipc(instance, &request)?;
     if let Ok(credential) = serde_json::from_str::<ScopedCredential>(&text) {
         return Ok(credential);
     }
@@ -100,7 +147,7 @@ pub fn request_credential(
     }
     Err(ControlError::with_details(
         ErrorCode::TransportUnavailable,
-        format!("local-control credential request failed with HTTP {status}"),
+        "local-control credential broker returned an invalid response",
         text,
     ))
 }

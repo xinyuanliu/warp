@@ -155,7 +155,7 @@ pub enum AppCommand {
     /// Check that the selected local Warp app responds.
     Ping(TargetArgs),
 
-    /// Print protocol and app version metadata for the selected local Warp app.
+    /// Print protocol and build identity metadata for the selected local Warp app.
     Version(TargetArgs),
 }
 

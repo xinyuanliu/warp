@@ -4,9 +4,9 @@ The first implementation slice is intentionally narrow:
 - discover compatible running Warp instances;
 - select one instance implicitly when unambiguous or explicitly with `--instance`;
 - request brokered scoped local-control credentials for the selected instance;
-- check app health and protocol compatibility with `warpctrl app ping` and `warpctrl app version`;
+- check app health and get protocol and build identity metadata with `warpctrl app ping` and `warpctrl app version`;
 - create a new terminal tab with `warpctrl tab create`.
-The local-control protocol and catalog are broader than this slice, but commands outside the implemented capability set should fail with structured unsupported-action errors until their handlers land.
+The local-control protocol and catalog are broader than this slice. Protocol requests for actions outside the implemented capability set fail with structured unsupported-action errors until their handlers land; command names that do not have a shipped CLI parser route use Clap's normal parser error behavior.
 ## Packaging model
 `warpctrl` should be packaged as an Oz-style wrapper script rather than a standalone Rust binary. The wrapper should resolve the installed channel-specific Warp executable and invoke it with the hidden `--warpctrl` control-mode flag:
 - `crates/local_control` owns discovery records, local authentication material, client transport, protocol envelopes, action names, and error types.
@@ -45,7 +45,7 @@ Use matching app and CLI bits from the same branch or release artifact so the pr
    ```bash
    warpctrl instance list
    ```
-4. Confirm app health and protocol compatibility:
+4. Confirm app health and inspect protocol and build identity metadata:
    ```bash
    warpctrl app ping
    warpctrl app version
@@ -74,9 +74,9 @@ Expected failures:
 ## Security model
 The local-control protocol is designed for same-user scripting, not cross-user or network access. The trust boundary is the local user account.
 - **Loopback-only listener.** Each Warp process binds its control server to `127.0.0.1` on an ephemeral port. The listener is not reachable from the network.
-- **Brokered scoped credentials.** Discovery records contain instance metadata, endpoint information, and credential-broker references only when the selected Scripting mode allows that invocation context. Published control and broker endpoints must both be exactly `127.0.0.1` and equal to each other. Records must not contain raw bearer tokens or reusable full-access credentials.
-- **Short-lived grants.** `warpctrl` requests an action-scoped credential from `/v1/control/credentials` for the selected instance and invocation context, then presents that credential to `/v1/control`. Grants are instance-bound, expired entries are pruned, and the in-memory grant set is capped. Missing, invalid, expired, revoked, wrong-instance, or insufficient-scope credentials are rejected before handler dispatch.
-- **Protected credential material.** Raw local-control secrets live in platform secure storage where available, with owner-only local-state fallbacks documented as weaker. On POSIX platforms, discovery records and fallback local state must use owner-only permissions. On Windows, records must be stored under the current user's app data directory with an ACL that grants access only to the current user, Administrators, and SYSTEM.
+- **Brokered scoped credentials.** Discovery records contain instance metadata, loopback control-endpoint information, and an instance-bound Unix-domain-socket broker reference only when the selected Scripting mode allows outside-Warp control. The broker authenticates the connecting OS user with kernel peer credentials before decoding the credential request or issuing an action-scoped credential. Records do not contain bearer tokens or reusable full-access credentials.
+- **Short-lived grants.** `warpctrl` requests an action-scoped credential over the owner-authenticated broker socket for the selected instance and invocation context, then presents that credential to `/v1/control`. Grants are instance-bound, expired entries are pruned, and the in-memory grant set is capped. Missing, invalid, expired, revoked, or wrong-instance credentials are rejected before request decoding. After decoding identifies the requested action, insufficient-scope credentials are rejected before selector resolution or handler dispatch.
+- **Protected local state.** The authoritative Scripting mode uses platform secure storage where available. During migration, an existing private-preferences value may remain as an explicitly weaker owner-only fallback when secure storage is unavailable; it remains private, local-only, and never cloud-synced. On POSIX platforms, discovery records, broker sockets, and fallback local state use owner-only permissions. On Windows, outside-Warp publication remains disabled until equivalent ACL and broker protections are implemented.
 - **Stale-record pruning.** On each `instance list` or implicit discovery call, records whose PID is no longer alive are deleted automatically. Candidates are also health-probed and accepted only when the live app reports the expected instance identity.
 - **No CORS.** The control endpoints do not set permissive CORS headers, so browser-origin JavaScript cannot read responses even if it guesses the port. The credential requirement provides a second layer since browsers cannot read the brokered credential material.
 ```mermaid
@@ -88,16 +88,17 @@ sequenceDiagram
     participant Bridge as App bridge
 
     CLI->>FS: Read discovery records (user-only permissions / ACL)
-    FS-->>CLI: instance_id, endpoint, credential broker metadata
+    FS-->>CLI: instance_id, loopback endpoint, broker socket reference
     CLI->>CLI: Prune stale PIDs, select instance
-    CLI->>Broker: POST /v1/control/credentials<br/>action + context + instance
-    Broker->>Broker: Check Settings > Scripting mode, context, scopes
+    CLI->>Broker: Connect to Unix socket<br/>action + context + instance
+    Broker->>Broker: Authenticate peer OS user before decode;<br/>check Settings > Scripting mode, context, scopes
     alt Disabled, invalid, or insufficient scope
         Broker-->>CLI: Structured denial
     else Grant allowed
         Broker-->>CLI: Short-lived scoped credential
         CLI->>HTTP: POST /v1/control<br/>Authorization: Bearer <scoped credential>
-        HTTP->>HTTP: Verify grant and action scope
+        HTTP->>HTTP: Verify credential expiry + instance binding before decode
+        HTTP->>HTTP: Decode typed request; verify action scope
         HTTP->>Bridge: Dispatch action to app context
         Bridge-->>HTTP: Structured result or error
         HTTP-->>CLI: JSON response envelope
@@ -107,9 +108,9 @@ sequenceDiagram
 - Windows outside-Warp local-control publication is disabled until discovery-record ACL creation and validation are implemented.
 - The current low-risk first slice permits reuse of an unexpired scoped grant. A replay policy is required before broader or higher-risk command families ship.
 - Same-user malicious software can still invoke trusted wrappers or automate the desktop, so brokered credentials are least-privilege guardrails rather than a complete hostile same-user sandbox.
-- Once higher-risk handlers land, the same-user boundary becomes more sensitive. Consider per-request nonces, stricter platform secure-storage constraints, or Unix domain sockets with `SO_PEERCRED` for stronger caller identity where available.
+- Once higher-risk handlers land, the same-user boundary becomes more sensitive. Consider per-request nonces, stricter platform secure-storage constraints, and stronger approval or policy gates.
 ## Documentation review notes
 - Treat `warpctrl` as provisional executable naming until packaging signs off on final artifact aliases.
-- Keep examples scoped to discovery, app health/version, and `tab create` until additional app-side handlers are implemented.
+- Keep examples scoped to discovery, app health, protocol and build identity metadata, and `tab create` until additional app-side handlers are implemented.
 - Do not document catalog commands as usable just because they exist in protocol enums or parser scaffolding; operator docs should distinguish implemented commands from planned allowlist entries.
 - Windows packaging may initially follow the existing helper-wrapper pattern. Update this README when that decision is final.

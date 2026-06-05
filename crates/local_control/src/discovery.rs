@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::protocol::{ActionMetadata, ControlError, ErrorCode, PROTOCOL_VERSION};
 
 const DISCOVERY_DIR_ENV: &str = "WARP_LOCAL_CONTROL_DISCOVERY_DIR";
+const BROKER_SOCKET_SUFFIX: &str = ".broker.sock";
 
 /// Stable identifier for one running Warp instance.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -46,16 +47,12 @@ impl ControlEndpoint {
     pub fn url(&self) -> String {
         format!("http://{}:{}/v1/control", self.host, self.port)
     }
-
-    pub fn credential_url(&self) -> String {
-        format!("http://{}:{}/v1/control/credentials", self.host, self.port)
-    }
 }
 
-/// Discovery reference to the endpoint that issues scoped credentials.
+/// Discovery reference to the owner-authenticated socket that issues scoped credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialBrokerReference {
-    pub endpoint: ControlEndpoint,
+    pub socket_path: PathBuf,
 }
 
 /// Filesystem-published metadata for a running Warp app process.
@@ -83,12 +80,13 @@ impl InstanceRecord {
         app_version: Option<String>,
         actions: Vec<ActionMetadata>,
     ) -> Self {
-        let credential_broker = endpoint
-            .clone()
-            .map(|endpoint| CredentialBrokerReference { endpoint });
+        let instance_id = InstanceId::new();
+        let credential_broker = endpoint.as_ref().map(|_| CredentialBrokerReference {
+            socket_path: broker_socket_filename(&instance_id),
+        });
         Self {
             protocol_version: PROTOCOL_VERSION,
-            instance_id: InstanceId::new(),
+            instance_id,
             pid: std::process::id(),
             channel: channel.into(),
             app_id: app_id.into(),
@@ -110,7 +108,9 @@ impl InstanceRecord {
         ) {
             (false, None, None) => Ok(()),
             (true, Some(endpoint), Some(credential_broker))
-                if endpoint.host == "127.0.0.1" && credential_broker.endpoint == *endpoint =>
+                if endpoint.host == "127.0.0.1"
+                    && credential_broker.socket_path
+                        == broker_socket_filename(&self.instance_id) =>
             {
                 Ok(())
             }
@@ -120,12 +120,24 @@ impl InstanceRecord {
             )),
         }
     }
+
+    pub fn broker_socket_path(&self) -> Result<PathBuf, ControlError> {
+        self.validate_local_control_authority()?;
+        let credential_broker = self.credential_broker.as_ref().ok_or_else(|| {
+            ControlError::new(
+                ErrorCode::LocalControlDisabled,
+                "outside-Warp local control credential broker is disabled for this instance",
+            )
+        })?;
+        Ok(discovery_dir().join(&credential_broker.socket_path))
+    }
 }
 
 /// RAII registration that publishes and removes one discovery record.
 pub struct RegisteredInstance {
     record: InstanceRecord,
     path: PathBuf,
+    broker_socket_path: Option<PathBuf>,
 }
 
 impl RegisteredInstance {
@@ -140,8 +152,16 @@ impl RegisteredInstance {
         })?;
         set_private_dir_permissions(&dir)?;
         let path = record_path(&dir, &record.instance_id);
+        let broker_socket_path = record
+            .credential_broker
+            .as_ref()
+            .map(|credential_broker| dir.join(&credential_broker.socket_path));
         write_record(&path, &record)?;
-        Ok(Self { record, path })
+        Ok(Self {
+            record,
+            path,
+            broker_socket_path,
+        })
     }
 
     pub fn record(&self) -> &InstanceRecord {
@@ -190,6 +210,9 @@ impl Drop for RegisteredInstance {
     // reference that is pruned on the next discovery scan.
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
+        if let Some(path) = &self.broker_socket_path {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
@@ -258,6 +281,9 @@ fn is_pid_alive(pid: u32) -> bool {
 
 fn record_path(dir: &Path, instance_id: &InstanceId) -> PathBuf {
     dir.join(format!("{}.json", instance_id.0))
+}
+fn broker_socket_filename(instance_id: &InstanceId) -> PathBuf {
+    PathBuf::from(format!("{}{BROKER_SOCKET_SUFFIX}", instance_id.0))
 }
 
 #[cfg(unix)]
