@@ -287,7 +287,7 @@ impl InlineCommentView {
         self.laid_out_size.borrow().as_ref().cloned()
     }
 
-    #[cfg(any(test, feature = "integration_tests"))]
+    #[cfg(feature = "integration_tests")]
     pub fn rendered_body(&self, app: &AppContext) -> String {
         self.comment_text(app)
     }

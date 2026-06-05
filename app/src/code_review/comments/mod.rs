@@ -6,8 +6,6 @@ mod flatten;
 mod pending_imported;
 
 pub(crate) use batch::{ReviewCommentBatch, ReviewCommentBatchEvent};
-#[cfg(any(test, feature = "integration_tests"))]
-pub(crate) use comment::ImportedCommentDetails;
 pub(crate) use comment::{
     AttachedReviewComment, AttachedReviewCommentTarget, CommentId, CommentOrigin, LineDiffContent,
 };

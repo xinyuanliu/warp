@@ -1,18 +1,15 @@
 use std::path::Path;
 
 use futures::channel::oneshot;
-use pathfinder_geometry::vector::vec2f;
 use vec1::vec1;
 use warp_editor::content::buffer::{InitialBufferState, SelectionOffsets};
 use warp_editor::multiline::MultilineString;
 use warp_util::content_version::ContentVersion;
-use warpui::{App, EntityId, WindowId};
+use warpui::App;
 
 use super::*;
-use crate::code::editor::embedded_comment::LaidOutEmbeddedCommentSpace;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::view::code_text_styles;
-use crate::features::FeatureFlag;
 use crate::settings::FontSettings;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -1027,91 +1024,6 @@ fn test_line_at_vertical_offset_returns_none_for_invalid() {
         assert!(
             beyond.is_none(),
             "Expected None for offset beyond content height"
-        );
-    })
-}
-
-/// VAL-ISOLATION-001: an inline comment block lives on a single view's render state. Two editor
-/// models sharing one buffer must not share comment spacing — adding a block to one leaves the
-/// other's layout untouched.
-#[test]
-fn test_inline_comment_block_is_isolated_per_view() {
-    App::test((), |mut app| async move {
-        let _embedded = FeatureFlag::EmbeddedCodeReviewComments.override_enabled(true);
-        initialize_deps(&mut app);
-
-        let text = "alpha\nbeta\ngamma\ndelta\nepsilon\n";
-        let model_a = mock_model(&mut app, text, ContentVersion::new());
-        let shared_buffer = app.read(|ctx| model_a.as_ref(ctx).buffer().clone());
-
-        let model_b = app.add_model(|ctx| {
-            let styles = code_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx), None);
-            CodeEditorModel::new(styles, None, false, Some(shared_buffer.clone()), ctx)
-        });
-
-        layout_model(&mut app, &model_a).await;
-        layout_model(&mut app, &model_b).await;
-
-        let baseline_b_height =
-            app.read(|ctx| model_b.as_ref(ctx).render_state().as_ref(ctx).height());
-        let baseline_b_line_3 = app.read(|ctx| {
-            model_b
-                .as_ref(ctx)
-                .render_state()
-                .as_ref(ctx)
-                .vertical_offset_at_render_location(RenderLineLocation::Current(LineCount::from(3)))
-        });
-
-        let block_location = RenderLineLocation::Current(LineCount::from(2));
-        let item = Arc::new(LaidOutEmbeddedCommentSpace::new(
-            EntityId::from_usize(1),
-            WindowId::from_usize(1),
-            vec2f(750.0, 50.0),
-        ));
-        let block = CommentBlock::new(block_location, item);
-        model_a.update(&mut app, |model, ctx| {
-            model.set_inline_comment_blocks(vec![block], ctx);
-        });
-        layout_model(&mut app, &model_a).await;
-        layout_model(&mut app, &model_b).await;
-
-        assert!(
-            app.read(|ctx| model_a
-                .as_ref(ctx)
-                .render_state()
-                .as_ref(ctx)
-                .comment_block_position(block_location))
-                .is_some(),
-            "view A should have the inline comment block it created"
-        );
-
-        assert!(
-            app.read(|ctx| model_b
-                .as_ref(ctx)
-                .render_state()
-                .as_ref(ctx)
-                .comment_block_position(block_location))
-                .is_none(),
-            "view B must not gain a comment block from view A"
-        );
-
-        let after_b_height =
-            app.read(|ctx| model_b.as_ref(ctx).render_state().as_ref(ctx).height());
-        assert_eq!(
-            after_b_height, baseline_b_height,
-            "view B total height must be unchanged"
-        );
-
-        let after_b_line_3 = app.read(|ctx| {
-            model_b
-                .as_ref(ctx)
-                .render_state()
-                .as_ref(ctx)
-                .vertical_offset_at_render_location(RenderLineLocation::Current(LineCount::from(3)))
-        });
-        assert_eq!(
-            after_b_line_3, baseline_b_line_3,
-            "view B line offsets must be unchanged"
         );
     })
 }

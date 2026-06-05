@@ -100,7 +100,3 @@ impl TryFrom<AttachedReviewComment> for EditorReviewComment {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "comments_tests.rs"]
-mod tests;

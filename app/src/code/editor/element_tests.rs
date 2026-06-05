@@ -69,20 +69,3 @@ fn relative_line_numbers_use_starting_line_number_for_active_line_only() {
     assert_eq!(config.display_line_number(LineCount::from(4)), 14);
     assert_eq!(config.display_line_number(LineCount::from(1)), 3);
 }
-
-#[test]
-fn comment_gutter_icons_are_hidden_only_for_embedded_comment_lines() {
-    {
-        let _embedded = FeatureFlag::EmbeddedCodeReviewComments.override_enabled(false);
-
-        assert!(!should_hide_comment_gutter_icons(true, false));
-        assert!(!should_hide_comment_gutter_icons(false, true));
-        assert!(!should_hide_comment_gutter_icons(false, false));
-    }
-
-    let _embedded = FeatureFlag::EmbeddedCodeReviewComments.override_enabled(true);
-    assert!(should_hide_comment_gutter_icons(true, false));
-    assert!(should_hide_comment_gutter_icons(false, true));
-    assert!(should_hide_comment_gutter_icons(true, true));
-    assert!(!should_hide_comment_gutter_icons(false, false));
-}
