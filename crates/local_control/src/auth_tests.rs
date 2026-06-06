@@ -2,7 +2,7 @@ use chrono::Duration;
 
 use super::*;
 use crate::discovery::InstanceId;
-use crate::scripting::{ScriptingGrant, ScriptingScope};
+use crate::scripting::ScriptingGrant;
 
 #[test]
 fn rejects_missing_authorization_header() {
@@ -47,12 +47,40 @@ fn scoped_credential_allows_only_granted_action() {
         Duration::minutes(5),
     );
     grant
-        .verify_for_action(ActionKind::TabCreate)
+        .verify_for_action(&grant.instance_id, ActionKind::TabCreate)
         .expect("tab.create grant is accepted");
     let err = grant
-        .verify_for_action(ActionKind::WindowCreate)
+        .verify_for_action(&grant.instance_id, ActionKind::WindowCreate)
         .expect_err("other actions are rejected");
     assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn scoped_credential_rejects_different_instance() {
+    let grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::TabCreate,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    let err = grant
+        .verify_for_action(&InstanceId("inst_other".to_owned()), ActionKind::TabCreate)
+        .expect_err("other instance is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+}
+#[test]
+fn scoped_credential_rejects_expired_grant() {
+    let grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::TabCreate,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(-1),
+    );
+
+    let err = grant
+        .verify_for_action(&grant.instance_id, ActionKind::TabCreate)
+        .expect_err("expired grant is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
 }
 
 #[test]
@@ -77,7 +105,7 @@ fn authenticated_user_actions_require_subject() {
     );
     assert!(grant.authenticated_user.required);
     let err = grant
-        .verify_for_action(ActionKind::DriveInspect)
+        .verify_for_action(&grant.instance_id, ActionKind::DriveInspect)
         .expect_err("authenticated-user actions require a subject");
     assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
 }
@@ -139,7 +167,7 @@ fn authenticated_action_requires_terminal_scripting_grant() {
     );
     grant.authenticated_user.subject = Some("user-1".to_owned());
     let err = grant
-        .verify_for_action(ActionKind::InputRun)
+        .verify_for_action(&grant.instance_id, ActionKind::InputRun)
         .expect_err("missing terminal scripting grant is rejected");
 
     assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
@@ -157,12 +185,12 @@ fn authenticated_action_accepts_matching_terminal_scripting_grant() {
     grant.scripting_grant = Some(ScriptingGrant::verified_warp_terminal(
         "session-1",
         "user-1",
-        vec![ScriptingScope::MutateUnderlyingData],
+        vec![ActionKind::InputRun],
         Duration::minutes(5),
     ));
 
     grant
-        .verify_for_action(ActionKind::InputRun)
+        .verify_for_action(&grant.instance_id, ActionKind::InputRun)
         .expect("matching terminal scripting grant is accepted");
 }
 

@@ -40,7 +40,7 @@ pub(crate) fn validate_tab_create_target(target: &TargetSelector) -> Result<(), 
 /// slices add their own params and expand this validation alongside the
 /// corresponding action handlers.
 pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
-    if action.kind != ActionKind::TabCreate {
+    if !action.kind.is_implemented() {
         return Ok(());
     }
     if action
@@ -52,7 +52,10 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
     }
     Err(ControlError::new(
         ErrorCode::InvalidParams,
-        "tab.create does not accept parameters in the first implementation slice",
+        format!(
+            "{} does not accept parameters in the first implementation slice",
+            action.kind.as_str()
+        ),
     ))
 }
 
@@ -73,15 +76,7 @@ pub(super) fn target_window_id_for_target(
                 )
             }),
         Some(WindowTarget::Index { index }) => {
-            ctx.window_ids().nth(*index as usize).ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::StaleTarget,
-                    format!(
-                        "{} cannot resolve the requested window index",
-                        action.as_str()
-                    ),
-                )
-            })
+            resolve_index_from_ids(ctx.window_ids(), *index, action)
         }
         Some(WindowTarget::Title { title }) => target_window_id_by_title(ctx, title, action),
     }
@@ -134,10 +129,33 @@ fn target_window_id_by_title(
             matching.push(window_id);
         }
     }
-    match matching.as_slice() {
+    resolve_title_from_matches(&matching, action)
+}
+
+pub(crate) fn resolve_index_from_ids(
+    ids: impl Iterator<Item = WindowId>,
+    index: u32,
+    action: ActionKind,
+) -> Result<WindowId, ControlError> {
+    ids.into_iter().nth(index as usize).ok_or_else(|| {
+        ControlError::new(
+            ErrorCode::MissingTarget,
+            format!(
+                "{} cannot resolve the requested window index",
+                action.as_str()
+            ),
+        )
+    })
+}
+
+pub(crate) fn resolve_title_from_matches(
+    matching: &[WindowId],
+    action: ActionKind,
+) -> Result<WindowId, ControlError> {
+    match matching {
         [window_id] => Ok(*window_id),
         [] => Err(ControlError::new(
-            ErrorCode::StaleTarget,
+            ErrorCode::MissingTarget,
             format!(
                 "{} cannot resolve the requested window title",
                 action.as_str()
