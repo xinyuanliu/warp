@@ -2539,6 +2539,7 @@ impl AgentDriver {
         let history_model_handle = BlocklistAIHistoryModel::handle(ctx);
         let terminal_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
         let mut written_conversation_id = false;
+        let mut streaming_ndjson_emitted: usize = 0;
 
         // Create shared storage for the conversation ID
         let conversation_id_cell = Arc::new(Mutex::new(Option::<String>::None));
@@ -2623,6 +2624,9 @@ impl AgentDriver {
                     // This handles the case where a follow-up query creates new exchanges after
                     // the conversation has finished and an idle timer was set.
                     run_exit.cancel_idle_timeout();
+
+                    // New exchange starts fresh streaming output.
+                    streaming_ndjson_emitted = 0;
                 }
                 BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id,
@@ -2664,11 +2668,53 @@ impl AgentDriver {
                         }
                     }
 
-                    // Once the outputs are fully streamed from the server, write them to stdout.
+                    // Emit new output messages incrementally when streaming
+                    // NDJSON is enabled, so callers see tokens as they arrive.
+                    let is_streaming_ndjson =
+                        FeatureFlag::StreamingNdjsonOutput.is_enabled()
+                            && matches!(me.output_format, OutputFormat::Ndjson);
+
+                    if is_streaming_ndjson {
+                        if let Some(shared) = exchange.output_status.output() {
+                            let output = shared.get();
+                            let total = output.messages.len();
+                            if total > streaming_ndjson_emitted {
+                                let new_messages =
+                                    &output.messages[streaming_ndjson_emitted..];
+                                report_if_error!(output::with_stdout_buffered(|buf| {
+                                    for msg in new_messages {
+                                        output::json::format_output_message(msg, buf)?;
+                                    }
+                                    Ok(())
+                                })
+                                .context("Failed to write streaming NDJSON output"));
+                                streaming_ndjson_emitted = total;
+                            }
+                        }
+                    }
+
                     if exchange.output_status.is_finished() {
-                        report_if_error!(me
-                            .write_exchange_output(exchange)
-                            .context("Failed to write exchange output"));
+                        if is_streaming_ndjson {
+                            // Emit any messages that arrived between the last
+                            // streaming tick and the finished snapshot.
+                            if let Some(shared) = exchange.output_status.output() {
+                                let output = shared.get();
+                                if output.messages.len() > streaming_ndjson_emitted {
+                                    report_if_error!(output::with_stdout_buffered(|buf| {
+                                        for msg in &output.messages[streaming_ndjson_emitted..] {
+                                            output::json::format_output_message(msg, buf)?;
+                                        }
+                                        Ok(())
+                                    })
+                                    .context("Failed to write remaining NDJSON output"));
+                                }
+                            }
+                            streaming_ndjson_emitted = 0;
+                        } else {
+                            report_if_error!(me
+                                .write_exchange_output(exchange)
+                                .context("Failed to write exchange output"));
+                        }
                     }
 
                     // Perform task update after all immutable borrows end
