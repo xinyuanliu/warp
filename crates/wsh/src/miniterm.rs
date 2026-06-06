@@ -38,7 +38,7 @@ impl MiniTerm {
     }
 
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        let mut parser = self.parser.take().unwrap_or_else(vte::Parser::new);
+        let mut parser = self.parser.take().unwrap_or_default();
         for &byte in bytes {
             parser.advance(self, byte);
         }

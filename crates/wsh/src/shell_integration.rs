@@ -46,6 +46,12 @@ pub struct OscParser {
     state: ParserState,
 }
 
+impl Default for OscParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OscParser {
     pub fn new() -> Self {
         Self {

@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -6,8 +6,11 @@ use anyhow::{Context, Result};
 use crossterm::terminal;
 use nix::unistd::{close, pipe, read, write as nix_write};
 
+use crate::block::BlockManager;
+use crate::cell::{CellFlags, Color};
+use crate::miniterm::MiniTerm;
 use crate::pty::resize_pty;
-use crate::renderer::{self, AgentBlock, BlockKind};
+use crate::screen::{self, Frame, StatusBar};
 use crate::shell_integration::{OscParser, ShellEvent};
 
 // ── SIGWINCH self-pipe ───────────────────────────────────────────────
@@ -47,20 +50,10 @@ fn install_sigwinch_handler() -> Result<RawFd> {
 
 // ── Mode state machine ──────────────────────────────────────────────
 
-enum AgentPhase {
-    WaitingForEcho,
-    Capturing,
-    WaitingForPrompt,
-}
-
 enum Mode {
     Shell,
     AgentInput { buffer: String, cursor: usize },
-    AgentRunning {
-        command: String,
-        output: Vec<u8>,
-        phase: AgentPhase,
-    },
+    AgentRunning,
 }
 
 impl Mode {
@@ -68,7 +61,7 @@ impl Mode {
         match self {
             Mode::Shell => "SHELL",
             Mode::AgentInput { .. } => "AGENT",
-            Mode::AgentRunning { .. } => "RUNNING",
+            Mode::AgentRunning => "RUNNING",
         }
     }
 
@@ -76,12 +69,12 @@ impl Mode {
         match self {
             Mode::Shell => "Ctrl-A: agent",
             Mode::AgentInput { .. } => "Enter: run | Esc: cancel",
-            Mode::AgentRunning { .. } => "Ctrl-C: cancel",
+            Mode::AgentRunning => "Ctrl-C: cancel",
         }
     }
 }
 
-// ── Interleaved OSC parser output ───────────────────────────────────
+// ── Interleaved OSC parser ──────────────────────────────────────────
 
 enum ParsedItem {
     Output(Vec<u8>),
@@ -106,59 +99,32 @@ fn feed_interleaved(parser: &mut OscParser, input: &[u8]) -> Vec<ParsedItem> {
     items
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
-
-fn write_stdout(bytes: &[u8]) {
-    let _ = io::stdout().write_all(bytes);
-    let _ = io::stdout().flush();
-}
-
-fn update_status_bar(mode: &Mode, cols: u16, rows: u16) {
-    let mut out = Vec::new();
-    out.extend_from_slice(&renderer::save_cursor());
-    out.extend_from_slice(&renderer::move_to_status_bar_row(rows));
-    out.extend_from_slice(&renderer::clear_line());
-    out.extend_from_slice(&renderer::render_status_bar(
-        mode.label(),
-        "mock",
-        mode.hint(),
-        cols,
-    ));
-    out.extend_from_slice(&renderer::restore_cursor());
-    write_stdout(&out);
-}
-
 // ── Public entry point ──────────────────────────────────────────────
 
 pub fn run(master_fd: RawFd) -> Result<()> {
     let sigwinch_fd = install_sigwinch_handler()?;
 
     let (cols, rows) = terminal::size().context("terminal::size")?;
-    // Child PTY gets one fewer row — the bottom row is the status bar.
-    resize_pty(master_fd, cols, rows.saturating_sub(1))?;
+    let usable = rows.saturating_sub(1);
+    resize_pty(master_fd, cols, usable)?;
 
-    terminal::enable_raw_mode().context("enable_raw_mode")?;
-
-    // Set scroll region and park cursor.
-    write_stdout(&renderer::set_scroll_region(1, rows.saturating_sub(1)));
-    write_stdout(b"\x1b[1;1H");
+    screen::enter_alt_screen().context("enter_alt_screen")?;
 
     let mut state = Wsh {
         mode: Mode::Shell,
         master_fd,
         osc_parser: OscParser::new(),
+        miniterm: MiniTerm::new(cols, usable),
+        blocks: BlockManager::new(),
         cols,
         rows,
         should_exit: false,
     };
-    update_status_bar(&state.mode, state.cols, state.rows);
+    state.render_frame();
 
     let result = state.run_loop(sigwinch_fd);
 
-    // Restore terminal.
-    let _ = terminal::disable_raw_mode();
-    write_stdout(&renderer::reset_scroll_region());
-    write_stdout(b"\r\n");
+    let _ = screen::leave_alt_screen();
 
     let wfd = SIGWINCH_WRITE_FD.swap(-1, Ordering::Relaxed);
     if wfd >= 0 {
@@ -175,6 +141,8 @@ struct Wsh {
     mode: Mode,
     master_fd: RawFd,
     osc_parser: OscParser,
+    miniterm: MiniTerm,
+    blocks: BlockManager,
     cols: u16,
     rows: u16,
     should_exit: bool,
@@ -207,19 +175,26 @@ impl Wsh {
                 return Err(err).context("poll");
             }
 
+            let mut needs_render = false;
+
             if pollfds[2].revents & libc::POLLIN != 0 {
                 self.handle_resize(sigwinch_fd)?;
+                needs_render = true;
             }
 
             if pollfds[1].revents & libc::POLLIN != 0 {
                 match read(self.master_fd, &mut buf) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => self.handle_pty_output(&buf[..n]),
+                    Ok(n) => {
+                        self.handle_pty_output(&buf[..n]);
+                        needs_render = true;
+                    }
                 }
             }
 
             if pollfds[1].revents & libc::POLLHUP != 0 {
                 self.drain_pty(&mut buf);
+                self.render_frame();
                 break;
             }
 
@@ -229,13 +204,43 @@ impl Wsh {
                     break;
                 }
                 self.handle_stdin(&buf[..n])?;
+                needs_render = true;
+            }
+
+            if needs_render {
+                self.render_frame();
             }
         }
 
         Ok(())
     }
 
-    // ── Resize ──────────────────────────────────────────────────────
+    // ── Render ────────────────────────────────────────────────────────
+
+    fn render_frame(&self) {
+        let completed = self.blocks.collected_rows();
+        let frame = Frame {
+            completed_rows: &completed,
+            active_grid: self.miniterm.grid(),
+            active_cursor: self.miniterm.cursor_pos(),
+            status_bar: StatusBar {
+                mode: self.mode.label(),
+                model: "mock",
+                hint: self.mode.hint(),
+            },
+            scroll_offset: self.blocks.scroll_offset(),
+            agent_input: match &self.mode {
+                Mode::AgentInput { buffer, cursor } => Some((buffer.as_str(), *cursor)),
+                _ => None,
+            },
+            total_rows: self.rows,
+            total_cols: self.cols,
+            show_cursor: matches!(self.mode, Mode::Shell),
+        };
+        let _ = screen::render(&frame);
+    }
+
+    // ── Resize ────────────────────────────────────────────────────────
 
     fn handle_resize(&mut self, sigwinch_fd: RawFd) -> Result<()> {
         let mut drain = [0u8; 64];
@@ -245,95 +250,45 @@ impl Wsh {
         let (cols, rows) = terminal::size().context("terminal::size on resize")?;
         self.cols = cols;
         self.rows = rows;
-        resize_pty(self.master_fd, cols, rows.saturating_sub(1))?;
-        write_stdout(&renderer::set_scroll_region(1, rows.saturating_sub(1)));
-        update_status_bar(&self.mode, self.cols, self.rows);
+        let usable = rows.saturating_sub(1);
+        resize_pty(self.master_fd, cols, usable)?;
+        self.miniterm.resize(cols, usable);
         Ok(())
     }
 
-    // ── PTY output handling ─────────────────────────────────────────
+    // ── PTY output ────────────────────────────────────────────────────
 
     fn handle_pty_output(&mut self, raw: &[u8]) {
         let items = feed_interleaved(&mut self.osc_parser, raw);
         for item in items {
             match item {
-                ParsedItem::Output(bytes) => self.handle_filtered_output(&bytes),
+                ParsedItem::Output(bytes) => self.miniterm.process_bytes(&bytes),
                 ParsedItem::Event(event) => self.process_event(event),
             }
         }
     }
 
-    fn handle_filtered_output(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-        match &mut self.mode {
-            Mode::Shell | Mode::AgentInput { .. } => write_stdout(bytes),
-            Mode::AgentRunning { phase, output, .. } => match phase {
-                AgentPhase::WaitingForEcho => { /* discard shell echo */ }
-                AgentPhase::Capturing => output.extend_from_slice(bytes),
-                AgentPhase::WaitingForPrompt => write_stdout(bytes),
-            },
-        }
-    }
-
     fn process_event(&mut self, event: ShellEvent) {
         match event {
-            ShellEvent::CommandStart => {
-                if let Mode::AgentRunning { phase, .. } = &mut self.mode {
-                    if matches!(phase, AgentPhase::WaitingForEcho) {
-                        *phase = AgentPhase::Capturing;
-                    }
-                }
-            }
-            ShellEvent::CommandFinished { exit_code } => {
-                if matches!(
-                    &self.mode,
-                    Mode::AgentRunning { phase: AgentPhase::Capturing, .. }
-                ) {
-                    self.render_agent_result(exit_code);
-                }
+            ShellEvent::PromptStart => {
+                self.capture_completed_block();
+                self.blocks.scroll_to_bottom();
             }
             ShellEvent::PromptEnd => {
-                if matches!(
-                    &self.mode,
-                    Mode::AgentRunning { phase: AgentPhase::WaitingForPrompt, .. }
-                ) {
+                if matches!(self.mode, Mode::AgentRunning) {
                     self.mode = Mode::Shell;
-                    update_status_bar(&self.mode, self.cols, self.rows);
                 }
             }
             _ => {}
         }
     }
 
-    fn render_agent_result(&mut self, exit_code: Option<i32>) {
-        let old = std::mem::replace(&mut self.mode, Mode::Shell);
-        if let Mode::AgentRunning { output, command, .. } = old {
-            let output_str = String::from_utf8_lossy(&output);
-            // Strip \r from PTY output — the line discipline converts \n → \r\n,
-            // and embedded \r would overwrite the left border when rendering.
-            let body = output_str.replace('\r', "");
-            let body = body.trim_end().to_string();
-            let block = AgentBlock {
-                kind: if exit_code == Some(0) || exit_code.is_none() {
-                    BlockKind::CommandOutput
-                } else {
-                    BlockKind::Error
-                },
-                header: Some(format!(
-                    "Output{}",
-                    exit_code.map_or(String::new(), |c| format!(" (exit {c})"))
-                )),
-                body,
-            };
-            write_stdout(&renderer::render_block(&block, self.cols));
-            self.mode = Mode::AgentRunning {
-                command,
-                output: Vec::new(),
-                phase: AgentPhase::WaitingForPrompt,
-            };
-        }
+    fn capture_completed_block(&mut self) {
+        let mut rows = self.miniterm.take_scrolled_out();
+        rows.extend(self.miniterm.grid().iter().cloned());
+        self.blocks.add_block(rows);
+        let usable = self.rows.saturating_sub(1);
+        self.miniterm.resize(self.cols, usable);
     }
 
     fn drain_pty(&mut self, buf: &mut [u8]) {
@@ -343,14 +298,14 @@ impl Wsh {
                 Ok(n) => {
                     let (filtered, _) = self.osc_parser.feed(&buf[..n]);
                     if !filtered.is_empty() {
-                        write_stdout(&filtered);
+                        self.miniterm.process_bytes(&filtered);
                     }
                 }
             }
         }
     }
 
-    // ── Stdin handling ──────────────────────────────────────────────
+    // ── Stdin handling ────────────────────────────────────────────────
 
     fn handle_stdin(&mut self, bytes: &[u8]) -> Result<()> {
         match &self.mode {
@@ -364,14 +319,14 @@ impl Wsh {
                         return self.handle_agent_input_bytes(&bytes[pos + 1..]);
                     }
                 } else {
+                    self.blocks.scroll_to_bottom();
                     nix_write(self.master_fd, bytes).context("write to pty")?;
                 }
             }
             Mode::AgentInput { .. } => {
                 self.handle_agent_input_bytes(bytes)?;
             }
-            Mode::AgentRunning { .. } => {
-                // Ctrl-C cancels the running agent.
+            Mode::AgentRunning => {
                 if bytes.contains(&0x03) {
                     self.cancel_agent();
                 }
@@ -380,40 +335,23 @@ impl Wsh {
         Ok(())
     }
 
-    // ── Agent input mode ────────────────────────────────────────────
+    // ── Agent input mode ──────────────────────────────────────────────
 
     fn enter_agent_mode(&mut self) {
         self.mode = Mode::AgentInput {
             buffer: String::new(),
             cursor: 0,
         };
-        write_stdout(b"\r\n");
-        self.render_input_prompt();
-        update_status_bar(&self.mode, self.cols, self.rows);
     }
 
     fn exit_agent_mode(&mut self) {
-        write_stdout(&renderer::clear_line());
         self.mode = Mode::Shell;
-        // Send newline to child to re-display the prompt.
         let _ = nix_write(self.master_fd, b"\n");
-        update_status_bar(&self.mode, self.cols, self.rows);
     }
 
     fn cancel_agent(&mut self) {
         self.mode = Mode::Shell;
-        write_stdout(b"\r\n");
-        // Forward Ctrl-C so the child shell can handle any in-flight command.
         let _ = nix_write(self.master_fd, b"\x03");
-        update_status_bar(&self.mode, self.cols, self.rows);
-    }
-
-    fn render_input_prompt(&self) {
-        if let Mode::AgentInput { buffer, cursor } = &self.mode {
-            let mut out = renderer::clear_line();
-            out.extend_from_slice(&renderer::render_agent_input_prompt(buffer, *cursor));
-            write_stdout(&out);
-        }
     }
 
     fn handle_agent_input_bytes(&mut self, bytes: &[u8]) -> Result<()> {
@@ -441,11 +379,10 @@ impl Wsh {
                 _ => {}
             }
         }
-        self.render_input_prompt();
         Ok(())
     }
 
-    // ── Mock agent ──────────────────────────────────────────────────
+    // ── Mock agent ────────────────────────────────────────────────────
 
     fn submit_agent_query(&mut self) -> Result<()> {
         let command = match &self.mode {
@@ -458,24 +395,16 @@ impl Wsh {
             return Ok(());
         }
 
-        write_stdout(&renderer::clear_line());
-
-        // Built-in commands.
         match command.trim() {
             "help" => {
-                let block = AgentBlock {
-                    kind: BlockKind::AgentText,
-                    header: Some("wsh mock agent".into()),
-                    body: "Type any shell command and I'll execute it.\n\
-                           Special commands:\n  \
-                           help  — show this message\n  \
-                           exit  — quit wsh"
-                        .into(),
-                };
-                write_stdout(&renderer::render_block(&block, self.cols));
+                self.blocks.add_styled_line(
+                    "🤖 Type any command. Special: help, exit",
+                    Color::Indexed(6),
+                    CellFlags::DIM,
+                    self.cols as usize,
+                );
                 self.mode = Mode::Shell;
                 let _ = nix_write(self.master_fd, b"\n");
-                update_status_bar(&self.mode, self.cols, self.rows);
                 return Ok(());
             }
             "exit" => {
@@ -485,25 +414,17 @@ impl Wsh {
             _ => {}
         }
 
-        // Show thinking indicator and "Running" block.
-        write_stdout(&renderer::render_thinking_indicator());
-        let run_block = AgentBlock {
-            kind: BlockKind::CommandRun,
-            header: Some(format!("Running: {command}")),
-            body: String::new(),
-        };
-        write_stdout(&renderer::render_block(&run_block, self.cols));
+        self.blocks.add_styled_line(
+            &format!("🤖 running: {command}"),
+            Color::Indexed(5),
+            CellFlags::DIM,
+            self.cols as usize,
+        );
 
-        // Write command to child PTY.
         let cmd = format!("{command}\n");
         nix_write(self.master_fd, cmd.as_bytes()).context("write command to pty")?;
 
-        self.mode = Mode::AgentRunning {
-            command,
-            output: Vec::new(),
-            phase: AgentPhase::WaitingForEcho,
-        };
-        update_status_bar(&self.mode, self.cols, self.rows);
+        self.mode = Mode::AgentRunning;
         Ok(())
     }
 }
