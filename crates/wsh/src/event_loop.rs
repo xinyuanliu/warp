@@ -117,11 +117,18 @@ struct AgentProcess {
 }
 
 impl AgentProcess {
-    #[allow(clippy::disallowed_types)] // wsh is Unix-only; no Windows terminal flash concern.
-    fn spawn(prompt: &str) -> Result<Self> {
+    #[allow(clippy::disallowed_types)]
+    fn spawn(prompt: &str, conversation_id: Option<&str>) -> Result<Self> {
         let binary = resolve_agent_binary();
+        let mut args = vec!["agent", "run", "--prompt", prompt, "--output-format", "ndjson"];
+        let conv_flag;
+        if let Some(id) = conversation_id {
+            conv_flag = id.to_string();
+            args.push("--conversation");
+            args.push(&conv_flag);
+        }
         let child = std::process::Command::new(&binary)
-            .args(["agent", "run", "--prompt", prompt, "--output-format", "ndjson"])
+            .args(&args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -185,7 +192,11 @@ fn parse_agent_event(line: &str, cols: usize) -> Option<(String, Color, CellFlag
     let event_type = json.get("type")?.as_str()?;
 
     match event_type {
-        "system" => None,
+        "system" => {
+            // Return conversation_id extraction as a special marker.
+            // The caller will handle it separately.
+            None
+        }
         "agent" | "agent_reasoning" => {
             let text = json.get("text")?.as_str()?;
             if text.trim().is_empty() {
@@ -298,6 +309,7 @@ pub fn run(master_fd: RawFd) -> Result<()> {
         miniterm: MiniTerm::new(cols, usable),
         blocks: BlockManager::new(),
         agent: None,
+        conversation_id: None,
         cols,
         rows,
         should_exit: false,
@@ -345,6 +357,7 @@ struct Wsh {
     miniterm: MiniTerm,
     blocks: BlockManager,
     agent: Option<AgentProcess>,
+    conversation_id: Option<String>,
     cols: u16,
     rows: u16,
     should_exit: bool,
@@ -548,8 +561,8 @@ impl Wsh {
         let cols = self.cols as usize;
 
         for line in &lines {
+            self.maybe_extract_conversation_id(line);
             if let Some((text, color, flags)) = parse_agent_event(line, cols) {
-                // Agent text output can be multi-line — add each line separately.
                 for text_line in text.lines() {
                     self.blocks.add_styled_line(text_line, color, flags, cols);
                 }
@@ -559,9 +572,9 @@ impl Wsh {
         // Check if the agent process has finished.
         if let Some(agent) = self.agent.as_mut() {
             if agent.is_finished() {
-                // Drain any remaining output.
                 let final_lines = agent.read_lines();
                 for line in &final_lines {
+                    self.maybe_extract_conversation_id(line);
                     if let Some((text, color, flags)) = parse_agent_event(line, cols) {
                         for text_line in text.lines() {
                             self.blocks.add_styled_line(text_line, color, flags, cols);
@@ -571,12 +584,24 @@ impl Wsh {
                 self.agent = None;
                 self.blocks.add_styled_line(
                     "✓ agent finished",
-                    Color::Indexed(2), // green
+                    Color::Indexed(2),
                     CellFlags::DIM,
                     cols,
                 );
-                // If no PTY command is pending, return to Shell immediately.
                 self.mode = Mode::Shell;
+            }
+        }
+    }
+
+    fn maybe_extract_conversation_id(&mut self, line: &str) {
+        if self.conversation_id.is_some() {
+            return;
+        }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            if json.get("type").and_then(|t| t.as_str()) == Some("system") {
+                if let Some(id) = json.get("conversation_id").and_then(|c| c.as_str()) {
+                    self.conversation_id = Some(id.to_string());
+                }
             }
         }
     }
@@ -691,8 +716,8 @@ impl Wsh {
             self.cols as usize,
         );
 
-        // Spawn the real agent subprocess.
-        match AgentProcess::spawn(&prompt) {
+        // Spawn the real agent subprocess, continuing the conversation if one exists.
+        match AgentProcess::spawn(&prompt, self.conversation_id.as_deref()) {
             Ok(agent) => {
                 self.agent = Some(agent);
                 self.mode = Mode::AgentRunning;
