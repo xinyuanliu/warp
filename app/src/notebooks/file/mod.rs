@@ -66,6 +66,11 @@ use crate::{cmd_or_ctrl_shift, safe_warn, send_telemetry_from_ctx};
 /// editable cell-based notebook view.
 mod ipynb_model;
 
+/// Editable, cell-based Jupyter `.ipynb` notebook view and read-only output
+/// rendering, gated behind `FeatureFlag::JupyterNotebookEditing`. Exposed to the
+/// crate so the open-flow routing/pane can host `JupyterNotebookView`.
+pub(crate) mod jupyter;
+
 /// Display mode for markdown files shown via the header segmented control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkdownDisplayMode {
