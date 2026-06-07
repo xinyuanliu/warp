@@ -684,7 +684,7 @@ pub(crate) use permissions::{capabilities, ensure_settings_allow_action};
 #[cfg(test)]
 pub(crate) use resolver::{
     require_active_window_id, resolve_index_from_ids, resolve_title_from_matches,
-    validate_action_params, validate_tab_create_target,
+    validate_action_params, validate_action_target, validate_tab_create_target,
 };
 
 #[cfg(test)]
