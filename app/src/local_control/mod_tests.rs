@@ -370,6 +370,50 @@ fn expired_credential_is_rejected_and_pruned_before_request_decode() {
 }
 
 #[test]
+fn close_actions_return_confirmation_required_via_bridge() {
+    let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
+    warpui::App::test((), |mut app| async move {
+        crate::test_util::settings::initialize_settings_for_tests(&mut app);
+        app.update(|ctx| {
+            LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .local_control_mode
+                    .set_value(LocalControlMode::Enabled, ctx)
+            })
+        })
+        .expect("local control should enable");
+
+        let instance_id = InstanceId("inst_test".to_owned());
+        let bridge = app.add_singleton_model(LocalControlBridge::new);
+        bridge.update(&mut app, |bridge, _| {
+            bridge.set_instance_id(instance_id.clone());
+        });
+
+        for action in [
+            ActionKind::WindowClose,
+            ActionKind::TabClose,
+            ActionKind::PaneClose,
+        ] {
+            let grant = CredentialGrant::new(
+                instance_id.clone(),
+                action,
+                Duration::minutes(5),
+            );
+            let request = RequestEnvelope::new(Action::new(action));
+            let response = bridge.update(&mut app, |bridge, ctx| {
+                bridge.handle_request(request, grant, ctx)
+            });
+            match &response.response {
+                ::local_control::ControlResponse::Error { error } => {
+                    assert_eq!(error.code, ErrorCode::UserConfirmationRequired);
+                }
+                other => panic!("expected UserConfirmationRequired for {}, got {other:?}", action.as_str()),
+            }
+        }
+    });
+}
+
+#[test]
 fn disabling_scripting_invalidates_existing_grant_and_prevents_new_grants() {
     let _flag = FeatureFlag::WarpControlCli.override_enabled(true);
     warpui::App::test((), |mut app| async move {

@@ -59,6 +59,7 @@
 //! Discovery records never include raw bearer tokens: discovery only exposes
 //! endpoint metadata and credential broker references while Scripting is enabled.
 mod bridge;
+pub(crate) mod confirmation_dialog;
 mod handlers;
 mod permissions;
 mod resolver;
@@ -70,6 +71,7 @@ use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
 
 use ::local_control::auth::CredentialGrant;
 #[cfg(any(unix, test))]
@@ -87,16 +89,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 pub use bridge::LocalControlBridge;
-#[cfg(any(unix, test))]
 use chrono::Duration;
-use permissions::ensure_feature_enabled;
-#[cfg(any(unix, test))]
-use permissions::{ensure_action_allowed, ensure_protocol_version};
+use futures::channel::oneshot;
+use permissions::{ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version};
 #[cfg(unix)]
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
-#[cfg(any(unix, test))]
+
 const MAX_ACTIVE_CREDENTIALS: usize = 128;
 
 /// App-owned authority shared by one instance's broker and HTTP listener.
@@ -575,9 +575,108 @@ async fn handle_control_request(
         }
     };
     let request_id = request.request_id;
+    let requires_confirmation = request.action.kind.metadata().requires_user_confirmation;
+    if requires_confirmation {
+        return handle_close_confirmation_request(state, request, grant).await;
+    }
     let response = match state
         .bridge_spawner
         .spawn(move |bridge, ctx| bridge.handle_request(request, grant, ctx))
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => ResponseEnvelope::error(
+            request_id,
+            ControlError::new(
+                ErrorCode::BridgeUnavailable,
+                "local-control app bridge is unavailable",
+            ),
+        ),
+    };
+    let status = match &response.response {
+        ControlResponse::Ok { .. } => StatusCode::OK,
+        ControlResponse::Error { .. } => StatusCode::BAD_REQUEST,
+    };
+    (status, Json(response)).into_response()
+}
+
+async fn wait_for_confirmation(
+    mut decision_receiver: oneshot::Receiver<Result<bridge::ApprovedClose, ControlError>>,
+) -> Result<bridge::ApprovedClose, ControlError> {
+    let timeout = tokio::time::sleep(StdDuration::from_secs(60));
+    tokio::pin!(timeout);
+    tokio::select! {
+        decision = &mut decision_receiver => {
+            decision.map_err(|_| {
+                ControlError::new(
+                    ErrorCode::UserConfirmationExpired,
+                    "local-control confirmation was cancelled",
+                )
+            })?
+        }
+        _ = &mut timeout => {
+            Err(ControlError::new(
+                ErrorCode::UserConfirmationExpired,
+                "local-control confirmation expired",
+            ))
+        }
+    }
+}
+
+async fn handle_close_confirmation_request(
+    state: ControlServerState,
+    request: RequestEnvelope,
+    grant: CredentialGrant,
+) -> Response {
+    let request_id = request.request_id;
+    let pending = match state
+        .bridge_spawner
+        .spawn({
+            let request = request.clone();
+            let grant = grant.clone();
+            move |bridge, ctx| bridge.prepare_close_confirmation(request, grant, ctx)
+        })
+        .await
+    {
+        Ok(Ok(pending)) => pending,
+        Ok(Err(error)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ResponseEnvelope::error(request_id, error)),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ResponseEnvelope::error(
+                    request_id,
+                    ControlError::new(
+                        ErrorCode::BridgeUnavailable,
+                        "local-control app bridge is unavailable",
+                    ),
+                )),
+            )
+                .into_response();
+        }
+    };
+    let confirmation_id = pending.confirmation_id;
+    let approval = match wait_for_confirmation(pending.decision_receiver).await {
+        Ok(approval) => approval,
+        Err(error) => {
+            let _ = state.bridge_spawner.spawn(move |bridge, ctx| {
+                bridge.cancel_confirmation(confirmation_id, ctx);
+            }).await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ResponseEnvelope::error(request_id, error)),
+            )
+                .into_response();
+        }
+    };
+    let response = match state
+        .bridge_spawner
+        .spawn(move |bridge, ctx| bridge.execute_approved_close(approval, ctx))
         .await
     {
         Ok(response) => response,
