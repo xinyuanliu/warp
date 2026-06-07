@@ -252,52 +252,26 @@ fn duplicate_server_start_is_rejected() {
 }
 
 #[test]
-fn outside_warp_requires_everywhere_mode() {
-    let settings = settings_with_mode(LocalControlMode::EnabledWithinWarp);
+fn scripting_disabled_denies_action() {
+    let settings = settings_with_mode(LocalControlMode::Disabled);
 
     let err = ensure_settings_allow_action(
         &settings,
         InvocationContext::OutsideWarp,
         ActionKind::TabCreate,
     )
-    .expect_err("outside-Warp local control is disabled");
+    .expect_err("disabled scripting denies action");
     assert_eq!(err.code, ErrorCode::LocalControlDisabled);
 }
 
 #[test]
-fn inside_warp_context_is_not_implemented() {
-    let settings = settings_with_mode(LocalControlMode::EnabledWithinWarp);
-
-    let err = ensure_settings_allow_action(
-        &settings,
-        InvocationContext::InsideWarp,
-        ActionKind::TabCreate,
-    )
-    .expect_err("inside-Warp grants are not implemented");
-    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
-}
-
-#[test]
-fn disabled_mode_denies_inside_warp_context() {
-    let settings = settings_with_mode(LocalControlMode::Disabled);
-
-    let err = ensure_settings_allow_action(
-        &settings,
-        InvocationContext::InsideWarp,
-        ActionKind::TabCreate,
-    )
-    .expect_err("inside-Warp local control is disabled");
-    assert_eq!(err.code, ErrorCode::LocalControlDisabled);
-}
-
-#[test]
-fn enabled_everywhere_allows_outside_warp_context() {
+fn scripting_enabled_everywhere_allows_action() {
     ensure_settings_allow_action(
         &settings_with_mode(LocalControlMode::EnabledEverywhere),
         InvocationContext::OutsideWarp,
         ActionKind::TabCreate,
     )
-    .expect("outside-Warp local control is enabled");
+    .expect("enabled scripting allows action");
 }
 
 #[test]
@@ -332,7 +306,6 @@ fn bridge_checks_grant_before_action_params() {
     let grant = CredentialGrant::new(
         instance_id.clone(),
         ActionKind::AppPing,
-        InvocationContext::OutsideWarp,
         Duration::minutes(5),
     );
     let err = validate_request_authority(
@@ -357,7 +330,6 @@ fn credential_insertion_prunes_expired_and_caps_active_grants() {
         CredentialGrant::new(
             instance_id.clone(),
             ActionKind::TabCreate,
-            InvocationContext::OutsideWarp,
             Duration::minutes(-1),
         ),
     );
@@ -367,7 +339,6 @@ fn credential_insertion_prunes_expired_and_caps_active_grants() {
         CredentialGrant::new(
             instance_id.clone(),
             ActionKind::TabCreate,
-            InvocationContext::OutsideWarp,
             Duration::minutes(5),
         ),
     );
@@ -380,7 +351,6 @@ fn credential_insertion_prunes_expired_and_caps_active_grants() {
             CredentialGrant::new(
                 instance_id.clone(),
                 ActionKind::TabCreate,
-                InvocationContext::OutsideWarp,
                 Duration::minutes(5),
             ),
         );
@@ -398,7 +368,6 @@ fn expired_credential_is_rejected_and_pruned_before_request_decode() {
         CredentialGrant::new(
             InstanceId("inst_test".to_owned()),
             ActionKind::TabCreate,
-            InvocationContext::OutsideWarp,
             Duration::minutes(-1),
         ),
     );
@@ -439,12 +408,9 @@ fn mode_narrowing_invalidates_existing_outside_warp_grant_and_prevents_new_grant
                 credentials: Default::default(),
             }
         });
-        let credential = issue_credential(
-            &state,
-            CredentialRequest::new(ActionKind::AppPing, InvocationContext::OutsideWarp),
-        )
-        .await
-        .expect("outside-Warp credential should be issued");
+        let credential = issue_credential(&state, CredentialRequest::new(ActionKind::AppPing))
+            .await
+            .expect("outside-Warp credential should be issued");
 
         app.update(|ctx| {
             LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -473,12 +439,9 @@ fn mode_narrowing_invalidates_existing_outside_warp_grant_and_prevents_new_grant
         .await;
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
 
-        let err = issue_credential(
-            &state,
-            CredentialRequest::new(ActionKind::AppPing, InvocationContext::OutsideWarp),
-        )
-        .await
-        .expect_err("narrowed mode should prevent new outside-Warp grants");
+        let err = issue_credential(&state, CredentialRequest::new(ActionKind::AppPing))
+            .await
+            .expect_err("narrowed mode should prevent new grants");
         assert_eq!(err.code, ErrorCode::LocalControlDisabled);
     });
 }

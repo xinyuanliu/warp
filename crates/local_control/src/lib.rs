@@ -11,9 +11,7 @@ pub mod protocol;
 pub mod selection;
 pub mod selectors;
 
-pub use auth::{
-    AuthToken, AuthenticatedUserGrant, CredentialGrant, CredentialRequest, ScopedCredential,
-};
+pub use auth::{AuthToken, CredentialGrant, CredentialRequest, ScopedCredential};
 pub use catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, AuthenticatedUserRequirement,
     InvocationContext, TargetScope,

@@ -76,6 +76,7 @@ use std::sync::{Arc, Mutex};
 use ::local_control::auth::CredentialGrant;
 #[cfg(any(unix, test))]
 use ::local_control::auth::{CredentialRequest, ScopedCredential};
+use ::local_control::InvocationContext;
 use ::local_control::{
     ActionKind, AuthToken, ControlEndpoint, ControlError, ControlResponse, ErrorCode,
     ErrorResponseEnvelope, InstanceId, InstanceRecord, RegisteredInstance, RequestEnvelope,
@@ -458,7 +459,6 @@ async fn issue_credential(
 ) -> Result<ScopedCredential, ControlError> {
     ensure_feature_enabled()?;
     ensure_protocol_version(request.protocol_version)?;
-    let metadata = request.action.metadata();
     if !request.action.is_implemented() {
         return Err(ControlError::new(
             ErrorCode::UnsupportedAction,
@@ -468,25 +468,11 @@ async fn issue_credential(
             ),
         ));
     }
-    if !metadata
-        .allowed_invocation_contexts
-        .contains(&request.invocation_context)
-    {
-        return Err(ControlError::new(
-            ErrorCode::ExecutionContextNotAllowed,
-            format!(
-                "{} cannot run from the requested invocation context",
-                request.action.as_str()
-            ),
-        ));
-    }
-    request.verify_execution_context_proof()?;
     state
         .bridge_spawner
         .spawn({
             let action = request.action;
-            let invocation_context = request.invocation_context;
-            move |_, ctx| ensure_action_allowed(invocation_context, action, ctx)
+            move |_, ctx| ensure_action_allowed(InvocationContext::OutsideWarp, action, ctx)
         })
         .await
         .map_err(|_| {
@@ -499,7 +485,6 @@ async fn issue_credential(
     let grant = CredentialGrant::new(
         state.instance_id.clone(),
         request.action,
-        request.invocation_context,
         Duration::minutes(5),
     );
     let mut credentials = state.credentials.lock().map_err(|_| {

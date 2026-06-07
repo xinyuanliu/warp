@@ -9,6 +9,8 @@ use super::*;
 use crate::auth::CredentialGrant;
 use crate::discovery::{ControlEndpoint, CredentialBrokerReference, InstanceId};
 #[cfg(unix)]
+use chrono::Duration;
+#[cfg(unix)]
 #[test]
 fn credential_client_exchanges_request_over_broker_socket() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -17,15 +19,13 @@ fn credential_client_exchanges_request_over_broker_socket() {
     let grant = CredentialGrant::new(
         InstanceId("inst_expected".to_owned()),
         ActionKind::AppPing,
-        InvocationContext::OutsideWarp,
-        chrono::Duration::minutes(5),
+        Duration::minutes(5),
     );
     let credential = ScopedCredential {
         bearer_token: "scoped-token".to_owned(),
         grant,
     };
-    let expected_request =
-        CredentialRequest::new(ActionKind::AppPing, InvocationContext::OutsideWarp);
+    let expected_request = CredentialRequest::new(ActionKind::AppPing);
     let server_request = expected_request.clone();
     let server_credential = credential.clone();
     let server = std::thread::spawn(move || {

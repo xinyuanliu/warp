@@ -34,7 +34,7 @@ use crate::auth::{CredentialRequest, ScopedCredential};
 use crate::discovery::InstanceRecord;
 use crate::protocol::{
     Action, ActionKind, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope,
-    InvocationContext, RequestEnvelope, ResponseEnvelope,
+    RequestEnvelope, ResponseEnvelope,
 };
 
 /// Requests an action-scoped credential and sends one authenticated control request.
@@ -44,11 +44,7 @@ pub fn send_request(
     request: &RequestEnvelope,
 ) -> Result<ResponseEnvelope, ControlError> {
     instance.validate_local_control_authority()?;
-    let credential = request_credential(
-        instance,
-        request.action.kind,
-        InvocationContext::OutsideWarp,
-    )?;
+    let credential = request_credential(instance, request.action.kind)?;
     let endpoint = instance.endpoint.as_ref().ok_or_else(|| {
         ControlError::new(
             ErrorCode::LocalControlDisabled,
@@ -98,11 +94,7 @@ pub fn send_request(
     instance: &InstanceRecord,
     request: &RequestEnvelope,
 ) -> Result<ResponseEnvelope, ControlError> {
-    request_credential(
-        instance,
-        request.action.kind,
-        InvocationContext::OutsideWarp,
-    )?;
+    request_credential(instance, request.action.kind)?;
     Err(ControlError::new(
         ErrorCode::LocalControlDisabled,
         "outside-Warp local control requires a native HTTP transport",
@@ -179,14 +171,13 @@ fn request_credential_over_owner_ipc(
     ))
 }
 
-/// Requests and decodes a short-lived credential for one action and invocation context.
+/// Requests and decodes a short-lived credential for one exact action.
 pub fn request_credential(
     instance: &InstanceRecord,
     action: crate::protocol::ActionKind,
-    invocation_context: InvocationContext,
 ) -> Result<ScopedCredential, ControlError> {
     instance.validate_local_control_authority()?;
-    let request = CredentialRequest::new(action, invocation_context);
+    let request = CredentialRequest::new(action);
     let text = request_credential_over_owner_ipc(instance, &request)?;
     if let Ok(credential) = serde_json::from_str::<ScopedCredential>(&text) {
         return Ok(credential);

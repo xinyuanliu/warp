@@ -4,7 +4,8 @@
 //! before routing each supported action to an app-side handler.
 use ::local_control::auth::CredentialGrant;
 use ::local_control::{
-    Action, ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
+    Action, ActionKind, ControlError, ErrorCode, InstanceId, InvocationContext, RequestEnvelope,
+    ResponseEnvelope,
 };
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -59,7 +60,7 @@ impl LocalControlBridge {
             return ResponseEnvelope::error(request.request_id, error);
         }
         if let Err(error) =
-            ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+            ensure_action_allowed(InvocationContext::OutsideWarp, request.action.kind, ctx)
         {
             return ResponseEnvelope::error(request.request_id, error);
         }
