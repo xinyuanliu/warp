@@ -93,6 +93,19 @@ fn image_item(data: &serde_json::Map<String, Value>) -> Option<OutputItem> {
             continue;
         };
         // nbformat stores image payloads as base64, often split across lines.
+        // Reject oversized images using the estimated decoded length before
+        // allocating the cleaned string or decoding, so a crafted notebook
+        // cannot force large allocations ahead of the `MAX_IMAGE_BYTES` cap.
+        // Each 4 base64 chars decode to 3 bytes; ignore whitespace cheaply
+        // without materializing an intermediate buffer.
+        let b64_len = encoded.bytes().filter(|b| !b.is_ascii_whitespace()).count();
+        let estimated_bytes = b64_len / 4 * 3;
+        if estimated_bytes > MAX_IMAGE_BYTES {
+            return Some(OutputItem::Placeholder(format!(
+                "[image output omitted for display: ~{} KB]",
+                estimated_bytes / 1024
+            )));
+        }
         let cleaned: String = encoded.split_whitespace().collect();
         return Some(match BASE64_STANDARD.decode(cleaned.as_bytes()) {
             Ok(bytes) if bytes.len() > MAX_IMAGE_BYTES => OutputItem::Placeholder(format!(

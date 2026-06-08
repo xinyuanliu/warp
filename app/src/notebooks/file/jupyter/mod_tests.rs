@@ -5,7 +5,6 @@ use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
 use serde_json::Value;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::model::CoreEditorModel;
 #[cfg(feature = "local_fs")]
@@ -335,27 +334,6 @@ fn path_is_exposed_and_titled() {
         handle.read(&app, |view, _| {
             assert!(view.path().is_some());
             assert_eq!(view.title(), "analysis.ipynb");
-        });
-    });
-}
-
-#[test]
-fn raw_requested_toggle_emits_current_json() {
-    // Invariant 19: switching to Raw hands off the current JSON so edits aren't lost.
-    App::test((), |mut app| async move {
-        let _flag = FeatureFlag::JupyterNotebookEditing.override_enabled(true);
-        init_app(&mut app);
-        let handle = add_view(&mut app, SIMPLE_NOTEBOOK);
-
-        handle.update(&mut app, |view, ctx| {
-            view.request_save(ctx);
-            // Header rendering with the toggle enabled must not panic.
-            view.render(ctx);
-        });
-
-        handle.read(&app, |view, _| {
-            // Still rendered (the pane owns the actual swap).
-            assert!(!view.is_fallback());
         });
     });
 }

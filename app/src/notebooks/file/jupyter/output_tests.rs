@@ -92,6 +92,24 @@ fn classify_invalid_base64_image_as_placeholder() {
 }
 
 #[test]
+fn classify_oversized_image_as_placeholder_without_decoding() {
+    // A base64 payload whose estimated decoded size exceeds the display cap is
+    // rejected with a placeholder before it is cleaned or decoded, so a crafted
+    // notebook cannot force large allocations.
+    let over_cap_b64 = "A".repeat(9 * 1024 * 1024 / 3 * 4);
+    let outputs = vec![json!({
+        "output_type": "display_data",
+        "data": {"image/png": over_cap_b64},
+        "metadata": {},
+    })];
+    let classified = classify_outputs(&outputs);
+    assert!(matches!(
+        classified.as_slice(),
+        [OutputItem::Placeholder(msg)] if msg.starts_with("[image output omitted for display:")
+    ));
+}
+
+#[test]
 fn classify_prefers_image_over_text_plain() {
     // matplotlib outputs carry both image/png and a text/plain repr; the image wins.
     let png = BASE64_STANDARD.encode([0x89, 0x50, 0x4e, 0x47]);

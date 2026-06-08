@@ -133,10 +133,11 @@ impl PaneContent for JupyterNotebookPane {
                     let _ = json;
                 }
                 JupyterNotebookEvent::RawRequested { json } => {
-                    // Swap this pane for a raw code editor on the same file,
-                    // mirroring the markdown Rendered→Raw toggle. The in-memory
-                    // `json` (which includes unsaved edits) is carried by the
-                    // view; here we open the file so the raw view is editable.
+                    // Emitted only when the file is not a parseable v4 notebook
+                    // (invariant 16): swap this pane for a real code editor on the
+                    // same file so it stays editable as plain text. This fires at
+                    // load time, before any edits, so the on-disk content already
+                    // matches the view and `json` is not needed here.
                     let _ = json;
                     #[cfg(feature = "local_fs")]
                     if let Some(path) = view_handle.as_ref(ctx).path().cloned() {

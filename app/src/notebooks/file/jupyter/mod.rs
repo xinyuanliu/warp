@@ -10,14 +10,12 @@
 //! view falls back to showing the raw text in an editable code editor — never a
 //! blank view, never a panic (invariant 16).
 //!
-//! All behavior here is gated by the caller behind
-//! [`FeatureFlag::JupyterNotebookEditing`]; the header's Rendered/Raw toggle is
-//! additionally gated inline.
+//! All behavior here is gated by the caller behind the
+//! `JupyterNotebookEditing` feature flag.
 
 use std::path::Path;
 
 use serde_json::Value;
-use warp_core::features::FeatureFlag;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -38,7 +36,6 @@ use warpui::{
 };
 
 use super::ipynb_model::{CellDoc, CellKind, NotebookDoc};
-use super::MarkdownDisplayMode;
 use crate::appearance::Appearance;
 use crate::editor::InteractionState;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -50,7 +47,6 @@ use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::settings::FontSettings;
-use crate::view_components::{MarkdownToggleEvent, MarkdownToggleView};
 
 mod output;
 use output::OutputItem;
@@ -112,9 +108,9 @@ pub enum JupyterNotebookEvent {
     /// The user requested a save. `json` is the full serialized `.ipynb` to
     /// persist; the host writes it and then calls [`JupyterNotebookView::mark_saved`].
     SaveRequested { json: String },
-    /// The user switched to the Raw view. `json` is the current serialized
-    /// notebook (including unsaved edits) so the host can seed a raw code editor
-    /// without losing edits (invariant 19).
+    /// The file is not a parseable v4 notebook, so the host should open it in a
+    /// real code editor as plain text (invariant 16). `json` is the raw file
+    /// content. Emitted only at load time, so there are no unsaved edits to lose.
     RawRequested { json: String },
     /// Focus entered the notebook view.
     Focused,
@@ -195,7 +191,6 @@ pub struct JupyterNotebookView {
     links: ModelHandle<NotebookLinks>,
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
-    display_mode_control: ViewHandle<MarkdownToggleView>,
     vertical_scroll_state: ClippedScrollStateHandle,
     /// Mouse states for the "add first cell" affordances shown when empty.
     add_first_markdown: MouseStateHandle,
@@ -221,14 +216,6 @@ impl JupyterNotebookView {
         let view_position_id = format!("jupyter_notebook_view_{}", ctx.view_id());
         let pane_configuration = ctx.add_model(|_| PaneConfiguration::new(""));
 
-        let display_mode_control = ctx.add_typed_action_view(|ctx| {
-            MarkdownToggleView::new(MarkdownDisplayMode::Rendered, ctx)
-        });
-        ctx.subscribe_to_view(&display_mode_control, |view, _, event, ctx| {
-            let MarkdownToggleEvent::ModeSelected(mode) = event;
-            view.handle_display_mode_selected(*mode, ctx);
-        });
-
         let mut next_cell_id = 0;
         let (state, language) =
             Self::build_state(content, &links, &view_position_id, &mut next_cell_id, ctx);
@@ -242,7 +229,6 @@ impl JupyterNotebookView {
             links,
             pane_configuration,
             focus_handle: None,
-            display_mode_control,
             vertical_scroll_state: ClippedScrollStateHandle::default(),
             add_first_markdown: MouseStateHandle::default(),
             add_first_code: MouseStateHandle::default(),
@@ -263,9 +249,6 @@ impl JupyterNotebookView {
         self.state = state;
         self.language = language;
         self.dirty = false;
-        self.display_mode_control.update(ctx, |control, ctx| {
-            control.set_selected_mode(MarkdownDisplayMode::Rendered, ctx)
-        });
         // If the file isn't a parseable notebook, the internal fallback already
         // shows the raw text (never blank/panic). Additionally ask the host to
         // open it in the real code editor so it's editable/saveable as plain
@@ -639,26 +622,6 @@ impl JupyterNotebookView {
     fn emit_focused(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(JupyterNotebookEvent::Focused);
         ctx.emit(JupyterNotebookEvent::Pane(PaneEvent::FocusSelf));
-    }
-
-    fn handle_display_mode_selected(
-        &mut self,
-        mode: MarkdownDisplayMode,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match mode {
-            // Already in the rendered, cell-based view.
-            MarkdownDisplayMode::Rendered => {}
-            MarkdownDisplayMode::Raw => {
-                // Hand the current JSON (including unsaved edits) to the host so
-                // it can swap to a raw code editor without losing edits (inv 19).
-                let json = self.to_json();
-                ctx.emit(JupyterNotebookEvent::RawRequested { json });
-                self.display_mode_control.update(ctx, |control, ctx| {
-                    control.set_selected_mode(MarkdownDisplayMode::Rendered, ctx)
-                });
-            }
-        }
     }
 
     // --- Structural operations (invariant 8) -----------------------------
@@ -1129,14 +1092,6 @@ impl BackingView for JupyterNotebookView {
     ) -> view::HeaderContent {
         let title = self.pane_configuration.as_ref(app).title().to_owned();
 
-        // The Rendered/Raw toggle is only meaningful when the editing feature is
-        // enabled (invariant 19; gated identically to the rest of the feature).
-        let right_of_title = if FeatureFlag::JupyterNotebookEditing.is_enabled() {
-            Some(ChildView::new(&self.display_mode_control).finish())
-        } else {
-            None
-        };
-
         view::HeaderContent::Standard(view::StandardHeader {
             title,
             title_secondary: None,
@@ -1144,7 +1099,7 @@ impl BackingView for JupyterNotebookView {
             title_clip_config: warpui::text_layout::ClipConfig::start(),
             title_max_width: None,
             left_of_title: None,
-            right_of_title,
+            right_of_title: None,
             left_of_overflow: None,
             options: Default::default(),
         })
