@@ -4,6 +4,10 @@ mod autotracking;
 mod backend;
 mod entity;
 mod model;
+#[cfg(feature = "tui")]
+mod tui_backend;
+#[cfg(feature = "tui")]
+mod tui_view;
 mod view;
 mod window;
 
@@ -28,6 +32,13 @@ use futures_util::future::BoxFuture;
 pub use model::*;
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "tui")]
+pub use tui_backend::TuiBackend;
+#[cfg(feature = "tui")]
+pub use tui_view::{
+    AnyTuiView, TuiReadView, TuiTypedActionView, TuiUpdateView, TuiView, TuiViewAsRef,
+    TuiViewContext, TuiViewHandle, WeakTuiViewHandle,
+};
 pub use view::*;
 pub use window::*;
 
@@ -133,11 +144,30 @@ impl fmt::Display for TaskId {
 
 pub type OptionalPlatformWindow = Option<Rc<dyn platform::Window>>;
 
+/// The active backend marker for this build (GUI by default, TUI under `tui`).
+/// Used by `B`-free types/fields that must name the concrete active backend.
+#[cfg(not(feature = "tui"))]
+pub(crate) type ActiveBackend = GuiBackend;
+#[cfg(feature = "tui")]
+pub(crate) type ActiveBackend = TuiBackend;
+
+// The view-callback aliases name the active backend's erased view object. They
+// are cfg-duplicated (rather than written against a single `dyn` type alias)
+// so the GUI form stays byte-for-byte the original `dyn AnyView` signature,
+// preserving its elided trait-object lifetime; the TUI form uses `dyn AnyTuiView`.
+#[cfg(not(feature = "tui"))]
 type ActionCallback =
     dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
+#[cfg(feature = "tui")]
+type ActionCallback =
+    dyn FnMut(&mut dyn tui_view::AnyTuiView, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
 
+#[cfg(not(feature = "tui"))]
 type TypedActionCallback =
     dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId);
+#[cfg(feature = "tui")]
+type TypedActionCallback =
+    dyn FnMut(&mut dyn tui_view::AnyTuiView, &dyn Any, &mut AppContext, WindowId, EntityId);
 
 type GlobalActionCallback =
     dyn FnMut(&dyn Any, &'static std::panic::Location<'static>, &mut AppContext);
@@ -540,13 +570,25 @@ type ModelFromFutureCallback = dyn FnOnce(&mut dyn Any, Box<dyn Any>, &mut AppCo
 type ModelFromStreamItemCallback = dyn FnMut(&mut dyn Any, Box<dyn Any>, &mut AppContext, EntityId);
 type ModelFromStreamDoneCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, EntityId);
 
+#[cfg(not(feature = "tui"))]
 type ViewFromFutureCallback =
     dyn FnOnce(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+#[cfg(feature = "tui")]
+type ViewFromFutureCallback =
+    dyn FnOnce(&mut dyn tui_view::AnyTuiView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
+#[cfg(not(feature = "tui"))]
 type ViewFromStreamItemCallback =
     dyn FnMut(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+#[cfg(feature = "tui")]
+type ViewFromStreamItemCallback =
+    dyn FnMut(&mut dyn tui_view::AnyTuiView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
+#[cfg(not(feature = "tui"))]
 type ViewFromStreamDoneCallback = dyn FnOnce(&mut dyn AnyView, &mut AppContext, WindowId, EntityId);
+#[cfg(feature = "tui")]
+type ViewFromStreamDoneCallback =
+    dyn FnOnce(&mut dyn tui_view::AnyTuiView, &mut AppContext, WindowId, EntityId);
 
 enum TaskCallback {
     ModelFromFuture {
@@ -669,6 +711,6 @@ impl<T> RequestState<T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "mod_tests.rs"]
 mod tests;

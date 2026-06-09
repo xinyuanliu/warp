@@ -553,6 +553,7 @@ impl Presenter {
         self.frame_count
     }
 
+    #[cfg_attr(feature = "tui", allow(dead_code))]
     pub(crate) fn parents(&self) -> HashMap<EntityId, EntityId> {
         self.parents.clone()
     }
@@ -572,6 +573,7 @@ impl Presenter {
     /// Set the parent of a view.
     /// This will be overwritten on the next layout pass, but is useful before the initial layout
     /// of a view.
+    #[cfg_attr(feature = "tui", allow(dead_code))]
     pub(crate) fn set_parent(&mut self, view_id: EntityId, parent_id: EntityId) {
         self.parents.insert(view_id, parent_id);
     }

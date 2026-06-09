@@ -96,6 +96,6 @@ impl Element for Clipped {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "clipped_tests.rs"]
 mod tests;

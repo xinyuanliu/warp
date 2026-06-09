@@ -81,7 +81,9 @@ pub struct SpawnedLocalStream {
 }
 
 impl SpawnedLocalStream {
+    // Only used by GUI element tests, which are compiled out on a TUI build.
     #[cfg(test)]
+    #[cfg_attr(feature = "tui", allow(dead_code))]
     pub(crate) fn into_future(self) -> LocalBoxFuture<'static, ()> {
         self.future
     }

@@ -604,6 +604,6 @@ impl RunBuilder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "wrap_tests.rs"]
 mod tests;

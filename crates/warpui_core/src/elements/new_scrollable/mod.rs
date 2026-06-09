@@ -1585,6 +1585,6 @@ impl ClippedScrollStateHandle {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "scrollable_tests.rs"]
 mod tests;

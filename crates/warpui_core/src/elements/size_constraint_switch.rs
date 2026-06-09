@@ -148,6 +148,6 @@ impl Element for SizeConstraintSwitch {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "size_constraint_switch_tests.rs"]
 mod tests;

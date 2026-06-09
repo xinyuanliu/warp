@@ -9,6 +9,7 @@ pub mod r#async;
 pub mod clipboard;
 pub mod clipboard_utils;
 mod core;
+#[cfg(not(feature = "tui"))]
 mod debug;
 pub mod elements;
 pub mod event;

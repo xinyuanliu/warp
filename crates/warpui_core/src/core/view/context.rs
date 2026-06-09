@@ -9,7 +9,9 @@ use pathfinder_geometry::rect::RectF;
 use thiserror::Error;
 
 use super::handle::{AnyViewHandle, ReadView, UpdateView, ViewAsRef, ViewHandle, WeakViewHandle};
-use super::{TypedActionView, View};
+#[cfg(not(feature = "tui"))]
+use super::TypedActionView;
+use super::View;
 use crate::accessibility::AccessibilityContent;
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
 use crate::fonts::Cache as FontCache;
@@ -133,6 +135,7 @@ impl<'a, T: View> ViewContext<'a, T> {
         self.app.add_model(build_model)
     }
 
+    #[cfg(not(feature = "tui"))]
     pub fn add_view<S, F>(&mut self, build_view: F) -> ViewHandle<S>
     where
         S: View,
@@ -141,6 +144,7 @@ impl<'a, T: View> ViewContext<'a, T> {
         self.app.add_view(self.window_id, build_view)
     }
 
+    #[cfg(not(feature = "tui"))]
     pub fn add_typed_action_view<V, F>(&mut self, build_view: F) -> ViewHandle<V>
     where
         V: TypedActionView + View,
@@ -151,6 +155,7 @@ impl<'a, T: View> ViewContext<'a, T> {
             .add_typed_action_view_with_parent(self.window_id, build_view, self.view_id)
     }
 
+    #[cfg(not(feature = "tui"))]
     pub fn add_option_view<S, F>(&mut self, build_view: F) -> Option<ViewHandle<S>>
     where
         S: View,
@@ -908,6 +913,6 @@ impl<V: View> GetSingletonModelHandle for ViewContext<'_, V> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "context_tests.rs"]
 mod tests;

@@ -466,6 +466,6 @@ impl ScrollableElement for ClippedScrollable {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "clipped_scrollable_tests.rs"]
 mod tests;

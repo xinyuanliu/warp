@@ -14,9 +14,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::{AnyView, AppContextImpl, InvalidationCallback};
+#[cfg(not(feature = "tui"))]
+use super::AnyView;
+use super::{AppContextImpl, InvalidationCallback};
 use crate::presenter::PositionCache;
-use crate::{Element, Presenter, View, WindowId, WindowInvalidation};
+#[cfg(not(feature = "tui"))]
+use crate::{Element, View};
+use crate::{Presenter, WindowId, WindowInvalidation};
 
 /// Marker trait selecting a UI backend (GUI or TUI).
 ///
@@ -68,12 +72,14 @@ pub trait BackendView<B: Backend>: 'static {
 /// The GUI backend marker.
 pub struct GuiBackend;
 
+#[cfg(not(feature = "tui"))]
 impl Backend for GuiBackend {
     type RenderOutput = Box<dyn Element>;
     type AnyView = dyn AnyView;
     type Presenter = GuiPresenterState;
 }
 
+#[cfg(not(feature = "tui"))]
 impl ErasedView<GuiBackend> for dyn AnyView {
     fn render(&self, app: &AppContextImpl<GuiBackend>) -> Box<dyn Element> {
         AnyView::render(self, app)
@@ -84,6 +90,7 @@ impl ErasedView<GuiBackend> for dyn AnyView {
     }
 }
 
+#[cfg(not(feature = "tui"))]
 impl<T: View> BackendView<GuiBackend> for T {
     fn into_any_view(self: Box<Self>) -> Box<dyn AnyView> {
         self

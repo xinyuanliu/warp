@@ -99,7 +99,7 @@
 
 mod tracked;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "autotracking_tests.rs"]
 mod tests;
 
@@ -171,6 +171,8 @@ where
 ///
 /// This function requires that only one view is rendered at a time, so the callback cannot result
 /// in a recursive call to `render`
+// Only reached through the GUI render path, which is compiled out on a TUI build.
+#[cfg_attr(feature = "tui", allow(dead_code))]
 pub(super) fn render_view<F, R>(window_id: WindowId, view_id: EntityId, render_callback: F) -> R
 where
     F: FnOnce() -> R,

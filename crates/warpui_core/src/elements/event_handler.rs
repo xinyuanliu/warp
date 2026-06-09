@@ -366,6 +366,6 @@ impl Element for EventHandler {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "event_handler_tests.rs"]
 mod tests;

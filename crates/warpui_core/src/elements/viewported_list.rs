@@ -772,6 +772,6 @@ impl<T> ListStateInner<T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "viewported_list_tests.rs"]
 mod tests;

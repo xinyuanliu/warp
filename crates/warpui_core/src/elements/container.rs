@@ -418,6 +418,6 @@ impl SelectableElement for Container {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "container_tests.rs"]
 mod tests;

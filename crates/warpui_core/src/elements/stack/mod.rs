@@ -440,6 +440,6 @@ impl Extend<Box<dyn Element>> for Stack {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "mod_tests.rs"]
 mod tests;

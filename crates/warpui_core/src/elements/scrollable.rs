@@ -682,6 +682,6 @@ impl Element for Scrollable {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "scrollable_tests.rs"]
 mod tests;

@@ -325,6 +325,6 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "uniform_list_tests.rs"]
 mod tests;

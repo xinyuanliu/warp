@@ -185,6 +185,44 @@ impl AnyViewHandle {
         }
         None
     }
+
+    /// Builds an erased handle to a view of type `T` from raw parts (cloning a
+    /// strong reference). Used by the TUI strong-handle `From` impl, which lives
+    /// in a sibling module and so cannot touch these private fields directly;
+    /// `T: 'static` is all that is required since this stores only a `TypeId`.
+    #[cfg(feature = "tui")]
+    pub(in crate::core) fn for_view<T: 'static>(
+        window_id: WindowId,
+        view_id: EntityId,
+        ref_counts: &Weak<Mutex<RefCounts>>,
+    ) -> Self {
+        if let Some(ref_counts) = ref_counts.upgrade() {
+            ref_counts.lock().inc_entity(view_id);
+        }
+        AnyViewHandle {
+            window_id,
+            view_id,
+            view_type: TypeId::of::<T>(),
+            ref_counts: ref_counts.clone(),
+        }
+    }
+
+    /// The TUI analogue of [`downcast`](Self::downcast).
+    #[cfg(feature = "tui")]
+    pub(in crate::core) fn downcast_tui<T: super::super::TuiView>(
+        self,
+    ) -> Option<super::super::TuiViewHandle<T>> {
+        if self.is::<T>() {
+            if let Some(ref_counts) = self.ref_counts.upgrade() {
+                return Some(super::super::TuiViewHandle::new(
+                    self.window_id,
+                    self.view_id,
+                    &ref_counts,
+                ));
+            }
+        }
+        None
+    }
 }
 
 impl Clone for AnyViewHandle {

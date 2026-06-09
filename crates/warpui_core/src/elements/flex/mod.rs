@@ -995,6 +995,6 @@ impl SelectableElement for Expanded {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "mod_tests.rs"]
 mod tests;

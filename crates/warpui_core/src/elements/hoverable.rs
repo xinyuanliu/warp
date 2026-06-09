@@ -827,6 +827,6 @@ impl SelectableElement for Hoverable {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tui")))]
 #[path = "hoverable_tests.rs"]
 mod tests;
