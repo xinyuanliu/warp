@@ -43,6 +43,7 @@ mod buffer;
 pub mod elements;
 mod event;
 mod geometry;
+pub mod presenter;
 
 pub use buffer::{Cell, TuiBuffer, TuiStyle};
 pub use elements::{TuiElement, TuiPresentationContext, TuiRenderOutput};
@@ -50,4 +51,5 @@ pub use event::{
     crossterm_event_to_warp_event, TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult,
 };
 pub use geometry::{TuiConstraint, TuiRect, TuiSize};
+pub use presenter::{TuiFrame, TuiPresenter};
 pub use warpui_core::TuiView;

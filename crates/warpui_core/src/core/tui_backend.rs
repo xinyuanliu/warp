@@ -7,10 +7,15 @@
 //! milestone) and recovered by downcasting this erased output.
 
 use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
-use super::backend::{Backend, BackendView, ErasedView, GuiPresenterState};
+use super::backend::{Backend, BackendView, ErasedView};
 use super::tui_view::{AnyTuiView, TuiView};
 use super::AppContextImpl;
+use crate::presenter::PositionCache;
+use crate::{Presenter, WindowId};
 
 /// The TUI backend marker.
 pub struct TuiBackend;
@@ -23,11 +28,29 @@ impl Backend for TuiBackend {
 
     type AnyView = dyn AnyTuiView;
 
-    /// Reuses [`GuiPresenterState`] so the shared core retains the
-    /// window-invalidation bookkeeping that `notify`/dirty tracking depend on.
-    /// The real TUI presentation layer arrives in a later milestone; until then
-    /// the GUI presenter state simply goes unused on a TUI build.
-    type Presenter = GuiPresenterState;
+    /// The TUI backend's own presentation state. The real TUI render/event loop
+    /// (layout + paint into a cell buffer) lives downstream in `warpui_tui`'s
+    /// `TuiPresenter`; this is the core-side handle for it.
+    type Presenter = TuiPresenterState;
+}
+
+/// Presentation state for the TUI backend, stored on `AppContextImpl<TuiBackend>`
+/// as `B::Presenter`. This is a first-class, TUI-owned type (replacing the M2
+/// placeholder that reused [`GuiPresenterState`](super::GuiPresenterState)); the
+/// backend-agnostic window-invalidation bookkeeping now lives on
+/// `AppContextImpl<B>` directly, so it is not duplicated here.
+///
+/// NOTE (deferred cleanup): the GUI presenter map + position cache below are a
+/// residual compile bridge. The shared scene/event/focus plumbing in `app.rs`
+/// (`presenter`, `build_scene`, `handle_window_event`, focus/blur, …) is not yet
+/// cfg-split between backends and still references these fields even on a TUI
+/// build, where they go unused (the GUI presenter is inert). Fully shedding them
+/// requires cfg-gating that GUI scene path and is intentionally left out of this
+/// task to keep the GUI + `--features tui` gates stable.
+#[derive(Default)]
+pub struct TuiPresenterState {
+    pub(crate) presenters: HashMap<WindowId, Rc<RefCell<Presenter>>>,
+    pub(crate) last_frame_position_cache: HashMap<WindowId, PositionCache>,
 }
 
 impl ErasedView<TuiBackend> for dyn AnyTuiView {

@@ -21,18 +21,18 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use rustc_hash::FxHashMap;
 
-#[cfg(not(feature = "tui"))]
-use super::GuiBackend;
 use super::{
     autotracking, ActionCallback, ActiveBackend, Backend, BlurContext, FocusContext,
-    GlobalActionCallback, GlobalShortcut, GuiPresenterState, Observation, PendingUnsubscribes,
+    GlobalActionCallback, GlobalShortcut, InvalidationCallback, Observation, PendingUnsubscribes,
     RefCounts, Subscription, TaskCallback, TypedActionCallback, ViewType,
 };
 #[cfg(feature = "tui")]
 use super::{
-    AnyTuiView, BackendView, TuiReadView, TuiTypedActionView, TuiUpdateView, TuiView, TuiViewAsRef,
-    TuiViewContext, TuiViewHandle,
+    AnyTuiView, BackendView, TuiPresenterState, TuiReadView, TuiTypedActionView, TuiUpdateView,
+    TuiView, TuiViewAsRef, TuiViewContext, TuiViewHandle,
 };
+#[cfg(not(feature = "tui"))]
+use super::{GuiBackend, GuiPresenterState};
 use crate::accessibility::AccessibilityVerbosity;
 #[cfg(not(feature = "tui"))]
 use crate::accessibility::ActionAccessibilityContent;
@@ -652,9 +652,15 @@ pub struct AppContextImpl<B: Backend> {
     /// type keys, as it requires the values to appropriately downcast.
     typed_actions: HashMap<ActionType, HashMap<ViewType, Box<TypedActionCallback>>>,
     /// Backend-specific presentation state, hoisted into [`Backend::Presenter`] so
-    /// the generic core never names a GUI-only presenter/position-cache/
-    /// invalidation type. GUI: [`GuiPresenterState`].
+    /// the generic core never names a GUI-only presenter/position-cache type.
+    /// GUI: [`GuiPresenterState`]; TUI: [`TuiPresenterState`](super::TuiPresenterState).
     presentation: B::Presenter,
+    /// Backend-agnostic per-window invalidation bookkeeping. Hoisted out of the
+    /// per-backend presenter state so neither `B::Presenter` carries it: dirty
+    /// tracking (`notify`) and the redraw callbacks are shared core concerns,
+    /// identical for the GUI and TUI backends.
+    window_invalidations: HashMap<WindowId, WindowInvalidation>,
+    invalidation_callbacks: HashMap<WindowId, Box<InvalidationCallback>>,
     /// Configuration options related to rendering of the application.
     rendering_config: rendering::Config,
     global_actions: HashMap<String, Vec<Box<GlobalActionCallback>>>,
@@ -821,7 +827,12 @@ impl AppContext {
             actions: Default::default(),
             typed_actions: Default::default(),
             global_actions: Default::default(),
+            #[cfg(not(feature = "tui"))]
             presentation: GuiPresenterState::default(),
+            #[cfg(feature = "tui")]
+            presentation: TuiPresenterState::default(),
+            window_invalidations: Default::default(),
+            invalidation_callbacks: Default::default(),
             rendering_config: Default::default(),
             keystroke_matcher: Default::default(),
             disabled_key_bindings_windows: Default::default(),
@@ -993,8 +1004,7 @@ impl AppContext {
     }
 
     pub fn has_window_invalidations(&self, window_id: WindowId) -> bool {
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .get(&window_id)
             .is_some_and(|invalidation| {
                 !invalidation.updated.is_empty() || !invalidation.removed.is_empty()
@@ -1012,8 +1022,7 @@ impl AppContext {
         let Some(window) = self.windows.get(&window_id) else {
             return;
         };
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .entry(window_id)
             .or_default()
             .updated = window.views.keys().cloned().collect();
@@ -1038,8 +1047,7 @@ impl AppContext {
         window_id: WindowId,
         callback: F,
     ) {
-        self.presentation
-            .invalidation_callbacks
+        self.invalidation_callbacks
             .insert(window_id, Box::new(callback));
     }
 
@@ -2622,8 +2630,8 @@ impl AppContext {
             windowing_state.remove_window(window_id, ctx);
         });
         self.presentation.presenters.remove(&window_id);
-        self.presentation.invalidation_callbacks.remove(&window_id);
-        self.presentation.window_invalidations.remove(&window_id);
+        self.invalidation_callbacks.remove(&window_id);
+        self.window_invalidations.remove(&window_id);
         autotracking::close_window(window_id);
 
         let mut subscriptions = HashMap::new();
@@ -2879,8 +2887,7 @@ impl AppContext {
                 panic!("Window does not exist");
             }
             self.view_to_window.insert(view_id, window_id);
-            self.presentation
-                .window_invalidations
+            self.window_invalidations
                 .entry(window_id)
                 .or_default()
                 .updated
@@ -2976,8 +2983,7 @@ impl AppContext {
         // Register the action handler for this view type (if it hasn't already been added)
         self.add_typed_action::<V>();
         // Mark the view as needing to be drawn
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .entry(window_id)
             .or_default()
             .updated
@@ -3016,8 +3022,7 @@ impl AppContext {
 
         // Mark the view as removed from the source window's invalidation set.
         // This tells the renderer to stop tracking this view in the source window.
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .entry(source_window_id)
             .or_default()
             .removed
@@ -3034,8 +3039,7 @@ impl AppContext {
         target_window.views.insert(view_id, view);
         self.view_to_window.insert(view_id, target_window_id);
 
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .entry(target_window_id)
             .or_default()
             .updated
@@ -3180,8 +3184,7 @@ impl AppContext {
                 self.structural_parent_to_children.remove(&view_id);
 
                 if let Some(window) = self.windows.get_mut(&current_window_id) {
-                    self.presentation
-                        .window_invalidations
+                    self.window_invalidations
                         .entry(current_window_id)
                         .or_default()
                         .removed
@@ -3238,7 +3241,6 @@ impl AppContext {
 
     fn update_windows(&mut self) {
         let invalidated_window_ids = self
-            .presentation
             .window_invalidations
             .keys()
             .chain(autotracking::windows_with_invalidations().iter())
@@ -3246,12 +3248,9 @@ impl AppContext {
             .cloned()
             .collect_vec();
         for window_id in invalidated_window_ids {
-            if let Some(mut callback) = self.presentation.invalidation_callbacks.remove(&window_id)
-            {
+            if let Some(mut callback) = self.invalidation_callbacks.remove(&window_id) {
                 callback(window_id, self);
-                self.presentation
-                    .invalidation_callbacks
-                    .insert(window_id, callback);
+                self.invalidation_callbacks.insert(window_id, callback);
             }
         }
     }
@@ -3266,7 +3265,6 @@ impl AppContext {
         window_id: WindowId,
     ) -> WindowInvalidation {
         let mut invalidations = self
-            .presentation
             .window_invalidations
             .remove(&window_id)
             .unwrap_or_default();
@@ -3373,8 +3371,7 @@ impl AppContext {
 
                 // If the timer is no longer in repaint_tasks, it was cancelled.
                 if app.repaint_tasks.remove(&task_id).is_some() {
-                    app.presentation
-                        .window_invalidations
+                    app.window_invalidations
                         .entry(window_id)
                         .or_default()
                         .redraw_requested = true;
@@ -3429,7 +3426,7 @@ impl AppContext {
 
                 // If the timer is no longer in repaint_tasks, it was cancelled.
                 if app.repaint_tasks.remove(&task_id).is_some() {
-                    app.presentation.window_invalidations
+                    app.window_invalidations
                         .entry(window_id)
                         .or_default()
                         .redraw_requested = true;
@@ -3541,8 +3538,7 @@ impl AppContext {
         }
 
         // Trigger a redraw on the window.
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .entry(window_id)
             .or_default()
             .redraw_requested = true;
@@ -3861,8 +3857,7 @@ impl AppContext {
     }
 
     fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .entry(window_id)
             .or_default()
             .updated
@@ -4761,8 +4756,7 @@ impl AppContext {
                 panic!("Window does not exist");
             }
             self.view_to_window.insert(view_id, window_id);
-            self.presentation
-                .window_invalidations
+            self.window_invalidations
                 .entry(window_id)
                 .or_default()
                 .updated
@@ -4832,8 +4826,7 @@ impl AppContext {
                 .insert(view_id);
         }
         self.add_typed_action_tui::<V>();
-        self.presentation
-            .window_invalidations
+        self.window_invalidations
             .entry(window_id)
             .or_default()
             .updated
@@ -4872,6 +4865,18 @@ impl AppContext {
             .or_default()
             .entry(ViewType::of::<V>())
             .or_insert(handler);
+    }
+
+    /// Renders the registered [`TuiView`] with the given id to its type-erased
+    /// output (a `Box<dyn Any>` wrapping the view's `RenderOutput`), or `None`
+    /// if no such view is registered. This is the TUI analogue of
+    /// [`render_view`](Self::render_view): the `warpui_tui` presenter calls it to
+    /// resolve a (root or child) view and downcasts the result back to the
+    /// concrete boxed element to lay out and paint it.
+    pub fn render_tui_view(&self, view_id: EntityId) -> Option<Box<dyn Any>> {
+        let window_id = *self.view_to_window.get(&view_id)?;
+        let view = self.windows.get(&window_id)?.views.get(&view_id)?;
+        Some(AnyTuiView::render_tui(view.as_ref(), self))
     }
 
     /// Returns a handle to the window's root [`TuiView`], if it is of type `T`.
