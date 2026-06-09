@@ -33,7 +33,7 @@ pub use model::*;
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "tui")]
-pub use tui_backend::TuiBackend;
+pub use tui_backend::{TuiBackend, TuiPresenterState};
 #[cfg(feature = "tui")]
 pub use tui_view::{
     AnyTuiView, TuiReadView, TuiTypedActionView, TuiUpdateView, TuiView, TuiViewAsRef,

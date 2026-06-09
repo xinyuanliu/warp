@@ -16,11 +16,11 @@ use std::rc::Rc;
 
 #[cfg(not(feature = "tui"))]
 use super::AnyView;
-use super::{AppContextImpl, InvalidationCallback};
+use super::AppContextImpl;
 use crate::presenter::PositionCache;
 #[cfg(not(feature = "tui"))]
 use crate::{Element, View};
-use crate::{Presenter, WindowId, WindowInvalidation};
+use crate::{Presenter, WindowId};
 
 /// Marker trait selecting a UI backend (GUI or TUI).
 ///
@@ -98,13 +98,17 @@ impl<T: View> BackendView<GuiBackend> for T {
 }
 
 /// Presentation state for the GUI backend, stored on `AppContextImpl<GuiBackend>`
-/// as `B::Presenter`. Wraps today's presenter collection plus the position cache
-/// and window-invalidation bookkeeping, so the generic core holds only an opaque
-/// `B::Presenter` while GUI method signatures that touch this state are unchanged.
+/// as `B::Presenter`. Wraps the presenter collection plus the position cache, so
+/// the generic core holds only an opaque `B::Presenter` while GUI method
+/// signatures that touch this state are unchanged. The backend-agnostic
+/// window-invalidation bookkeeping has been hoisted onto `AppContextImpl<B>`
+/// directly, so it no longer lives here (nor on the TUI presenter state).
+//
+// Defined in both builds but only instantiated by the GUI backend, so its
+// fields read as dead on a TUI build (where the GUI presenter is inert).
+#[cfg_attr(feature = "tui", allow(dead_code))]
 #[derive(Default)]
 pub struct GuiPresenterState {
     pub(crate) presenters: HashMap<WindowId, Rc<RefCell<Presenter>>>,
     pub(crate) last_frame_position_cache: HashMap<WindowId, PositionCache>,
-    pub(crate) window_invalidations: HashMap<WindowId, WindowInvalidation>,
-    pub(crate) invalidation_callbacks: HashMap<WindowId, Box<InvalidationCallback>>,
 }
