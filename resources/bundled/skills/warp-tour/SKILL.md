@@ -1,13 +1,15 @@
 ---
 name: warp-tour
-description: Give the user an interactive, hands-on tour of Warp's terminal, coding, agent, knowledge, and navigation features. Use Ask User Question for every tour decision and Warp Control to show each available destination while keeping the main agent conversation visible.
+description: Give the user an interactive, hands-on tour of Warp's terminal, coding, agent, knowledge, and navigation features. Offer the zero-cost `warpctrl tour run` first, and drive the agent-led tour through the composite `tour init` / `tour stop` / `tour finish` commands while keeping the main agent conversation visible.
 ---
 
 # Warp Tour
 
-Guide the user through Warp from the main agent conversation. Use Warp Control for app navigation and Ask User Question for every menu, navigation decision, hands-on checkpoint, help choice, and cleanup confirmation.
+You are a friendly, enthusiastic tour guide — not a technical manual. The CLI provides the voice: every stop's copy comes from `warpctrl`, pre-written and on-brand. Your role is to **drive the tour** (run composite commands, ask questions, recover from errors) and emit the CLI copy verbatim in your responses.
 
-Do not ask tour questions as plain text. Do not assume a destination exists, hard-code keyboard shortcuts, submit terminal input, close a pre-existing target, or silently leave temporary state behind.
+Never ask tour questions as plain text — always use Ask User Question. Never assume a destination exists, hard-code shortcuts, submit terminal input, close a pre-existing target, or silently leave temporary state behind.
+
+Keep your own words brief and warm between steps — e.g. "Here we go! 👉" or "Great, let me pull that up for you." Save the explaining for the CLI copy.
 
 ## Start-up gate
 
@@ -28,222 +30,120 @@ elif [ -x ./target/debug/warp ]; then
 fi
 ```
 
-Record the resolved command prefix as **`$WARPCTRL`** (either `warpctrl`, `./target/release/warp --warpctrl`, or `./target/debug/warp --warpctrl`) and use it for every subsequent command in this skill (e.g. `$WARPCTRL surface list`, `$WARPCTRL tab create`). If none of these work, print:
+Record the resolved command prefix as **`$WARPCTRL`** (either `warpctrl`, `./target/release/warp --warpctrl`, or `./target/debug/warp --warpctrl`) and use it for every subsequent command in this skill. If none of these work, print:
 
 > Warp Control is required for the guided tour. Enable it in **Settings > Scripting**, then rerun `warp-tour`. If you are developing Warp locally, make sure you have built the project first (`cargo build --features warp_control_cli`).
 
 Ask the user to rerun `warp-tour`, then stop. Do not attempt a fallback tour.
 
-If `$WARPCTRL instance list` succeeds but no compatible instance is found, or local control is disabled, print:
-
-> Warp Control is required for the guided tour. Enable it in **Settings > Scripting**, then rerun `warp-tour`.
-
-Ask the user to rerun `warp-tour`, then stop. Do not attempt a fallback tour.
+If `$WARPCTRL instance list` succeeds but no compatible instance is found, or local control is disabled, print the same guidance and stop.
 
 When more than one instance is running, use Ask User Question to let the user choose one, then pass its exact `--instance` ID to every command.
 
-Query structured state before presenting any topics:
+## Offer the self-driving tour first
+
+The CLI ships a complete interactive tour that costs the user nothing to run. Before driving the tour yourself, use Ask User Question:
+
+- **Run the self-guided tour** *(free and instant — runs right in your terminal)*
+- **Have me guide you** *(I'll drive the stops and you can ask me anything)*
+
+If they pick the self-guided tour, stage `$WARPCTRL tour run` in their input using `$WARPCTRL input insert "$WARPCTRL tour run"` (do not run it yourself — `tour run` is interactive and must own the user's terminal), tell them to press Enter to start it, and stop.
+
+If they pick the agent-led tour, continue below.
+
+## Agent-led tour: one command per phase
+
+Check whether the resolved CLI supports composite tour commands:
 
 ```sh
-$WARPCTRL --output-format json app active
-$WARPCTRL --output-format json surface list
+$WARPCTRL tour init --help
 ```
 
-Record the starting window, tab, pane, and session as the **anchor**. The anchor is the main tour agent conversation. Build menus only from surfaces whose `is_available` value is `true`; do not show unavailable topics. If a direct open later returns `unsupported_action` or `target_state_conflict`, explain that the topic is unavailable in the current context, remove it from later menus, and continue.
+If it does not (older build), fall back to the granular flow at the end of this skill.
 
-## Keep the tour agent visible
+### Session start
 
-Keep the anchor visible and return focus to it before every Ask User Question.
+```sh
+$WARPCTRL --output-format json tour init
+```
 
-1. Prefer one reusable right-hand split for demonstrations:
+One invocation returns everything you need; record it all:
 
-   ```sh
-   $WARPCTRL pane split --direction right --pane <anchor-pane-id>
-   $WARPCTRL --output-format json pane list
-   ```
+- `anchor` — the window/tab/pane/session of this agent conversation. The anchor is sacred: never close it, and refocus it before every Ask User Question.
+- `tour_pane_id` — a fresh right-hand split where every demo opens. If `tour init` exits non-zero or `tour_pane_id` is null, inspect `steps` for the failure, tell the user cheerfully, and do not continue without a tour pane.
+- `surfaces` — availability for every destination. Build menus only from stops whose surfaces have `is_available: true`; omit unavailable topics.
+- `theme` — the user's saved theme state. Keep this JSON verbatim for `tour finish`.
 
-   Compare pane lists to identify and record the newly created **tour pane**. Never infer an ID.
+Capture the welcome banner and emit it verbatim in your response before the first menu:
 
-2. Target demonstrations at the tour pane with `--pane <tour-pane-id>` when the command accepts a pane selector.
-3. Reuse that pane throughout the tour. Do not create a new tab merely to switch topics.
-4. If a destination cannot be demonstrated in a split, use a temporary tab only as a fallback, record its returned ID, and return to the anchor immediately after the demonstration.
-5. Before every Ask User Question:
+```sh
+welcome_text=$(TERM=dumb $WARPCTRL tour welcome 2>&1)
+```
 
-   ```sh
-   $WARPCTRL pane focus --pane <anchor-pane-id>
-   ```
-
-6. If the anchor becomes stale or cannot be focused, stop opening destinations and proceed to cleanup.
-
-## Question flow
+### Question flow
 
 Start with Ask User Question:
 
-- **Start the short core tour**
-- **Browse the topic menu**
-- **End the tour**
+- **Start the core tour** *(themes, keybindings, panes, search, tabs)*
+- **Jump to a topic** *(pick what sounds interesting)*
+- **I'm done, thanks!**
+
+Core stop order: `themes`, `keybindings`, `panes`, `global-search`, `vertical-tabs`. Topic stops: `terminal`, `coding`, `agents`, `knowledge`.
 
 For every stop:
 
-1. Open the destination with the narrowest direct Warp Control command.
-2. Briefly explain what it is, where it lives, and one useful workflow.
-3. Retrieve relevant shortcuts with `$WARPCTRL keybinding get <name>` or `$WARPCTRL keybinding list`; never hard-code a shortcut.
-4. Give one small hands-on task.
-5. Focus the anchor and use Ask User Question:
-   - **I completed it**
-   - **I want help**
-   - **Skip this task**
-   - **End the tour**
-6. Wait for the response before restoring temporary state or moving on.
-7. After the task is complete or skipped, use Ask User Question:
-   - **Continue**
-   - **Return to topic menu**
-   - **End the tour**
-
-If the user asks for help, explain the task, reopen the same destination if needed, and ask the hands-on checkpoint again. Never repeat a question the user skipped.
-
-## Short core tour
-
-Offer available stops in this order. Allow skip, topic menu, or end after every stop.
-
-### Themes
-
-Save the full result of `$WARPCTRL --output-format json theme get` before opening:
-
-```sh
-$WARPCTRL surface theme-picker open --pane <tour-pane-id>
-```
-
-Explain previewing and choosing themes. Ask the user to preview a theme, wait for confirmation, then restore the saved theme state:
-
-- Restore saved light and dark themes with `theme light-set` and `theme dark-set`.
-- Restore whether system themes were enabled with `theme system-set`.
-- If system themes were disabled, restore the saved active theme with `theme set`.
-
-### Keybindings
-
-```sh
-$WARPCTRL surface keybindings open --pane <tour-pane-id>
-$WARPCTRL keybinding list
-```
-
-Explain searching by action or shortcut and customizing a binding. Ask the user to find a command they use often without requiring them to change it.
-
-### Panes and major panels
-
-Explain that panes divide a tab, while tools and code review appear in side panels. Use only available destinations:
-
-```sh
-$WARPCTRL surface project-explorer open --pane <tour-pane-id>
-$WARPCTRL surface conversation-list open --pane <tour-pane-id>
-$WARPCTRL surface warp-drive open --pane <tour-pane-id>
-$WARPCTRL surface code-review open --pane <tour-pane-id>
-$WARPCTRL pane list
-```
-
-Open one destination at a time. Ask the user to identify the anchor pane, tour pane, and currently open panel.
-
-### Global file search
-
-```sh
-$WARPCTRL surface global-search open --pane <tour-pane-id>
-```
-
-Explain repository-wide file-content search and ask the user to enter a harmless query. Do not submit or modify terminal input on their behalf.
-
-### Vertical tabs
-
-```sh
-$WARPCTRL surface vertical-tabs open --pane <tour-pane-id>
-$WARPCTRL tab list
-$WARPCTRL pane list
-$WARPCTRL session list
-```
-
-Explain the tab, pane, and session hierarchy and ask the user to locate the tour split in vertical tabs.
-
-After the final available core stop, use Ask User Question to offer the optional topic groups or end.
-
-## Topic menu
-
-Use Ask User Question and omit groups with no available demonstrations:
-
-- **Terminal fundamentals**
-- **Coding workflow**
-- **Agents**
-- **Knowledge and navigation**
-- **Resume core tour** when core stops remain
-- **End the tour**
-
-After completing a group, return to this menu until the user ends.
-
-### Terminal fundamentals
-
-Cover blocks, modern input, autosuggestions, completions, and command search. Use the reusable terminal split and:
-
-```sh
-$WARPCTRL surface command-search open --pane <tour-pane-id>
-$WARPCTRL keybinding list
-```
-
-Ask the user to run a harmless command themselves, identify its block, try an autosuggestion or completion, and find it in command search. Never invoke a command-submission action.
-
-### Coding workflow
-
-Use available destinations among:
-
-```sh
-$WARPCTRL surface project-explorer open --pane <tour-pane-id>
-$WARPCTRL surface global-search open --pane <tour-pane-id>
-$WARPCTRL surface code-review open --pane <tour-pane-id>
-$WARPCTRL file open <user-approved-path>
-```
-
-Explain repository opening, project explorer, file editing, global search, and code review. Open a file only after the user chooses or approves its path.
-
-### Agents
-
-Use available destinations among:
-
-```sh
-$WARPCTRL surface agent-management open --pane <tour-pane-id>
-$WARPCTRL surface conversation-list open --pane <tour-pane-id>
-$WARPCTRL surface settings open --query permissions --pane <tour-pane-id>
-```
-
-Explain Agent Mode, agent management, permissions, and conversation history. Do not start an agent run or change permissions during the tour.
-
-### Knowledge and navigation
-
-Use available destinations among:
-
-```sh
-$WARPCTRL surface warp-drive open --pane <tour-pane-id>
-$WARPCTRL surface command-palette open --query "notebook" --pane <tour-pane-id>
-$WARPCTRL surface command-palette open --query "workflow" --pane <tour-pane-id>
-$WARPCTRL surface settings open --query "MCP" --pane <tour-pane-id>
-$WARPCTRL tab list
-$WARPCTRL pane list
-$WARPCTRL session list
-```
-
-Explain Warp Drive, Rules, Notebooks, Workflows, MCP, Command Palette, tabs, panes, and sessions. Ask the user to locate one knowledge item or navigation target; do not create or edit it.
-
-## Cleanup
-
-Run cleanup whenever the user ends, the tour completes, or the anchor becomes unavailable.
-
-1. Restore saved theme state if the theme stop changed it.
-2. Focus the anchor if it still exists.
-3. List tabs and panes again. Close only the tour pane and fallback tabs whose exact IDs were recorded as tour-created.
-4. Before issuing close actions, use Ask User Question to tell the user that Warp may show its normal close warnings:
-   - **Clean up tour panes/tabs**
-   - **Leave them open and end**
-5. If cleanup is chosen, issue exact-ID close commands and tell the user to respond to any normal Warp close warnings:
-
+1. Run the whole stop in one invocation:
    ```sh
-   $WARPCTRL pane close --pane <tour-pane-id>
-   $WARPCTRL tab close --tab <tour-created-tab-id>
+   $WARPCTRL --output-format json tour stop <stop-name> --tour-pane <tour-pane-id> --anchor-pane <anchor-pane-id>
    ```
+2. Emit the returned `copy` verbatim in your response message. Mention any returned `keybindings` naturally (never hard-code a shortcut that wasn't returned).
+3. If individual `steps` failed, cheerfully tell the user that surface isn't available right now, drop the affected stop from future menus, and move on. A failed step never aborts the tour.
+4. The command refocuses the anchor for you. Ask the hands-on task from the stop copy with Ask User Question:
+   - **Done! ✅**
+   - **I need a hint 💡**
+   - **Skip this one**
+   - **End the tour**
+5. If the user asks for help, offer a brief hint (one sentence), rerun the `tour stop` command if the surface needs reopening, then ask again. Never repeat a question they already skipped.
+6. After completion or skip, use Ask User Question:
+   - **Next stop →**
+   - **Back to topic menu**
+   - **End the tour**
 
-6. Never close the anchor or any target that existed before the tour. If a warning cancels the close or cleanup fails, report exactly what remains open.
+Hands-on task notes:
+- `themes`: the user previews themes; their original state is restored at finish via the saved `theme` JSON.
+- `global-search`: ask the user to search for a symbol they know. Do not submit or stage terminal input for them.
+- `terminal`: ask the user to run a harmless command themselves (`ls` or `date`). Never invoke a command-submission action on their behalf.
+- `coding`: open a file only after the user explicitly chooses or approves a path: `$WARPCTRL file open <user-approved-path>`.
+- `agents`: do not start an agent run or change any permissions during the tour.
+- `knowledge`: do not create or edit any Warp Drive items during the tour.
+
+### Cleanup
+
+Run cleanup whenever the user ends, the tour completes, or the anchor becomes unavailable. Use Ask User Question first:
+
+- **Clean up tour panes/tabs 🧹**
+- **Leave them open, I'm done**
+
+If cleanup is chosen, one invocation restores the theme and closes exactly the recorded tour-created IDs:
+
+```sh
+$WARPCTRL --output-format json tour finish --tour-pane <tour-pane-id> --restore-theme '<saved-theme-json>'
+```
+
+Add `--tour-tab <id>` for any temporary tab you created. Emit the returned `copy` verbatim. Tell the user to confirm any normal Warp close warnings that appear — that's expected behavior. If a close fails or gets cancelled, cheerfully report exactly what's still open from the `steps`. Never close the anchor or anything that existed before the tour started.
+
+If the user declines cleanup, still restore the theme when the themes stop was visited:
+
+```sh
+$WARPCTRL tour finish --restore-theme '<saved-theme-json>'
+```
+
+## Fallback: granular commands (older CLI builds)
+
+When `tour init` is unavailable, drive the tour with granular commands. The same rules apply; this just takes more invocations:
+
+1. `$WARPCTRL --output-format json app active` and `$WARPCTRL --output-format json surface list` — record the anchor and availability.
+2. `$WARPCTRL --output-format json theme get` — save theme state.
+3. `$WARPCTRL pane split --direction right --pane <anchor-pane-id>`, then diff `$WARPCTRL --output-format json pane list` before/after to find the tour pane ID. Never guess.
+4. Per stop: capture copy with `stop_text=$(TERM=dumb $WARPCTRL tour <stop-name> 2>&1)` and emit it verbatim; open the stop's surfaces with `$WARPCTRL surface <name> open --pane <tour-pane-id>` (settings always in the tour pane, never a new tab); look up shortcuts with `$WARPCTRL keybinding get <name>`; refocus with `$WARPCTRL pane focus --pane <anchor-pane-id>` before every Ask User Question.
+5. Cleanup: restore the saved theme via `theme system-set` / `theme light-set` / `theme dark-set` / `theme set`, then close only tour-created IDs with `pane close` / `tab close`.

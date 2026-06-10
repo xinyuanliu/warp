@@ -99,6 +99,63 @@ fn rejects_excluded_command_routes() {
 }
 
 #[test]
+fn parses_tour_runner_and_composite_commands() {
+    assert!(ControlArgs::try_parse_from(["warpctrl", "tour", "run"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "tour", "welcome"]).is_ok());
+    assert!(ControlArgs::try_parse_from(["warpctrl", "tour", "cleanup"]).is_ok());
+
+    let args = ControlArgs::try_parse_from(["warpctrl", "tour", "init", "--instance", "inst_1"])
+        .expect("tour init parses");
+    let ControlCommand::Tour(TourCommand::Init(init)) = args.command else {
+        panic!("expected tour init command");
+    };
+    assert_eq!(init.instance.as_deref(), Some("inst_1"));
+
+    let args = ControlArgs::try_parse_from([
+        "warpctrl",
+        "tour",
+        "stop",
+        "global-search",
+        "--tour-pane",
+        "pane_2",
+        "--anchor-pane",
+        "pane_1",
+    ])
+    .expect("tour stop parses");
+    let ControlCommand::Tour(TourCommand::Stop(stop)) = args.command else {
+        panic!("expected tour stop command");
+    };
+    assert_eq!(stop.stop, TourStop::GlobalSearch);
+    assert_eq!(stop.tour_pane, "pane_2");
+    assert_eq!(stop.anchor_pane, "pane_1");
+
+    let args = ControlArgs::try_parse_from([
+        "warpctrl",
+        "tour",
+        "finish",
+        "--tour-pane",
+        "pane_2",
+        "--tour-tab",
+        "tab_1",
+        "--tour-tab",
+        "tab_2",
+        "--restore-theme",
+        "{\"name\":\"Dracula\",\"follow_system_theme\":false}",
+    ])
+    .expect("tour finish parses");
+    let ControlCommand::Tour(TourCommand::Finish(finish)) = args.command else {
+        panic!("expected tour finish command");
+    };
+    assert_eq!(finish.tour_pane.as_deref(), Some("pane_2"));
+    assert_eq!(finish.tour_tabs, vec!["tab_1", "tab_2"]);
+    assert!(finish.restore_theme.is_some());
+
+    let err = ControlArgs::try_parse_from(["warpctrl", "tour", "stop", "global-search"])
+        .expect_err("tour stop requires pane selectors");
+    assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+}
+
+#[test]
 fn parses_first_slice_instance_list() {
     let args = ControlArgs::try_parse_from(["warpctrl", "instance", "list"])
         .expect("instance list parses");
@@ -711,6 +768,7 @@ fn parsed_action_kind(command: &ControlCommand) -> Option<ActionKind> {
                 SurfaceOpenCommand::Open(_) => Some(ActionKind::SurfaceAgentManagementOpen),
             },
         },
+        ControlCommand::Tour(_) => None,
         ControlCommand::Completions { .. } => None,
     }
 }

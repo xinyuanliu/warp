@@ -1,10 +1,11 @@
 //! Implementations for user-facing `warpctrl` command groups.
+use local_control::discovery::InstanceRecord;
 use local_control::protocol::{
     Action, ActionKind, ActionNameParams, BindingNameParams, BooleanValueParams, ColorValueParams,
-    ControlError, DirectionParams, EmptyParams, ErrorCode, FileOpenParams, KeyParams,
-    KeyValueParams, PageQueryParams, QueryParams, RenameParams, RequestEnvelope, ResizeParams,
-    SettingListParams, TabActivateParams, TabActivationMode, TabCloseMode, TabCloseParams,
-    TabCreateParams, TextParams, ThemeNameParams,
+    ControlError, ControlResponse, DirectionParams, EmptyParams, ErrorCode, FileOpenParams,
+    KeyParams, KeyValueParams, PageQueryParams, QueryParams, RenameParams, RequestEnvelope,
+    ResizeParams, SettingListParams, TabActivateParams, TabActivationMode, TabCloseMode,
+    TabCloseParams, TabCreateParams, TargetSelector, TextParams, ThemeNameParams,
 };
 use local_control::selection::select_instance;
 use serde::Serialize;
@@ -700,27 +701,43 @@ fn run_action(
     run_action_with_params(args, action, EmptyParams {}, output_format)
 }
 
+/// Resolves one discovered Warp instance from CLI instance selectors.
+pub(super) fn resolve_instance(args: &TargetArgs) -> Result<InstanceRecord, ControlError> {
+    let selector = instance_selector(args);
+    let records = local_control::discovery::list_instances_from_dir(
+        &local_control::discovery::discovery_dir(),
+    );
+    select_instance(&records, &selector)
+}
+
+/// Sends one authenticated action request to a selected instance and returns its data payload.
+pub(super) fn invoke_action_on<T: Serialize>(
+    instance: &InstanceRecord,
+    target: TargetSelector,
+    action: ActionKind,
+    params: T,
+) -> Result<serde_json::Value, ControlError> {
+    let mut request = RequestEnvelope::new(Action::with_params(action, params)?);
+    request.target = target;
+    let response = local_control::client::send_request(instance, &request)?;
+    let ControlResponse::Ok { data } = response.response else {
+        return Err(ControlError::new(
+            ErrorCode::Internal,
+            "local-control request failed without an error payload",
+        ));
+    };
+    Ok(data)
+}
+
 fn run_action_with_params<T: Serialize>(
     args: TargetArgs,
     action: ActionKind,
     params: T,
     output_format: OutputFormat,
 ) -> Result<(), ControlError> {
-    let selector = instance_selector(&args);
-    let records = local_control::discovery::list_instances_from_dir(
-        &local_control::discovery::discovery_dir(),
-    );
     let target = target_selector(&args)?;
-    let instance = select_instance(&records, &selector)?;
-    let mut request = RequestEnvelope::new(Action::with_params(action, params)?);
-    request.target = target;
-    let response = local_control::client::send_request(&instance, &request)?;
-    let local_control::protocol::ControlResponse::Ok { data } = response.response else {
-        return Err(ControlError::new(
-            ErrorCode::Internal,
-            "local-control request failed without an error payload",
-        ));
-    };
+    let instance = resolve_instance(&args)?;
+    let data = invoke_action_on(&instance, target, action, params)?;
     match output_format {
         OutputFormat::Json => write_json(&data),
         OutputFormat::Ndjson => write_json_line(&data),

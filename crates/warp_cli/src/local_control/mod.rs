@@ -3,6 +3,7 @@ mod commands;
 mod completions;
 mod output;
 mod selectors;
+mod tour;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
@@ -16,6 +17,8 @@ use commands::{
 };
 use completions::generate_completions_to_stdout;
 use output::write_control_error;
+pub use tour::TourStop;
+use tour::run_tour_command;
 
 use crate::agent::OutputFormat;
 
@@ -185,6 +188,10 @@ pub enum ControlCommand {
     /// Open or toggle local Warp surfaces.
     #[command(subcommand)]
     Surface(SurfaceCommand),
+
+    /// Print deterministic tour copy for a guided Warp tour stop.
+    #[command(subcommand)]
+    Tour(TourCommand),
 
     /// Generate shell completions for your shell to stdout.
     ///
@@ -550,6 +557,95 @@ pub enum KeybindingCommand {
 pub enum FileCommand {
     /// Open a file in Warp.
     Open(FileOpenArgs),
+}
+
+/// Commands that run, orchestrate, or print copy for the guided Warp tour.
+#[derive(Debug, Clone, Subcommand)]
+pub enum TourCommand {
+    /// Run the full interactive guided tour in this terminal.
+    Run(TourInstanceArgs),
+
+    /// Start a tour session: anchor chain, tour pane, surface availability, and saved theme state.
+    Init(TourInstanceArgs),
+
+    /// Perform one tour stop: copy, surface opens, keybindings, and anchor refocus.
+    Stop(TourStopArgs),
+
+    /// Finish a tour session: restore theme state and close tour-created targets.
+    Finish(TourFinishArgs),
+
+    /// Print the animated welcome banner and tour overview.
+    Welcome,
+    /// Print copy for the Themes stop.
+    Themes,
+    /// Print copy for the Keybindings stop.
+    Keybindings,
+    /// Print copy for the Panes & Panels stop.
+    Panes,
+    /// Print copy for the Global Search stop.
+    GlobalSearch,
+    /// Print copy for the Vertical Tabs stop.
+    VerticalTabs,
+    /// Print copy for the Terminal Fundamentals stop.
+    Terminal,
+    /// Print copy for the Coding Workflow stop.
+    Coding,
+    /// Print copy for the Agent Mode stop.
+    Agents,
+    /// Print copy for the Knowledge & Navigation stop.
+    Knowledge,
+    /// Print the tour-complete cleanup message.
+    Cleanup,
+}
+
+/// Instance selectors shared by tour commands.
+#[derive(Debug, Clone, Args, Default)]
+pub struct TourInstanceArgs {
+    /// Target a specific local Warp instance id from `warpctrl instance list`.
+    #[arg(long = "instance", conflicts_with = "pid")]
+    pub instance: Option<String>,
+
+    /// Target a specific local Warp process id.
+    #[arg(long = "pid", conflicts_with = "instance")]
+    pub pid: Option<u32>,
+}
+
+/// Arguments for `tour stop`.
+#[derive(Debug, Clone, Args)]
+pub struct TourStopArgs {
+    /// Tour stop to perform.
+    #[arg(value_enum)]
+    pub stop: TourStop,
+
+    /// Tour pane that hosts the stop's surface demonstrations.
+    #[arg(long = "tour-pane")]
+    pub tour_pane: String,
+
+    /// Anchor pane to refocus after the stop's surfaces open.
+    #[arg(long = "anchor-pane")]
+    pub anchor_pane: String,
+
+    #[command(flatten)]
+    pub instance: TourInstanceArgs,
+}
+
+/// Arguments for `tour finish`.
+#[derive(Debug, Clone, Args)]
+pub struct TourFinishArgs {
+    /// Tour-created pane to close.
+    #[arg(long = "tour-pane")]
+    pub tour_pane: Option<String>,
+
+    /// Tour-created tab to close. Repeatable.
+    #[arg(long = "tour-tab")]
+    pub tour_tabs: Vec<String>,
+
+    /// Saved theme-state JSON from `tour init` to restore.
+    #[arg(long = "restore-theme")]
+    pub restore_theme: Option<String>,
+
+    #[command(flatten)]
+    pub instance: TourInstanceArgs,
 }
 
 /// Exact selectors for a target within the selected Warp instance.
@@ -927,6 +1023,7 @@ fn run_inner(args: ControlArgs) -> Result<(), local_control::protocol::ControlEr
         ControlCommand::Keybinding(command) => run_keybinding_command(command, output_format),
         ControlCommand::File(command) => run_file_command(command, output_format),
         ControlCommand::Surface(command) => run_surface_command(command, output_format),
+        ControlCommand::Tour(command) => run_tour_command(command, output_format),
         ControlCommand::Completions { shell } => generate_completions_to_stdout(shell),
     }
 }
