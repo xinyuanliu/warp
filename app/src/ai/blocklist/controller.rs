@@ -2372,9 +2372,8 @@ impl BlocklistAIController {
         // Safety net: if the connected Grok subscription's OAuth token is
         // nearing expiry, kick off a background refresh so upcoming requests
         // can authenticate even when the proactive refresh loop isn't
-        // running. (A token already past its expiry is instead refreshed by a
-        // blocking, one-shot attempt in `ResponseStream` before the request
-        // is sent.)
+        // running. (A token already past its expiry is instead refreshed by
+        // the blocking, one-shot attempt started below.)
         #[cfg(not(target_family = "wasm"))]
         {
             use ::ai::api_keys::ApiKeyManager;
@@ -2396,6 +2395,25 @@ impl BlocklistAIController {
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
+        // If the Grok OAuth token this request carries is already past its
+        // hard expiry, start a single refresh attempt for the request to
+        // block on before it is sent (awaited in the request task, off the
+        // main thread). If the attempt fails, the request proceeds with the
+        // stale token — the server is the authority on its validity.
+        #[cfg(not(target_family = "wasm"))]
+        let pending_grok_token = request_params
+            .api_keys
+            .as_ref()
+            .is_some_and(|keys| !keys.grok_oauth_access_token.is_empty())
+            .then(|| {
+                ::ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.blocking_grok_refresh_for_request(ctx)
+                })
+            })
+            .flatten();
+        #[cfg(target_family = "wasm")]
+        let pending_grok_token = None;
+
         let server_conversation_token_for_identifiers =
             conversation_data.server_conversation_token.clone();
 
@@ -2412,6 +2430,7 @@ impl BlocklistAIController {
                 request_params.clone(),
                 ai_identifiers,
                 can_attempt_resume_on_error,
+                pending_grok_token,
                 ctx,
             )
         });
