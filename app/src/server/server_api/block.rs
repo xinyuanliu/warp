@@ -141,7 +141,8 @@ impl BlockClient for ServerApi {
         let variables = ShareBlockToSessionVariables {
             block: BlockInput {
                 command: None,
-                embed_display_setting: warp_graphql::mutations::share_block::DisplaySetting::CommandAndOutput,
+                embed_display_setting:
+                    warp_graphql::mutations::share_block::DisplaySetting::CommandAndOutput,
                 output: None,
                 show_prompt: false,
                 stylized_command: None,
