@@ -109,4 +109,4 @@ We'd like to call out a few of the [open source dependencies](https://docs.warp.
 - [Hyper HTTP library](https://github.com/hyperium/hyper)
 - [FontKit](https://github.com/servo/font-kit)
 - [Core-foundation](https://github.com/servo/core-foundation-rs)
-- [Smol](https://github.com/smol-rs/smol)
+- [Smol](https://github.com/smol-rs/smol)!
