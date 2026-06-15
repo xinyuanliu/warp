@@ -88,6 +88,15 @@ impl OauthAttempt {
     pub async fn finish(self) -> anyhow::Result<TokenResponse> {
         run_oauth_flow(self.listener, self.pkce).await
     }
+
+    /// Returns a copy of the per-attempt PKCE verifier. This can be used with
+    /// [`exchange_manual_code`] as a fallback when xAI shows an authorization
+    /// code on the consent screen for the user to paste (instead of, or when
+    /// the loopback redirect to the local callback server is blocked by the
+    /// browser).
+    pub fn verifier(&self) -> String {
+        self.pkce.verifier.clone()
+    }
 }
 
 /// The per-attempt secrets for one authorization request: the PKCE
@@ -409,6 +418,15 @@ pub async fn refresh_access_token(refresh_token: &str) -> anyhow::Result<TokenRe
         ("client_id", CLIENT_ID),
     ];
     post_token_request(&form).await
+}
+
+/// Completes a Grok OAuth login using a code the user pasted from xAI's
+/// "Enter this code to finish signing in" screen (the manual-code fallback
+/// path). The `verifier` must come from a prior [`OauthAttempt::verifier`] call
+/// for the same login attempt so that the same PKCE secret is used for the
+/// token exchange.
+pub async fn exchange_manual_code(code: String, verifier: String) -> anyhow::Result<TokenResponse> {
+    exchange_code_for_tokens(&code, &verifier).await
 }
 
 /// POSTs a form-encoded body to xAI's token endpoint and parses the

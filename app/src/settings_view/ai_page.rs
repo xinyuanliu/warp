@@ -36,6 +36,7 @@ use super::custom_inference_modal::{
     CustomEndpointModal, CustomEndpointModalEvent, CustomEndpointModalViewState,
 };
 use super::execution_profile_view::{ExecutionProfileView, ExecutionProfileViewEvent};
+use super::grok_manual_code_modal::GrokManualCodeModal;
 use super::remove_custom_endpoint_confirmation_dialog::{
     RemoveCustomEndpointConfirmationDialog, RemoveCustomEndpointConfirmationDialogEvent,
 };
@@ -92,7 +93,7 @@ use crate::settings::{
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
 use crate::view_components::action_button::{
-    ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
+    ActionButton, ButtonSize, DangerSecondaryTheme, NakedTheme, SecondaryTheme,
 };
 use crate::view_components::{
     render_warning_box, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
@@ -688,9 +689,28 @@ pub struct AISettingsPageView {
     pending_remove_custom_endpoint_index: Option<usize>,
     custom_inference_add_button: ViewHandle<ActionButton>,
     custom_endpoint_edit_buttons: Vec<ViewHandle<ActionButton>>,
+
+    // Manual-code fallback state for SuperGrok (xAI) OAuth when the loopback
+    // redirect is blocked by the browser and xAI shows a code to paste.
+    grok_manual_code_modal: ViewHandle<GrokManualCodeModal>,
+    pending_grok_oauth_attempt: Option<super::grok_manual_code_modal::PendingGrokOauthAttempt>,
 }
 
 impl AISettingsPageView {
+    /// Test-only accessors so integration/unit tests can observe the manual-code
+    /// fallback UI state without making the fields public.
+    #[cfg(test)]
+    pub fn grok_manual_code_modal(&self) -> &ViewHandle<GrokManualCodeModal> {
+        &self.grok_manual_code_modal
+    }
+
+    #[cfg(test)]
+    pub fn pending_grok_oauth_attempt(
+        &self,
+    ) -> Option<&super::grok_manual_code_modal::PendingGrokOauthAttempt> {
+        self.pending_grok_oauth_attempt.as_ref()
+    }
+
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
 
@@ -1826,6 +1846,8 @@ impl AISettingsPageView {
             .is_visible()
         {
             Some(ChildView::new(&self.remove_custom_endpoint_confirmation_dialog).finish())
+        } else if self.grok_manual_code_modal.as_ref(app).is_visible() {
+            Some(ChildView::new(&self.grok_manual_code_modal).finish())
         } else {
             None
         }
@@ -1931,6 +1953,24 @@ impl AISettingsPageView {
         self.custom_endpoint_modal_state.close(ctx);
         ctx.emit(AISettingsPageEvent::HideModal);
         ctx.notify();
+    }
+
+    fn handle_grok_manual_code_modal_event(
+        &mut self,
+        event: &super::grok_manual_code_modal::GrokManualCodeModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use super::grok_manual_code_modal::GrokManualCodeModalEvent;
+        match event {
+            GrokManualCodeModalEvent::Cancel => {
+                ctx.dispatch_typed_action(AISettingsPageAction::CancelGrokManualCode);
+            }
+            GrokManualCodeModalEvent::Submit(code) => {
+                ctx.dispatch_typed_action(AISettingsPageAction::CompleteGrokManualCode(
+                    code.clone(),
+                ));
+            }
+        }
     }
 
     fn handle_custom_endpoint_modal_close_event(
@@ -2176,10 +2216,24 @@ impl AISettingsPageView {
             toast_stack.add_persistent_toast(toast, window_id, ctx);
         });
 
+        // Keep the attempt alive so we can hand its verifier to the manual-code
+        // fallback dialog if xAI shows a pasteable code instead of redirecting.
+        self.pending_grok_oauth_attempt =
+            Some(super::grok_manual_code_modal::PendingGrokOauthAttempt::new(
+                attempt.authorize_url(),
+                attempt.verifier(),
+            ));
         ctx.spawn(async move { attempt.finish().await }, |_, result, ctx| {
             let window_id = ctx.window_id();
             let toast = match result {
                 Ok(tokens) => {
+                    // Loopback succeeded: clear any pending manual-code fallback
+                    // state and hide the modal if it was shown.
+                    let had_pending = self.pending_grok_oauth_attempt.take();
+                    if had_pending.is_some() {
+                        self.grok_manual_code_modal
+                            .update(ctx, |m, ctx| m.hide(ctx));
+                    }
                     send_telemetry_from_ctx!(
                         TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
                         ctx
@@ -2203,6 +2257,16 @@ impl AISettingsPageView {
                         },
                         ctx
                     );
+                    // Keep the pending attempt (with its verifier) and surface
+                    // the paste-code modal as a fallback so the user can
+                    // complete login when xAI showed a manual code instead of
+                    // redirecting to the loopback URI.
+                    if let Some(attempt) = &self.pending_grok_oauth_attempt {
+                        let url = attempt.authorize_url.clone();
+                        self.grok_manual_code_modal
+                            .update(ctx, |m, ctx| m.show(url, ctx));
+                        ctx.emit(AISettingsPageEvent::ShowModal);
+                    }
                     DismissibleToast::error(format!("Couldn't connect SuperGrok: {err}"))
                 }
             };
@@ -2215,6 +2279,74 @@ impl AISettingsPageView {
             });
             ctx.notify();
         });
+    }
+
+    /// Completes a Grok OAuth login using a code the user pasted from xAI's
+    /// "Enter this code to finish signing in" screen. The pending attempt
+    /// (created in `start_grok_oauth`) supplies the PKCE verifier that must
+    /// match the one used to build the authorize URL.
+    #[cfg(not(target_family = "wasm"))]
+    fn complete_grok_manual_code(&mut self, code: String, ctx: &mut ViewContext<Self>) {
+        use ::ai::grok_subscription::oauth;
+        use warp_core::safe_error;
+
+        use crate::ToastStack;
+
+        let attempt = match self.pending_grok_oauth_attempt.take() {
+            Some(a) => a,
+            None => {
+                log::warn!("CompleteGrokManualCode with no pending attempt");
+                self.grok_manual_code_modal
+                    .update(ctx, |m, ctx| m.hide(ctx));
+                ctx.notify();
+                return;
+            }
+        };
+
+        // Hide the modal immediately; completion will show a toast.
+        self.grok_manual_code_modal
+            .update(ctx, |m, ctx| m.hide(ctx));
+
+        let verifier = attempt.verifier.clone();
+        ctx.spawn(
+            async move { oauth::exchange_manual_code(code, verifier).await },
+            |_, result, ctx| {
+                let window_id = ctx.window_id();
+                let toast = match result {
+                    Ok(tokens) => {
+                        send_telemetry_from_ctx!(
+                            TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
+                            ctx
+                        );
+                        ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+                            manager.store_grok_tokens(tokens, ctx);
+                        });
+                        crate::view_components::DismissibleToast::success(
+                            "SuperGrok subscription connected".to_string(),
+                        )
+                    }
+                    Err(err) => {
+                        safe_error!(
+                            safe: ("Grok OAuth (manual code) failed"),
+                            full: ("Grok OAuth (manual code) failed: {err:#}")
+                        );
+                        send_telemetry_from_ctx!(
+                            TelemetryEvent::SuperGrokSubscriptionConnectFinished {
+                                error: Some("oauth_failed".to_string()),
+                            },
+                            ctx
+                        );
+                        crate::view_components::DismissibleToast::error(format!(
+                            "Couldn't connect SuperGrok: {err}"
+                        ))
+                    }
+                };
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                ctx.notify();
+            },
+        );
     }
 
     /// Set the active subpage and rebuild the widget list to show only relevant widgets.
@@ -3056,6 +3188,12 @@ pub enum AISettingsPageAction {
     OpenEditCustomEndpointModal(usize),
     ConnectGrokSubscription,
     DisconnectGrokSubscription,
+    /// User pasted a code from xAI's "Enter this code to finish signing in" screen.
+    CompleteGrokManualCode(String),
+    CancelGrokManualCode,
+    /// Explicit entry point (e.g. from the SuperGrok row) to show the paste-code
+    /// fallback dialog when a pending OAuth attempt exists.
+    ShowGrokPasteCodeFallback,
 
     #[cfg(feature = "local_fs")]
     SetConversationLayout(crate::util::file::external_editor::settings::OpenConversationPreference),
@@ -3872,10 +4010,35 @@ impl TypedActionView for AISettingsPageView {
                 #[cfg(not(target_family = "wasm"))]
                 self.start_grok_oauth(ctx);
             }
+            AISettingsPageAction::CompleteGrokManualCode(code) => {
+                #[cfg(not(target_family = "wasm"))]
+                self.complete_grok_manual_code(code.clone(), ctx);
+            }
+            AISettingsPageAction::CancelGrokManualCode => {
+                self.pending_grok_oauth_attempt = None;
+                self.grok_manual_code_modal
+                    .update(ctx, |m, ctx| m.hide(ctx));
+                ctx.notify();
+            }
+            AISettingsPageAction::ShowGrokPasteCodeFallback => {
+                if let Some(attempt) = &self.pending_grok_oauth_attempt {
+                    let url = attempt.authorize_url.clone();
+                    self.grok_manual_code_modal
+                        .update(ctx, |m, ctx| m.show(url, ctx));
+                    ctx.emit(AISettingsPageEvent::ShowModal);
+                    ctx.notify();
+                }
+            }
             AISettingsPageAction::DisconnectGrokSubscription => {
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     manager.set_grok_tokens(None, ctx);
                 });
+
+                // Clear any in-flight manual-code fallback state so the paste link
+                // and modal do not linger after disconnect.
+                self.pending_grok_oauth_attempt = None;
+                self.grok_manual_code_modal
+                    .update(ctx, |m, ctx| m.hide(ctx));
 
                 let window_id = ctx.window_id();
                 crate::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -7427,6 +7590,10 @@ struct ApiKeysWidget {
     custom_inference_info_tooltip: MouseStateHandle,
     custom_inference_terms_index: HighlightedHyperlink,
     description_learn_more_index: HighlightedHyperlink,
+
+    /// Used for the "Paste authorization code from xAI" link shown in the
+    /// SuperGrok row while a manual-code fallback attempt is pending.
+    grok_paste_code_link_index: HighlightedHyperlink,
 }
 
 impl ApiKeysWidget {
@@ -7535,6 +7702,14 @@ impl ApiKeysWidget {
                     ctx.dispatch_typed_action(AISettingsPageAction::ConnectGrokSubscription);
                 })
         });
+
+        let grok_manual_code_modal = ctx.add_typed_action_view(|ctx| {
+            super::grok_manual_code_modal::GrokManualCodeModal::new(ctx)
+        });
+        ctx.subscribe_to_view(&grok_manual_code_modal, |me, _, event, ctx| {
+            me.handle_grok_manual_code_modal_event(event, ctx);
+        });
+
         let grok_disconnect_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Disconnect", DangerSecondaryTheme)
                 .with_size(ButtonSize::Small)
@@ -7586,6 +7761,8 @@ impl ApiKeysWidget {
             custom_inference_info_tooltip: Default::default(),
             custom_inference_terms_index: Default::default(),
             description_learn_more_index: Default::default(),
+
+            grok_paste_code_link_index: Default::default(),
         }
     }
 
@@ -7834,8 +8011,13 @@ impl ApiKeysWidget {
     /// The "Connect SuperGrok subscription" row: label and description on the
     /// left, a Connect/Disconnect button on the right, and a "Connected on
     /// ..." status line underneath while a subscription is connected.
+    ///
+    /// When a manual-code fallback attempt is pending (loopback failed or the
+    /// user wants to paste the code from xAI's consent screen), shows an
+    /// additional link to open the paste-code dialog.
     fn render_grok_subscription_row(
         &self,
+        view: &AISettingsPageView,
         appearance: &Appearance,
         is_enabled: bool,
         app: &AppContext,
@@ -7881,6 +8063,42 @@ impl ApiKeysWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(header_row)
             .with_child(description);
+
+        // Offer an explicit entry point to the manual authorization code
+        // paste dialog while an OAuth attempt is pending (e.g. the user saw
+        // xAI's "Enter this code" screen, or the loopback redirect failed).
+        if view.pending_grok_oauth_attempt.is_some() && grok_tokens.is_none() {
+            let paste_text = FormattedText::new([FormattedTextLine::Line(vec![
+                FormattedTextFragment::hyperlink_action(
+                    "Paste authorization code from xAI instead",
+                    AISettingsPageAction::ShowGrokPasteCodeFallback,
+                ),
+            ])]);
+
+            let paste_element = FormattedTextElement::new(
+                paste_text,
+                CONTENT_FONT_SIZE,
+                appearance.ui_font_family(),
+                appearance.ui_font_family(),
+                blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1()),
+                self.grok_paste_code_link_index.clone(),
+            )
+            .with_hyperlink_font_color(appearance.theme().accent().into_solid())
+            .register_default_click_handlers_with_action_support(|hyperlink_lens, event, _ctx| {
+                if let HyperlinkLens::Action(action_ref) = hyperlink_lens {
+                    if let Some(action) = action_ref.as_any().downcast_ref::<AISettingsPageAction>()
+                    {
+                        event.dispatch_typed_action(action.clone());
+                    }
+                }
+            });
+
+            column.add_child(
+                Container::new(paste_element.finish())
+                    .with_margin_top(2.)
+                    .finish(),
+            );
+        }
 
         if let Some(tokens) = grok_tokens {
             let connected_text = match tokens.connected_at.map(DateTime::<Local>::from) {
@@ -8060,6 +8278,7 @@ impl SettingsWidget for ApiKeysWidget {
         if FeatureFlag::SuperGrok.is_enabled() {
             column.add_child(
                 Container::new(self.render_grok_subscription_row(
+                    view,
                     appearance,
                     provider_keys_enabled,
                     app,
