@@ -38,7 +38,6 @@ pub struct TuiEventContext {
     origin_view_id: Option<EntityId>,
 }
 
-#[allow(dead_code)]
 pub(crate) struct TuiDispatchedAction {
     pub(crate) origin_view_id: EntityId,
     pub(crate) action: Box<dyn Action>,
@@ -58,12 +57,18 @@ impl TuiEventContext {
         });
     }
 
+<<<<<<< HEAD
     #[allow(dead_code)]
+=======
+>>>>>>> d2ddc7214 (warpui_core: TUI presenter, runtime (crossterm), and end-to-end integration)
     pub(crate) fn take_updates(&mut self) -> Vec<TuiAppUpdate> {
         std::mem::take(&mut self.updates)
     }
 
+<<<<<<< HEAD
     #[allow(dead_code)]
+=======
+>>>>>>> d2ddc7214 (warpui_core: TUI presenter, runtime (crossterm), and end-to-end integration)
     pub(crate) fn take_typed_actions(&mut self) -> Vec<TuiDispatchedAction> {
         std::mem::take(&mut self.typed_actions)
     }
@@ -71,7 +76,10 @@ impl TuiEventContext {
     /// Sets the view that subsequently dispatched actions are attributed to,
     /// returning the previous origin so callers can restore it when leaving the
     /// view's subtree.
+<<<<<<< HEAD
     #[allow(dead_code)]
+=======
+>>>>>>> d2ddc7214 (warpui_core: TUI presenter, runtime (crossterm), and end-to-end integration)
     pub(crate) fn set_origin_view(&mut self, view_id: Option<EntityId>) -> Option<EntityId> {
         std::mem::replace(&mut self.origin_view_id, view_id)
     }
