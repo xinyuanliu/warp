@@ -772,11 +772,16 @@ impl BlocklistAIInputModel {
         });
 
         // Gather agent prompt history
+        let clone_start = Instant::now();
         let prompt_entries = cfg!(feature = "nld_prompt_history_match")
             .then(|| BlocklistAIHistoryModel::as_ref(ctx).nld_prompt_history());
+        let clone_us = clone_start.elapsed().as_micros() as u64;
+        let n_prompts = prompt_entries.as_ref().map(|v| v.len()).unwrap_or(0);
 
         let buffer_cloned = input.buffer_text.clone();
+        let buffer_for_log = buffer_cloned.clone();
         let other_buffer_cloned = buffer_cloned.clone();
+        let future_start = Instant::now();
         let current_input_type = self.input_type();
 
         let is_udi_enabled = InputSettings::as_ref(ctx).is_universal_developer_input_enabled(ctx);
@@ -835,6 +840,7 @@ impl BlocklistAIInputModel {
 
                         if let Some(prompt_entries) = &prompt_entries {
                             // `prompt_entries` is already newest-first.
+                            let prompt_scan_start = Instant::now();
                             let prompt_match = most_recent_close_match(
                                 &buffer_cloned,
                                 prompt_entries
@@ -843,6 +849,9 @@ impl BlocklistAIInputModel {
                                 HISTORY_ENTRY_MATCH_CUTOFF,
                             )
                             .await;
+                            let prompt_scan_us = prompt_scan_start.elapsed().as_micros() as u64;
+                            let total_us = future_start.elapsed().as_micros() as u64;
+                            log::info!("NLD_LATENCY n_prompts={n_prompts} clone_us={clone_us} prompt_scan_us={prompt_scan_us} total_us={total_us} query={buffer_for_log:?}");
 
                             if let Some(decision) =
                                 resolve_history_match(command_match, prompt_match)
