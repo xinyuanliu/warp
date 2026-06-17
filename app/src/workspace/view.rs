@@ -807,6 +807,24 @@ impl LocalToCloudHandoffIntent {
     }
 }
 
+/// Collects snapshot paths from the source conversation and loaded descendants.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+fn handoff_snapshot_paths_for_conversation_workset(
+    history_model: &BlocklistAIHistoryModel,
+    source_conversation: &AIConversation,
+) -> Vec<StandardizedPath> {
+    let mut paths = extract_paths_from_conversation(source_conversation);
+    for descendant_id in
+        descendant_conversation_ids_in_spawn_order(history_model, source_conversation.id())
+    {
+        let Some(descendant_conversation) = history_model.conversation(&descendant_id) else {
+            continue;
+        };
+        paths.extend(extract_paths_from_conversation(descendant_conversation));
+    }
+    paths
+}
+
 /// Categorization of how the tab bar should be rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ShowTabBar {
@@ -15701,17 +15719,10 @@ impl Workspace {
             .as_ref(ctx)
             .active_block_session_id()
             .unwrap_or_default();
-        let mut paths = extract_paths_from_conversation(&source_conversation);
-        {
-            let history_model = history_model.as_ref(ctx);
-            for child_id in
-                descendant_conversation_ids_in_spawn_order(history_model, source_conversation.id())
-            {
-                if let Some(child_conversation) = history_model.conversation(&child_id) {
-                    paths.extend(extract_paths_from_conversation(child_conversation));
-                }
-            }
-        }
+        let mut paths = handoff_snapshot_paths_for_conversation_workset(
+            history_model.as_ref(ctx),
+            &source_conversation,
+        );
         if let Some(ref pwd) = source_pwd {
             if let Ok(sp) = StandardizedPath::try_new(pwd) {
                 paths.push(sp);
