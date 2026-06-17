@@ -7,8 +7,8 @@ use warpui::{App, SingletonEntity};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    api, AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, ReceivedMessageInput, UserQueryMode,
+    api, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
+    AIAgentInput, CancellationReason, ImageContext, PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{
@@ -51,22 +51,20 @@ fn normal_user_query_input() -> AIAgentInput {
 }
 
 #[test]
-fn request_params_snapshots_pending_handoff_for_user_inputs_requests() {
+fn request_params_only_snapshots_pending_handoff_for_user_queries() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
         app.update(|ctx| {
             let user_query_request = request_input_for_test(normal_user_query_input());
-            let inter_agent_message_request =
-                request_input_for_test(AIAgentInput::MessagesReceivedFromAgents {
-                    messages: vec![ReceivedMessageInput {
-                        message_id: "message-id".to_owned(),
-                        sender_agent_id: "agent-id".to_owned(),
-                        addresses: vec!["recipient-id".to_owned()],
-                        subject: "subject".to_owned(),
-                        message_body: "body".to_owned(),
-                    }],
-                });
+            let action_result_request = request_input_for_test(AIAgentInput::ActionResult {
+                result: AIAgentActionResult {
+                    id: "action-id".to_owned().into(),
+                    task_id: TaskId::new("test-task".to_owned()),
+                    result: AIAgentActionResultType::InitProject,
+                },
+                context: vec![].into(),
+            });
             let top_level_request = request_input_for_test(AIAgentInput::SummarizeConversation {
                 prompt: None,
                 context: vec![].into(),
@@ -94,18 +92,15 @@ fn request_params_snapshots_pending_handoff_for_user_inputs_requests() {
                 Some(PendingConversationHandoff::CloudToLocal),
             );
 
-            let inter_agent_message_params = api::RequestParams::new(
+            let action_result_params = api::RequestParams::new(
                 None,
                 SessionContext::new_for_test(),
-                &inter_agent_message_request,
+                &action_result_request,
                 conversation.clone(),
                 None,
                 ctx,
             );
-            assert_eq!(
-                inter_agent_message_params.pending_conversation_handoff,
-                Some(PendingConversationHandoff::CloudToLocal),
-            );
+            assert_eq!(action_result_params.pending_conversation_handoff, None);
             let top_level_params = api::RequestParams::new(
                 None,
                 SessionContext::new_for_test(),

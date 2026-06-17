@@ -1564,6 +1564,7 @@ impl BlocklistAIHistoryModel {
     ///
     /// The `prefix` parameter specifies the prefix added to the root task description
     /// (e.g., `FORK_PREFIX` for forks, `PRE_REWIND_PREFIX` for pre-rewind backups).
+    #[allow(clippy::too_many_arguments)]
     pub fn fork_conversation_at_exchange(
         &mut self,
         source_conversation: &AIConversation,
