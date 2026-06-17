@@ -61,14 +61,28 @@ pub fn has_in_progress_descendant_conversation(
     history: &BlocklistAIHistoryModel,
     parent_id: AIConversationId,
 ) -> bool {
-    descendant_conversation_ids_in_spawn_order(history, parent_id)
-        .into_iter()
-        .filter_map(|id| history.conversation(&id))
-        .any(|conversation| {
-            matches!(
-                conversation.status(),
-                ConversationStatus::InProgress | ConversationStatus::TransientError
-            )
+    history
+        .child_conversation_ids_of(&parent_id)
+        .iter()
+        .any(|child_id| {
+            history.conversation(child_id).is_some_and(|conversation| {
+                conversation.status().is_in_progress() || conversation.status().is_transient_error()
+            }) || has_in_progress_descendant_conversation(history, *child_id)
+        })
+}
+
+/// Returns true when `candidate_id` is a known descendant of `parent_id`.
+pub fn is_descendant_conversation_id(
+    history: &BlocklistAIHistoryModel,
+    parent_id: AIConversationId,
+    candidate_id: AIConversationId,
+) -> bool {
+    history
+        .child_conversation_ids_of(&parent_id)
+        .iter()
+        .any(|child_id| {
+            *child_id == candidate_id
+                || is_descendant_conversation_id(history, *child_id, candidate_id)
         })
 }
 

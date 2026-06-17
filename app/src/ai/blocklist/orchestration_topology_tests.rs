@@ -224,6 +224,42 @@ fn orchestration_aware_status_uses_aggregated_status_for_known_parent() {
 }
 
 #[test]
+fn is_descendant_conversation_id_matches_nested_children() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+        let grandchild = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "grandchild".to_string(),
+                child_a,
+                None,
+                ctx,
+            )
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert!(is_descendant_conversation_id(
+                history_model,
+                orchestrator_id,
+                child_a,
+            ));
+            assert!(is_descendant_conversation_id(
+                history_model,
+                orchestrator_id,
+                grandchild,
+            ));
+            assert!(!is_descendant_conversation_id(
+                history_model,
+                child_b,
+                grandchild,
+            ));
+        });
+    });
+}
+#[test]
 fn orchestration_aware_status_uses_direct_status_for_non_parent() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);

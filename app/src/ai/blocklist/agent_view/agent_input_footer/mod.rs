@@ -51,7 +51,7 @@ pub(crate) use self::environment_selector::{
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::orchestration_topology::{
-    descendant_conversation_ids_in_spawn_order, has_in_progress_descendant_conversation,
+    has_in_progress_descendant_conversation, is_descendant_conversation_id,
 };
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
@@ -782,10 +782,11 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
-                if event
+                let is_relevant_child_event = me.is_relevant_orchestration_child_event(event, ctx);
+                if !event
                     .terminal_view_id()
-                    .is_some_and(|id| id != me.terminal_view_id)
-                    && !me.is_relevant_orchestration_child_event(event, ctx)
+                    .is_some_and(|id| id == me.terminal_view_id)
+                    && !is_relevant_child_event
                 {
                     return;
                 }
@@ -797,6 +798,7 @@ impl AgentInputFooter {
                     | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
                     | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
                     | BlocklistAIHistoryEvent::RemoveConversation { .. }
+                    | BlocklistAIHistoryEvent::DeletedConversation { .. }
                     | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
                         me.sync_fast_forward_button(ctx);
                         me.sync_handoff_to_cloud_button(ctx);
@@ -2044,28 +2046,95 @@ impl AgentInputFooter {
         event: &BlocklistAIHistoryEvent,
         app: &AppContext,
     ) -> bool {
-        let child_conversation_id = match event {
-            BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                conversation_id, ..
-            }
-            | BlocklistAIHistoryEvent::RemoveConversation {
-                conversation_id, ..
-            }
-            | BlocklistAIHistoryEvent::DeletedConversation {
-                conversation_id, ..
-            }
-            | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id } => {
-                *conversation_id
-            }
-            _ => return false,
-        };
         let history = BlocklistAIHistoryModel::as_ref(app);
         let Some(active_conversation_id) = history.active_conversation_id(self.terminal_view_id)
         else {
             return false;
         };
-        descendant_conversation_ids_in_spawn_order(history, active_conversation_id)
-            .contains(&child_conversation_id)
+        let is_descendant = |conversation_id| {
+            is_descendant_conversation_id(history, active_conversation_id, conversation_id)
+        };
+
+        match event {
+            BlocklistAIHistoryEvent::StartedNewConversation {
+                new_conversation_id,
+                ..
+            } => is_descendant(*new_conversation_id),
+            BlocklistAIHistoryEvent::CreatedSubtask {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::AppendedExchange {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::ReassignedExchange {
+                new_conversation_id,
+                ..
+            } => is_descendant(*new_conversation_id),
+            BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::SetActiveConversation {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::ClearedActiveConversation {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::ClearedConversationsInTerminalView {
+                active_conversation_id,
+                cleared_conversation_ids,
+                ..
+            } => {
+                active_conversation_id.is_some_and(is_descendant)
+                    || cleared_conversation_ids.iter().copied().any(is_descendant)
+            }
+            BlocklistAIHistoryEvent::SplitConversation {
+                old_conversation_id,
+                new_conversation_id,
+                ..
+            } => is_descendant(*old_conversation_id) || is_descendant(*new_conversation_id),
+            BlocklistAIHistoryEvent::RemoveConversation {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::DeletedConversation {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::RestoredConversations {
+                conversation_ids, ..
+            } => conversation_ids.iter().copied().any(is_descendant),
+            BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::UpdatedConversationTitle {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::ConversationServerTokenAssigned {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::ConversationOwnershipTransferred {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::NewConversationRequestComplete {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id } => {
+                is_descendant(*conversation_id)
+            }
+            BlocklistAIHistoryEvent::LocalSharedSessionEstablished {
+                conversation_id, ..
+            } => is_descendant(*conversation_id),
+            BlocklistAIHistoryEvent::UpgradedTask { .. }
+            | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+            | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => false,
+        }
     }
 
     /// Updates the handoff chip disabled state and tooltip from child-agent status.
