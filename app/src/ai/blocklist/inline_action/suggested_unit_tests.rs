@@ -5,6 +5,7 @@ use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng as _};
 use warp_core::settings::ToggleableSetting;
 use warp_core::ui::appearance::Appearance;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex, FormattedTextElement,
     HighlightedHyperlink, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
@@ -28,12 +29,15 @@ use crate::view_components::action_button::{
     ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 use crate::view_components::compactible_action_button::{
-    render_compact_and_regular_button_rows, CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD,
+    render_compact_and_regular_button_rows, CompactibleActionButton, RenderCompactibleActionButton,
+    MEDIUM_SIZE_SWITCH_THRESHOLD,
 };
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::view_components::DismissibleToast;
+use crate::{send_telemetry_from_ctx, TelemetryEvent, ToastStack};
 
 const ACCEPT_LABEL: &str = "Generate tests";
 const CANCEL_LABEL: &str = "Dismiss";
+const COPY_LABEL: &str = "Copy";
 
 #[derive(Debug, Clone)]
 pub enum SuggestedUnitTestsEvent {
@@ -47,6 +51,7 @@ pub enum SuggestedUnitTestsEvent {
 pub enum SuggestedUnitTestsAction {
     Accept,
     Cancel,
+    Copy,
     ToggleSetting,
     OpenSettings,
 }
@@ -64,6 +69,7 @@ pub struct SuggestedUnitTestsView {
     query: String,
     accept_button: CompactibleActionButton,
     cancel_button: CompactibleActionButton,
+    copy_button: CompactibleActionButton,
     speedbump_mouse_state: MouseStateHandle,
     ai_settings_link_highlight_index: HighlightedHyperlink,
 
@@ -105,6 +111,16 @@ impl SuggestedUnitTestsView {
             ctx,
         );
 
+        let copy_button = CompactibleActionButton::new(
+            COPY_LABEL.to_string(),
+            None,
+            ButtonSize::Small,
+            SuggestedUnitTestsAction::Copy,
+            Icon::Copy,
+            Arc::new(NakedTheme),
+            ctx,
+        );
+
         let random_str = thread_rng()
             .sample_iter(&Alphanumeric)
             .take(8)
@@ -122,6 +138,7 @@ impl SuggestedUnitTestsView {
             query,
             accept_button,
             cancel_button,
+            copy_button,
             speedbump_mouse_state: Default::default(),
             ai_settings_link_highlight_index: Default::default(),
             position_id_prefix: random_str,
@@ -191,14 +208,31 @@ impl SuggestedUnitTestsView {
         appearance: &Appearance,
         app: &AppContext,
     ) -> (Box<dyn Element>, Box<dyn Element>) {
-        {
-            render_compact_and_regular_button_rows(
-                vec![&self.cancel_button, &self.accept_button],
-                None,
-                appearance,
-                app,
-            )
+        let mut buttons: Vec<&dyn RenderCompactibleActionButton> = Vec::new();
+        // Only offer the copy affordance when there's a suggested prompt to copy.
+        if !self.query.is_empty() {
+            buttons.push(&self.copy_button);
         }
+        buttons.push(&self.cancel_button);
+        buttons.push(&self.accept_button);
+        render_compact_and_regular_button_rows(buttons, None, appearance, app)
+    }
+
+    fn copy_query(&self, ctx: &mut ViewContext<Self>) {
+        if self.query.is_empty() {
+            return;
+        }
+        ctx.clipboard()
+            .write(ClipboardContent::plain_text(self.query.clone()));
+
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(
+                DismissibleToast::success(String::from("Copied to clipboard")),
+                window_id,
+                ctx,
+            );
+        });
     }
 
     fn render_header_contents(
@@ -403,6 +437,7 @@ impl TypedActionView for SuggestedUnitTestsView {
         match action {
             SuggestedUnitTestsAction::Accept => ctx.emit(SuggestedUnitTestsEvent::Accept),
             SuggestedUnitTestsAction::Cancel => ctx.emit(SuggestedUnitTestsEvent::Cancel),
+            SuggestedUnitTestsAction::Copy => self.copy_query(ctx),
             SuggestedUnitTestsAction::ToggleSetting => {
                 let checked = AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings
