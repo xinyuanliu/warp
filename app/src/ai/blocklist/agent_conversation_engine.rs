@@ -125,6 +125,60 @@ impl AgentConversationEngine {
                 ctx,
             )
         });
+        Self::register_request_with_stream(
+            owner_id,
+            request_input,
+            conversation_data,
+            response_stream,
+            ctx,
+        )
+    }
+
+    /// Sends a request using a no-network response stream model for tests.
+    #[cfg(test)]
+    pub(crate) fn send_request_for_test<E>(
+        owner_id: AgentSessionOwnerId,
+        request_input: RequestInput,
+        request_params: api::RequestParams,
+        conversation_data: api::ConversationData,
+        ctx: &mut ModelContext<E>,
+    ) -> (ModelHandle<ResponseStream>, ResponseStreamId)
+    where
+        E: AgentConversationEngineDelegate,
+    {
+        let response_stream = ctx.add_model(|_| {
+            let ai_identifiers = AIIdentifiers {
+                server_output_id: None,
+                server_conversation_id: conversation_data
+                    .server_conversation_token
+                    .clone()
+                    .map(Into::into),
+                client_conversation_id: Some(conversation_data.id),
+                client_exchange_id: None,
+                model_id: Some(request_params.model.clone()),
+            };
+            ResponseStream::new_for_test(request_params, ai_identifiers)
+        });
+        Self::register_request_with_stream(
+            owner_id,
+            request_input,
+            conversation_data,
+            response_stream,
+            ctx,
+        )
+    }
+
+    /// Registers a response stream and records the request in history.
+    fn register_request_with_stream<E>(
+        owner_id: AgentSessionOwnerId,
+        request_input: RequestInput,
+        conversation_data: api::ConversationData,
+        response_stream: ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<E>,
+    ) -> (ModelHandle<ResponseStream>, ResponseStreamId)
+    where
+        E: AgentConversationEngineDelegate,
+    {
         let response_stream_id = response_stream.as_ref(ctx).id().clone();
         let response_stream_clone = response_stream.clone();
         let input_contains_user_query = request_input
@@ -264,6 +318,20 @@ impl AgentConversationEngine {
             recovery_pending,
             ctx,
         );
+    }
+
+    /// Test hook for exercising stream finalization without waiting for a real stream.
+    #[cfg(test)]
+    pub(crate) fn fold_after_stream_finished_for_test<E>(
+        delegate: &mut E,
+        owner_id: AgentSessionOwnerId,
+        stream_id: &ResponseStreamId,
+        response_stream: &ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<E>,
+    ) where
+        E: AgentConversationEngineDelegate,
+    {
+        Self::fold_after_stream_finished(delegate, owner_id, stream_id, None, response_stream, ctx);
     }
 
     /// Folds a received API event or API error into history.

@@ -1,10 +1,9 @@
 //! Headless tests for the TUI root view and core model bootstrap.
 
-use std::time::Duration;
-
 use settings::{PrivatePreferences, PublicPreferences};
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-use warpui::r#async::Timer;
+use warp_multi_agent_api::client_action::Action;
+use warp_multi_agent_api::response_event::{self, stream_finished};
 use warpui::{App, EntityId, SingletonEntity, WindowId};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::platform::WindowStyle;
@@ -14,7 +13,12 @@ use warpui_extras::user_preferences::in_memory::InMemoryPreferences;
 
 use super::input_view::InputAction;
 use super::{CoreTuiModel, RootTuiView, INPUT_ROWS};
-use crate::ai::blocklist::{AgentSessionOwnerId, BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::blocklist::{
+    AgentConversationEngine, AgentSessionOwnerId, BlocklistAIHistoryModel, BlocklistAIPermissions,
+    ResponseStreamId,
+};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -80,17 +84,219 @@ fn in_flight_request_params(app: &App) -> crate::ai::agent::api::RequestParams {
     stream.read(app, |stream, _| stream.params_for_test().clone())
 }
 
-/// Waits for the single TUI request to finish.
-async fn wait_for_tui_request_to_finish(app: &mut App) {
-    for _ in 0..600 {
-        let has_in_flight =
-            CoreTuiModel::handle(app).read(app, |model, _| model.has_in_flight_request());
-        if !has_in_flight {
-            return;
-        }
-        Timer::after(Duration::from_millis(250)).await;
+/// Returns the root task id for a TUI conversation.
+fn root_task_id(app: &App, conversation_id: AIConversationId) -> TaskId {
+    BlocklistAIHistoryModel::handle(app).read(app, |history_model, _| {
+        history_model
+            .conversation(&conversation_id)
+            .expect("conversation should exist")
+            .get_root_task_id()
+            .clone()
+    })
+}
+
+/// Creates a server root task for fake stream events.
+fn server_root_task(task_id: &TaskId) -> warp_multi_agent_api::Task {
+    warp_multi_agent_api::Task {
+        id: task_id.to_string(),
+        messages: vec![],
+        dependencies: None,
+        description: "TUI test task".to_string(),
+        summary: String::new(),
+        server_data: String::new(),
     }
-    panic!("timed out waiting for TUI request to finish");
+}
+
+/// Creates a fake agent output message for a task.
+fn agent_output_message(
+    task_id: &TaskId,
+    request_id: &str,
+    message_id: &str,
+    text: &str,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: message_id.to_string(),
+        task_id: task_id.to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(warp_multi_agent_api::message::Message::AgentOutput(
+            warp_multi_agent_api::message::AgentOutput {
+                text: text.to_string(),
+            },
+        )),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+/// Folds a fake server response event through the TUI model's shared engine delegate.
+fn fold_response_event(
+    app: &mut App,
+    owner: AgentSessionOwnerId,
+    stream_id: &ResponseStreamId,
+    conversation_id: AIConversationId,
+    event: warp_multi_agent_api::ResponseEvent,
+) {
+    CoreTuiModel::handle(app).update(app, |model, ctx| {
+        AgentConversationEngine::fold_received_event_for_test(
+            model,
+            owner,
+            true,
+            stream_id,
+            conversation_id,
+            Ok(event),
+            false,
+            ctx,
+        );
+    });
+}
+
+/// Finalizes the fake stream through the same after-stream path as a real stream.
+fn finish_fake_stream(app: &mut App, owner: AgentSessionOwnerId, stream_id: &ResponseStreamId) {
+    let stream = CoreTuiModel::handle(app).read(app, |model, _| {
+        model
+            .in_flight_response_stream_for_test()
+            .expect("request should be in flight")
+    });
+    CoreTuiModel::handle(app).update(app, |model, ctx| {
+        AgentConversationEngine::fold_after_stream_finished_for_test(
+            model, owner, stream_id, &stream, ctx,
+        );
+    });
+}
+
+/// Completes the first fake stream, including server root-task creation.
+fn complete_initial_fake_stream(
+    app: &mut App,
+    owner: AgentSessionOwnerId,
+    conversation_id: AIConversationId,
+    stream_id: &ResponseStreamId,
+) {
+    let task_id = root_task_id(app, conversation_id);
+    fold_response_event(
+        app,
+        owner,
+        stream_id,
+        conversation_id,
+        warp_multi_agent_api::ResponseEvent {
+            r#type: Some(response_event::Type::Init(response_event::StreamInit {
+                request_id: "request-1".to_string(),
+                conversation_id: "server-conversation-1".to_string(),
+                run_id: String::new(),
+            })),
+        },
+    );
+    fold_response_event(
+        app,
+        owner,
+        stream_id,
+        conversation_id,
+        warp_multi_agent_api::ResponseEvent {
+            r#type: Some(response_event::Type::ClientActions(
+                response_event::ClientActions {
+                    actions: vec![
+                        warp_multi_agent_api::ClientAction {
+                            action: Some(Action::CreateTask(
+                                warp_multi_agent_api::client_action::CreateTask {
+                                    task: Some(server_root_task(&task_id)),
+                                },
+                            )),
+                        },
+                        warp_multi_agent_api::ClientAction {
+                            action: Some(Action::AddMessagesToTask(
+                                warp_multi_agent_api::client_action::AddMessagesToTask {
+                                    task_id: task_id.to_string(),
+                                    messages: vec![agent_output_message(
+                                        &task_id,
+                                        "request-1",
+                                        "agent-message-1",
+                                        "first response",
+                                    )],
+                                },
+                            )),
+                        },
+                    ],
+                },
+            )),
+        },
+    );
+    fold_finished_event(app, owner, stream_id, conversation_id);
+}
+
+/// Completes a fake follow-up stream on an existing server-backed task.
+fn complete_follow_up_fake_stream(
+    app: &mut App,
+    owner: AgentSessionOwnerId,
+    conversation_id: AIConversationId,
+    stream_id: &ResponseStreamId,
+) {
+    let task_id = root_task_id(app, conversation_id);
+    fold_response_event(
+        app,
+        owner,
+        stream_id,
+        conversation_id,
+        warp_multi_agent_api::ResponseEvent {
+            r#type: Some(response_event::Type::Init(response_event::StreamInit {
+                request_id: "request-2".to_string(),
+                conversation_id: "server-conversation-1".to_string(),
+                run_id: String::new(),
+            })),
+        },
+    );
+    fold_response_event(
+        app,
+        owner,
+        stream_id,
+        conversation_id,
+        warp_multi_agent_api::ResponseEvent {
+            r#type: Some(response_event::Type::ClientActions(
+                response_event::ClientActions {
+                    actions: vec![warp_multi_agent_api::ClientAction {
+                        action: Some(Action::AddMessagesToTask(
+                            warp_multi_agent_api::client_action::AddMessagesToTask {
+                                task_id: task_id.to_string(),
+                                messages: vec![agent_output_message(
+                                    &task_id,
+                                    "request-2",
+                                    "agent-message-2",
+                                    "second response",
+                                )],
+                            },
+                        )),
+                    }],
+                },
+            )),
+        },
+    );
+    fold_finished_event(app, owner, stream_id, conversation_id);
+}
+
+/// Folds a successful StreamFinished event and finalizes the fake stream.
+fn fold_finished_event(
+    app: &mut App,
+    owner: AgentSessionOwnerId,
+    stream_id: &ResponseStreamId,
+    conversation_id: AIConversationId,
+) {
+    fold_response_event(
+        app,
+        owner,
+        stream_id,
+        conversation_id,
+        warp_multi_agent_api::ResponseEvent {
+            r#type: Some(response_event::Type::Finished(
+                response_event::StreamFinished {
+                    reason: Some(stream_finished::Reason::Done(stream_finished::Done {})),
+                    conversation_usage_metadata: None,
+                    token_usage: vec![],
+                    should_refresh_model_config: false,
+                    request_cost: None,
+                },
+            )),
+        },
+    );
+    finish_fake_stream(app, owner, stream_id);
 }
 
 #[test]
@@ -229,7 +435,7 @@ fn core_tui_model_sends_initial_prompt_and_follow_up() {
 
         let (conversation_id, first_stream_id) = CoreTuiModel::handle(&app)
             .update(&mut app, |model, ctx| {
-                model.send_prompt("first".to_string(), ctx)
+                model.send_prompt_for_test("first".to_string(), ctx)
             })
             .expect("first prompt should send");
         let first_params = in_flight_request_params(&app);
@@ -238,7 +444,7 @@ fn core_tui_model_sends_initial_prompt_and_follow_up() {
         assert_eq!(first_params.tasks.len(), 0);
         assert_eq!(first_params.supported_tools_override, Some(vec![]));
 
-        wait_for_tui_request_to_finish(&mut app).await;
+        complete_initial_fake_stream(&mut app, owner, conversation_id, &first_stream_id);
 
         BlocklistAIHistoryModel::handle(&app).read(&app, |history_model, _| {
             let conversation = history_model
@@ -260,7 +466,7 @@ fn core_tui_model_sends_initial_prompt_and_follow_up() {
 
         let (follow_up_conversation_id, _second_stream_id) = CoreTuiModel::handle(&app)
             .update(&mut app, |model, ctx| {
-                model.send_prompt("second".to_string(), ctx)
+                model.send_prompt_for_test("second".to_string(), ctx)
             })
             .expect("second prompt should send");
         assert_eq!(follow_up_conversation_id, conversation_id);
@@ -276,7 +482,7 @@ fn core_tui_model_sends_initial_prompt_and_follow_up() {
         );
         assert_eq!(second_params.supported_tools_override, Some(vec![]));
 
-        wait_for_tui_request_to_finish(&mut app).await;
+        complete_follow_up_fake_stream(&mut app, owner, conversation_id, &_second_stream_id);
 
         BlocklistAIHistoryModel::handle(&app).read(&app, |history_model, _| {
             let conversations = history_model

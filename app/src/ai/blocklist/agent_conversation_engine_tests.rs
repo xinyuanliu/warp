@@ -10,7 +10,9 @@ use super::*;
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentContext, AIAgentInput, UserQueryMode};
+use crate::auth::AuthStateProvider;
 use crate::server::server_api::AIApiError;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 struct TestDelegate;
@@ -22,6 +24,17 @@ impl Entity for TestDelegate {
 impl AgentConversationEngineDelegate for TestDelegate {
     fn skill_path_origin(&self, _ctx: &AppContext) -> SkillPathOrigin {
         SkillPathOrigin::Local
+    }
+}
+
+fn server_root_task(task_id: &TaskId) -> warp_multi_agent_api::Task {
+    warp_multi_agent_api::Task {
+        id: task_id.to_string(),
+        messages: vec![],
+        dependencies: None,
+        description: "test root task".to_string(),
+        summary: String::new(),
+        server_data: String::new(),
     }
 }
 
@@ -133,14 +146,23 @@ fn folds_init_client_actions_and_finished_into_history() {
                 Ok(warp_multi_agent_api::ResponseEvent {
                     r#type: Some(response_event::Type::ClientActions(
                         response_event::ClientActions {
-                            actions: vec![warp_multi_agent_api::ClientAction {
-                                action: Some(Action::AddMessagesToTask(
-                                    warp_multi_agent_api::client_action::AddMessagesToTask {
-                                        task_id: task_id.to_string(),
-                                        messages: vec![agent_output_message(&task_id)],
-                                    },
-                                )),
-                            }],
+                            actions: vec![
+                                warp_multi_agent_api::ClientAction {
+                                    action: Some(Action::CreateTask(
+                                        warp_multi_agent_api::client_action::CreateTask {
+                                            task: Some(server_root_task(&task_id)),
+                                        },
+                                    )),
+                                },
+                                warp_multi_agent_api::ClientAction {
+                                    action: Some(Action::AddMessagesToTask(
+                                        warp_multi_agent_api::client_action::AddMessagesToTask {
+                                            task_id: task_id.to_string(),
+                                            messages: vec![agent_output_message(&task_id)],
+                                        },
+                                    )),
+                                },
+                            ],
                         },
                     )),
                 }),
@@ -205,6 +227,8 @@ fn folds_init_client_actions_and_finished_into_history() {
 fn folds_stream_error_into_history() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
         app.add_singleton_model(|_| NetworkStatus::new());
         let owner_id = AgentSessionOwnerId::new(warpui::EntityId::new());
         let (conversation_id, stream_id, _) = start_pending_request(&mut app, owner_id);

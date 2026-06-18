@@ -86,6 +86,25 @@ impl CoreTuiModel {
         prompt: String,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(AIConversationId, ResponseStreamId)> {
+        self.send_prompt_internal(prompt, false, ctx)
+    }
+
+    /// Sends a prompt using a no-network response stream for tests.
+    #[cfg(test)]
+    pub(crate) fn send_prompt_for_test(
+        &mut self,
+        prompt: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(AIConversationId, ResponseStreamId)> {
+        self.send_prompt_internal(prompt, true, ctx)
+    }
+
+    fn send_prompt_internal(
+        &mut self,
+        prompt: String,
+        use_fake_stream: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(AIConversationId, ResponseStreamId)> {
         if self.in_flight.is_some() {
             return Err(anyhow!("TUI agent request already in flight"));
         }
@@ -115,14 +134,37 @@ impl CoreTuiModel {
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
-        let (response_stream, response_stream_id) = AgentConversationEngine::send_request(
-            owner,
-            request_input,
-            request_params,
-            conversation_data,
-            /*can_attempt_resume_on_error*/ true,
-            ctx,
-        );
+        #[cfg(test)]
+        let (response_stream, response_stream_id) = if use_fake_stream {
+            AgentConversationEngine::send_request_for_test(
+                owner,
+                request_input,
+                request_params,
+                conversation_data,
+                ctx,
+            )
+        } else {
+            AgentConversationEngine::send_request(
+                owner,
+                request_input,
+                request_params,
+                conversation_data,
+                /*can_attempt_resume_on_error*/ true,
+                ctx,
+            )
+        };
+        #[cfg(not(test))]
+        let (response_stream, response_stream_id) = {
+            let _ = use_fake_stream;
+            AgentConversationEngine::send_request(
+                owner,
+                request_input,
+                request_params,
+                conversation_data,
+                /*can_attempt_resume_on_error*/ true,
+                ctx,
+            )
+        };
         self.active_conversation_id = Some(conversation_id);
         self.in_flight = Some(response_stream);
         ctx.emit(CoreTuiModelEvent::PromptSubmitted { conversation_id });

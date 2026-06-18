@@ -172,6 +172,28 @@ impl ResponseStream {
         }
     }
 
+    /// Creates a response stream model for tests without spawning a backend request.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(params: api::RequestParams, ai_identifiers: AIIdentifiers) -> Self {
+        Self {
+            id: ResponseStreamId::new_for_test(),
+            params,
+            retry_count: 0,
+            start_time: Local::now(),
+            time_to_latest_event: TimeDelta::seconds(0),
+            cancellation_tx: None,
+            original_error: None,
+            has_received_client_actions: false,
+            ai_identifiers,
+            can_attempt_resume_on_error: false,
+            should_resume_conversation_after_stream_finished: false,
+            stream_finished_received: false,
+            error_event_emitted: false,
+            deferred_retry_pending: false,
+            current_request_id: None,
+        }
+    }
+
     pub fn id(&self) -> &ResponseStreamId {
         &self.id
     }
