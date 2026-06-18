@@ -119,6 +119,13 @@ pub fn init(ctx: &mut AppContext) {
         }
         Err(error) => {
             log::error!("failed to start the TUI driver: {error}");
+            // Not in the alternate screen yet (entering it is what failed), so
+            // print to stderr too — otherwise the process just exits instantly
+            // with the reason buried in the log file.
+            eprintln!(
+                "warp-tui: could not start the terminal UI: {error}\n\
+                 Run it directly in an interactive terminal (a real TTY), not piped or backgrounded."
+            );
             ctx.terminate_app(TerminationMode::ForceTerminate, None);
         }
     }

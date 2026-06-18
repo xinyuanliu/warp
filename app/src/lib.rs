@@ -998,14 +998,33 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // ensure that the process is in the cleanest possible state (minimal opened
     // files, modified signal handlers, etc.) to avoid unexpected effects on
     // spawned ptys.
+    //
+    // The TUI front-end has no PTYs, so it skips this entirely. This is also
+    // load-bearing: the terminal server is spawned by re-exec'ing the current
+    // binary, but `warp-tui`'s `main` always runs the TUI (it doesn't dispatch
+    // worker subcommands), so spawning a server here would recursively launch
+    // more TUIs — a fork bomb.
     #[cfg(feature = "local_tty")]
-    let pty_spawner =
-        terminal::local_tty::spawner::PtySpawner::new().context("Failed to create pty spawner")?;
+    let pty_spawner = if matches!(launch_mode, LaunchMode::Tui) {
+        None
+    } else {
+        Some(
+            terminal::local_tty::spawner::PtySpawner::new()
+                .context("Failed to create pty spawner")?,
+        )
+    };
 
-    let callbacks = app_callbacks(
-        launch_mode.is_integration_test(),
-        tracing_initialization.take(),
-    );
+    // The TUI front-end skips the GUI/agent model graph, so the GUI lifecycle
+    // callbacks (which reach for singletons like `NotebookManager` that the TUI
+    // never registers) would panic on termination. Use empty callbacks instead.
+    let callbacks = if matches!(launch_mode, LaunchMode::Tui) {
+        warpui::platform::AppCallbacks::default()
+    } else {
+        app_callbacks(
+            launch_mode.is_integration_test(),
+            tracing_initialization.take(),
+        )
+    };
     let mut app_builder = if launch_mode.is_headless() {
         warpui::platform::AppBuilder::new_headless(
             callbacks,
@@ -1118,9 +1137,12 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         #[cfg(feature = "crash_reporting")]
         crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
 
-        // Add the terminal server singleton to the application.
+        // Add the terminal server singleton to the application. (The TUI front-end
+        // returns before this closure runs, so `pty_spawner` is always `Some` here.)
         #[cfg(feature = "local_tty")]
-        ctx.add_singleton_model(move |_ctx| pty_spawner);
+        ctx.add_singleton_model(move |_ctx| {
+            pty_spawner.expect("pty spawner is created for all non-TUI launch modes")
+        });
 
         // Register user preferences.  This must be done before initializing
         // feature flags or experiments, both of which check user preferences for
