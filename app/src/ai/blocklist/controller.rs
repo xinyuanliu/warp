@@ -427,7 +427,7 @@ impl InputQuery {
         match &self.input_query {
             InputQueryType::UserSubmittedQueryFromInput { query, .. } => query.clone(),
             InputQueryType::AIInputType { ai_input } => {
-                ai_input.display_query().unwrap_or_default()
+                ai_input.user_input_text().unwrap_or_default()
             }
         }
     }

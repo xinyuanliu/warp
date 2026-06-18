@@ -52,8 +52,8 @@ pub async fn generate_multi_agent_output(
     if params.should_redact_secrets {
         redaction::redact_inputs(&mut params.input);
     }
-    // Place the handoff marker first so the server can correct task context
-    // before processing the rest of the user input batch.
+    // Place the handoff marker first so the server unwinds inherited CLI subagent task state
+    // before processing the user's next input.
     if params.pending_conversation_handoff.is_some() {
         params.input.insert(0, AIAgentInput::ConversationHandoff);
     }

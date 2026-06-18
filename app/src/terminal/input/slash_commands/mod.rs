@@ -1043,6 +1043,8 @@ impl Input {
                     AgentManagementTelemetryEvent::SlashCommandContinueLocally,
                     ctx
                 );
+                // Move pending attachments with the initial prompt into the continued local pane.
+                // Leave them staged when there is no prompt so the handoff does not discard them.
                 let initial_attachments =
                     self.maybe_take_attachments_for_initial_prompt(argument, ctx);
 

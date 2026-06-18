@@ -96,6 +96,7 @@ pub struct RequestParams {
     pub input: Vec<AIAgentInput>,
     pub conversation_token: Option<ServerConversationToken>,
     pub forked_from_conversation_token: Option<ServerConversationToken>,
+    /// Causes this request to prepend the server-side handoff marker.
     pub pending_conversation_handoff: Option<PendingConversationHandoff>,
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
     pub tasks: Vec<warp_multi_agent_api::Task>,
@@ -155,6 +156,7 @@ pub struct ConversationData {
     pub tasks: Vec<warp_multi_agent_api::Task>,
     pub server_conversation_token: Option<ServerConversationToken>,
     pub forked_from_conversation_token: Option<ServerConversationToken>,
+    /// Handoff state retained until an eligible request sends the server marker.
     pub pending_conversation_handoff: Option<PendingConversationHandoff>,
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
     pub existing_suggestions: Option<Suggestions>,
