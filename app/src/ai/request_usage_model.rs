@@ -378,7 +378,8 @@ impl AIRequestUsageModel {
     /// 4. user's team plan has pay-as-you-go enabled (enterprise only)
     /// 5. user's team has enterprise bonus grants auto-reload enabled (enterprise only)
     /// 6. user's team has self-serve auto-reload enabled within its monthly spend limit
-    /// 7. user has BYOK enabled and has provided at least one API key
+    /// 7. user has BYOK enabled and has provided at least one BYO auth credential
+    ///    (API key, custom endpoint, or connected Grok subscription)
     /// Use this method as the starting point for AI availability checking.
     pub fn has_any_ai_remaining(&self, ctx: &AppContext) -> bool {
         let current_workspace = UserWorkspaces::as_ref(ctx).current_workspace();
@@ -411,10 +412,15 @@ impl AIRequestUsageModel {
                     .is_some_and(|price| !workspace.would_addon_purchase_reach_limit(price))
         });
 
-        // If you have provided your own API key,
+        // If you have provided your own AI auth,
         // it doesn't matter if you are out of warp-provided requests.
-        let has_byo_api_key = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
-            && ApiKeyManager::as_ref(ctx).keys().has_any_key();
+        let api_key_manager = ApiKeyManager::as_ref(ctx);
+        let has_byo_auth = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx)
+            && (api_key_manager.keys().has_any_key()
+                || api_key_manager
+                    .grok_tokens()
+                    .and_then(|tokens| tokens.access_token_for_request())
+                    .is_some());
 
         has_base_plan_ai_requests
             || (user_bonus_credits || workspace_bonus_credits)
@@ -422,7 +428,7 @@ impl AIRequestUsageModel {
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
             || is_self_serve_auto_reload_enabled
-            || has_byo_api_key
+            || has_byo_auth
     }
 
     pub fn requests_used(&self) -> usize {
