@@ -19312,8 +19312,14 @@ impl Workspace {
         let positioned_container =
             SavePosition::new(positioned_container, &htab_group_position_id(group_id)).finish();
 
-        // Flex from member count (not collapse state) so layout doesn't shift when the group expands/collapses.
-        let group_flex = 1.0 + run_len as f32;
+        // Flex = header + one per member so the group shrinks proportionally
+        // with sibling tabs. A collapsed group renders only its header, so it
+        // should claim a single slot's worth of flex.
+        let group_flex = if is_collapsed {
+            1.0
+        } else {
+            1.0 + run_len as f32
+        };
         Shrinkable::new(group_flex, positioned_container).finish()
     }
 
@@ -20236,8 +20242,25 @@ impl Workspace {
             }
         }
 
-        // Placeholder to make sure the flex row expands across the entire width of the app.
-        tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
+        // Trailing spacer fills leftover width. We also re-add the flex that
+        // collapsed groups give up (one per hidden member): parking it at the far
+        // end keeps the bar's total flex constant across collapse/expand — so group
+        // headers don't shift — without collapsed groups stealing width from the
+        // tabs to their left. Mirrors the group flex in render_horizontal_tab_group.
+        let collapsed_member_flex: f32 = if FeatureFlag::GroupedTabs.is_enabled() {
+            self.tabs
+                .iter()
+                .filter(|tab| {
+                    tab.group_id
+                        .and_then(|gid| self.tab_groups.get(&gid))
+                        .is_some_and(|group| group.collapsed)
+                })
+                .count() as f32
+        } else {
+            0.0
+        };
+        tab_bar
+            .add_child(Shrinkable::new(0.5 + collapsed_member_flex, Empty::new().finish()).finish());
 
         self.add_configurable_right_side_tab_bar_controls(
             &mut tab_bar,
