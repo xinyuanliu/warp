@@ -47,6 +47,11 @@ dylint_linting::declare_late_lint! {
     /// deliberate lifetime associations (e.g. a manager being updated in response
     /// to events from a different model).
     ///
+    /// **Limitation:** same-entity detection compares handle types, not identities.
+    /// Two distinct `ModelHandle<T>` instances that happen to share the same `T`
+    /// will both be flagged even if only one is the subscribed handle.  Suppress
+    /// with `#[allow(model_handle_in_subscription)]` when this is intentional.
+    ///
     /// **Example (bad):**
     /// ```rust
     /// let fetcher_clone = fetcher.clone();
@@ -62,7 +67,7 @@ dylint_linting::declare_late_lint! {
     /// });
     /// ```
     pub MODEL_HANDLE_IN_SUBSCRIPTION,
-    Warn,
+    Deny,
     "captured `ModelHandle` or `ViewHandle` in subscription closure"
 }
 
@@ -91,30 +96,15 @@ impl<'tcx> LateLintPass<'tcx> for ModelHandleInSubscription {
             return;
         };
 
-        // ── 2. Distinguish ViewContext/ModelContext vs AppContext by inspecting the
-        //    last parameter's inferred type rather than counting parameters.
+        // ── 2. Distinguish ViewContext/ModelContext (4-param) vs AppContext (3-param) ──
         //
-        // All three context types take the context as their last parameter:
-        //   ViewContext<T>  → last param is &mut ViewContext<T>  → handle is 2nd param
-        //   ModelContext<T> → last param is &mut ModelContext<T> → handle is 2nd param
-        //   AppContext      → last param is &mut AppContext       → handle is 1st param
-        let is_entity_ctx = {
-            let closure_ty = cx.typeck_results().expr_ty(callback_expr);
-            if let ty::Closure(_, args) = closure_ty.kind() {
-                let last_input = args.as_closure().sig().skip_binder().inputs().last().copied();
-                last_input.is_some_and(|t| {
-                    let ty::Adt(def, _) = t.peel_refs().kind() else {
-                        return false;
-                    };
-                    matches!(
-                        cx.tcx.item_name(def.did()).as_str(),
-                        "ViewContext" | "ModelContext"
-                    )
-                })
-            } else {
-                false
-            }
-        };
+        // ViewContext callbacks:  (&mut T, ModelHandle<E>, &Event, &mut ViewContext<T>)  — 4 params
+        // ModelContext callbacks: (&mut T, ModelHandle<S>, &Event, &mut ModelContext<T>) — 4 params
+        // AppContext callbacks:   (ModelHandle<S>, &Event, &mut AppContext)              — 3 params
+        //
+        // The entity-context callbacks always have 4 params and the handle is the 2nd;
+        // AppContext callbacks have 3 params and the handle is the 1st.
+        let is_entity_ctx = closure.fn_decl.inputs.len() == 4;
 
         // ── 3. Extract the subscribed entity's inner type E from &ModelHandle<E> ──
         //

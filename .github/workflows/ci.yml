@@ -638,7 +638,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-dylint
-        run: cargo install cargo-dylint dylint-link
+        shell: bash
+        run: cargo install cargo-dylint@6.0.1 dylint-link@6.0.1
 
       - name: Run dylint
         run: cargo dylint --path ./lints -p warp
