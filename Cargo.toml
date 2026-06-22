@@ -3,6 +3,12 @@ members = [
   "crates/*",
   "app",
 ]
+exclude = [
+  # Excluded from the workspace because dx's hot-patch thin build tries to
+  # replay its rustc args whenever warp lib changes, but never captures them
+  # during the fat build (dx bug). Only needed for integration test runs.
+  "crates/integration",
+]
 resolver = "2"
 
 # Include all members except serve-wasm (since it's a helper helper for serving
