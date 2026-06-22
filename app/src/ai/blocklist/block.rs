@@ -1268,6 +1268,11 @@ impl AIBlock {
 
         // Note: UpdatedStreamingExchange is handled by the dedicated on_updated_output()
         // callback in model_impl.rs, so we don't need to respond to it here.
+        //
+        // Note: AppendedExchange is handled by the TerminalView, which directly notifies
+        // the previous last AIBlock in the conversation instead of broadcasting to all
+        // AIBlocks. This avoids O(n) re-renders when a new exchange is appended to a
+        // conversation with many exchanges.
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
@@ -1276,8 +1281,7 @@ impl AIBlock {
                     .is_none_or(|id| id == me.terminal_view_id)
                 {
                     match event {
-                        BlocklistAIHistoryEvent::AppendedExchange { .. }
-                        | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
+                        BlocklistAIHistoryEvent::UpdatedTodoList { .. }
                         | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
                         | BlocklistAIHistoryEvent::StartedNewConversation { .. }
                         | BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
