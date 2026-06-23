@@ -5965,28 +5965,22 @@ impl PaneGroup {
         ModelHandle<Box<dyn TerminalManager>>,
     ) {
         let window_id = ctx.window_id();
-        let view_slot: std::rc::Rc<std::cell::RefCell<Option<ViewHandle<TerminalView>>>> =
-            Default::default();
-        let view_slot_for_build = view_slot.clone();
-        let terminal_manager = ctx.add_model(move |ctx| {
-            let manager = shared_session::viewer::TerminalManager::new(
-                session_id,
-                resources,
-                initial_size,
-                window_id,
-                enable_orchestration_polling,
-                is_cloud_mode,
-                ctx,
-            );
-            *view_slot_for_build.borrow_mut() = Some(manager.view());
-            let terminal_manager: Box<dyn TerminalManager> = Box::new(manager);
-            terminal_manager
-        });
-
-        let terminal_view = view_slot
-            .borrow_mut()
-            .take()
-            .expect("viewer manager populates its view at construction");
+        // The viewer manager builds its own `TerminalView` during construction
+        // and exposes it via `view()`, so grab the view before boxing the
+        // manager behind the object-safe `TerminalManager` trait (which has no
+        // `view()`).
+        let manager = shared_session::viewer::TerminalManager::new(
+            session_id,
+            resources,
+            initial_size,
+            window_id,
+            enable_orchestration_polling,
+            is_cloud_mode,
+            ctx,
+        );
+        let terminal_view = manager.view();
+        let terminal_manager =
+            ctx.add_model(move |_| Box::new(manager) as Box<dyn TerminalManager>);
         (terminal_view, terminal_manager)
     }
 
