@@ -1111,16 +1111,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         crate::util::bindings::custom_tag_to_keystroke,
     );
 
-    // The TUI front-end bootstraps the real (headless) app but renders through
-    // the WarpUI TUI backend instead of the GUI workspace, so it skips the full
-    // GUI/agent model graph (`initialize_app`/`launch`).
-    #[cfg(feature = "tui")]
-    if matches!(launch_mode, LaunchMode::Tui) {
-        return app_builder.run(move |ctx| {
-            crate::tui::init(ctx);
-        });
-    }
-
     app_builder.run(move |ctx| {
         #[cfg(not(target_family = "wasm"))]
         // Rotate the log files in the background.
@@ -1138,12 +1128,13 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         #[cfg(feature = "crash_reporting")]
         crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
 
-        // Add the terminal server singleton to the application. (The TUI front-end
-        // returns before this closure runs, so `pty_spawner` is always `Some` here.)
+        // Add the terminal server singleton to the application. The TUI front-end
+        // runs in-process (`local_tty` with no terminal server), so `pty_spawner`
+        // is `None` for Tui; only register the singleton when present.
         #[cfg(feature = "local_tty")]
-        ctx.add_singleton_model(move |_ctx| {
-            pty_spawner.expect("pty spawner is created for all non-TUI launch modes")
-        });
+        if let Some(pty_spawner) = pty_spawner {
+            ctx.add_singleton_model(move |_ctx| pty_spawner);
+        }
 
         // Register user preferences.  This must be done before initializing
         // feature flags or experiments, both of which check user preferences for
@@ -1169,6 +1160,15 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
         if ImprovedPaletteSearch::improved_search_enabled(ctx) {
             FeatureFlag::UseTantivySearch.set_enabled(true);
+        }
+
+        // The TUI front-end renders through the WarpUI TUI backend instead of
+        // the GUI workspace, so it stops after `initialize_app` (which registers
+        // the singletons the session core needs) and never enters `launch`.
+        #[cfg(feature = "tui")]
+        if matches!(launch_mode, LaunchMode::Tui) {
+            crate::tui::init(ctx);
+            return;
         }
 
         launch(ctx, app_state, launch_mode);
@@ -2031,7 +2031,12 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| OpenedFilesModel::new());
     ctx.add_singleton_model(NotebookKeybindings::new);
     ctx.add_singleton_model(TerminalKeybindings::new);
-    ctx.add_singleton_model(|_| ActiveSession::default());
+    // The TUI front-end owns its own session and has no GUI workspace/active
+    // pane, so it skips the `ActiveSession` singleton (part of the agent cluster
+    // not wired up for Tui).
+    if !matches!(launch_mode, LaunchMode::Tui) {
+        ctx.add_singleton_model(|_| ActiveSession::default());
+    }
     ctx.add_singleton_model(|ctx| {
         Listener::new(
             server_api_provider.as_ref(ctx).get_cloud_objects_client(),
