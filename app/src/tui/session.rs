@@ -35,8 +35,6 @@ use crate::terminal::shell::ShellType;
 pub struct TuiTerminalSession {
     model: Arc<FairMutex<TerminalModel>>,
     sessions: ModelHandle<Sessions>,
-    /// Used in Phase 4 for repaint subscriptions.
-    #[allow(dead_code)]
     model_events: ModelHandle<ModelEventDispatcher>,
     pty_controller: ModelHandle<PtyController>,
     event_loop_tx: mio_channel::Sender<Message>,
@@ -57,8 +55,7 @@ impl TuiTerminalSession {
         self.model.clone()
     }
 
-    /// Returns the model event dispatcher (for repaint subscriptions in Phase 4).
-    #[allow(dead_code)]
+    /// Returns the model event dispatcher (for repaint subscriptions).
     pub fn model_events(&self) -> &ModelHandle<ModelEventDispatcher> {
         &self.model_events
     }

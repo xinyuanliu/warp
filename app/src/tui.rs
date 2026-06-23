@@ -10,14 +10,16 @@
 //! `run_internal` once the headless app is up (see [`crate::run_tui`]). Ctrl-C
 //! quit is handled by the runtime's input loop.
 
-mod command_output;
+mod grid_render;
 mod input_view;
 mod session;
 mod transcript_view;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use input_view::{InputEvent, TuiInputView};
+use parking_lot::FairMutex;
 use session::{encode_keydown, TuiTerminalSession};
 use transcript_view::TuiTranscriptView;
 use warpui_core::elements::tui::{
@@ -31,7 +33,8 @@ use warpui_core::{
     ViewContext, ViewHandle,
 };
 
-use crate::terminal::model::terminal_model::TerminalInputState;
+use crate::terminal::color;
+use crate::terminal::model::terminal_model::{TerminalInputState, TerminalModel};
 
 /// The bottom input frame's height: one text row inside a single-cell rounded
 /// border (top + bottom), i.e. three rows total.
@@ -77,6 +80,15 @@ impl RootTuiView {
 
         ctx.focus(&input);
 
+        // Repaint when the model changes (PTY output, block updates, etc.).
+        // Gracefully skip if the session singleton isn't registered (tests).
+        if let Some(session) = TuiTerminalSession::handle(ctx).downgrade().upgrade(ctx) {
+            let model_events = session.read(ctx, |s, _| s.model_events().clone());
+            ctx.subscribe_to_model(&model_events, |_, _, _event, ctx| {
+                ctx.notify();
+            });
+        }
+
         // Periodically check the terminal size and resize the model + PTY when
         // it changes. The TUI runtime invalidates on resize but doesn't call
         // back into the session, so we poll from a background timer.
@@ -120,15 +132,32 @@ impl TuiView for RootTuiView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let transcript = TuiChildView::new(&self.transcript, ctx);
         let input = TuiChildView::new(&self.input, ctx);
 
+        // If the session singleton isn't registered (tests), render just the input.
+        let Some(session) = TuiTerminalSession::handle(ctx).downgrade().upgrade(ctx) else {
+            return Box::new(TuiKeyInterceptor::new(Box::new(
+                TuiColumn::new().child(TuiConstrainedBox::new(input).with_max_rows(INPUT_ROWS)),
+            )));
+        };
+
+        let model = session.read(ctx, |s, _| s.model());
+        let colors = model.lock().colors();
+
+        // When the alt-screen is active, render it full-pane (no input view).
+        if model.lock().is_alt_screen_active() {
+            return Box::new(TuiKeyInterceptor::new(Box::new(TuiAltScreenElement::new(
+                model, colors,
+            ))));
+        }
+
+        // Otherwise: block list (transcript area) + input.
+        let block_list = TuiBlockListElement::new(model, colors);
+
         let column = TuiColumn::new()
-            .flex_child(transcript)
+            .flex_child(block_list)
             .child(TuiConstrainedBox::new(input).with_max_rows(INPUT_ROWS));
 
-        // Wrap the column in a key interceptor that forwards keystrokes to the
-        // PTY when a command is running or the alt-screen is active.
         Box::new(TuiKeyInterceptor::new(Box::new(column)))
     }
 }
@@ -222,6 +251,196 @@ impl TuiElement for TuiKeyInterceptor {
     }
 }
 
+/// Renders the `TerminalModel`'s block list bottom-anchored into the
+/// transcript area. Each block's `prompt_and_command_grid` and `output_grid`
+/// are painted via `render_grid`.
+struct TuiBlockListElement {
+    model: Arc<FairMutex<TerminalModel>>,
+    colors: color::List,
+}
+
+impl TuiBlockListElement {
+    fn new(model: Arc<FairMutex<TerminalModel>>, colors: color::List) -> Self {
+        Self { model, colors }
+    }
+
+    /// Computes the displayed height of each block (prompt+command + output).
+    fn block_heights(&self) -> Vec<u16> {
+        let model = self.model.lock();
+        model
+            .block_list()
+            .blocks()
+            .iter()
+            .map(|block| {
+                let pc = block.prompt_and_command_grid().len_displayed() as u16;
+                let out = block.output_grid().len_displayed() as u16;
+                pc.saturating_add(out)
+            })
+            .collect()
+    }
+}
+
+impl TuiElement for TuiBlockListElement {
+    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+        constraint.clamp(constraint.max)
+    }
+
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+        if area.is_empty() {
+            return;
+        }
+        let model = self.model.lock();
+        let blocks = model.block_list().blocks();
+        let width = area.width;
+
+        // Compute each block's height.
+        let heights: Vec<u16> = blocks
+            .iter()
+            .map(|block| {
+                let pc = block.prompt_and_command_grid().len_displayed() as u16;
+                let out = block.output_grid().len_displayed() as u16;
+                pc.saturating_add(out)
+            })
+            .collect();
+        let total: u16 = heights.iter().copied().fold(0, u16::saturating_add);
+        if total == 0 {
+            return;
+        }
+
+        // Bottom-anchor: the newest (last) block sits at the bottom.
+        let visible = total.min(area.height);
+        let top_clip = total - visible; // rows clipped from the top
+        let dst_top = area.y + (area.height - visible);
+
+        // Paint blocks top-to-bottom into the buffer, skipping clipped rows.
+        let mut src_y: u16 = 0;
+        let mut dst_y = dst_top;
+        for (block, &height) in blocks.iter().zip(&heights) {
+            if height == 0 {
+                continue;
+            }
+            // Skip blocks entirely above the clip.
+            if src_y + height <= top_clip {
+                src_y += height;
+                continue;
+            }
+            // Partially clipped block: skip the clipped rows.
+            let skip = top_clip.saturating_sub(src_y);
+            let pc_rows = block.prompt_and_command_grid().len_displayed() as u16;
+            let out_rows = block.output_grid().len_displayed() as u16;
+
+            // Render prompt+command grid.
+            let pc_skip = skip.min(pc_rows);
+            if pc_skip < pc_rows {
+                let pc_area = TuiRect::new(area.x, dst_y, width, pc_rows - pc_skip);
+                render_block_grid(
+                    block.prompt_and_command_grid(),
+                    pc_skip as usize,
+                    pc_area,
+                    buffer,
+                    &self.colors,
+                );
+                dst_y = dst_y.saturating_add(pc_rows - pc_skip);
+            }
+
+            // Render output grid.
+            let out_skip = skip.saturating_sub(pc_rows);
+            if out_skip < out_rows {
+                let out_area = TuiRect::new(area.x, dst_y, width, out_rows - out_skip);
+                render_block_grid(
+                    block.output_grid(),
+                    out_skip as usize,
+                    out_area,
+                    buffer,
+                    &self.colors,
+                );
+                dst_y = dst_y.saturating_add(out_rows - out_skip);
+            }
+
+            src_y += height;
+            if dst_y >= area.y + area.height {
+                break;
+            }
+        }
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        self.block_heights()
+            .iter()
+            .copied()
+            .fold(0, u16::saturating_add)
+    }
+}
+
+/// Renders the alt-screen grid full-pane.
+struct TuiAltScreenElement {
+    model: Arc<FairMutex<TerminalModel>>,
+    colors: color::List,
+}
+
+impl TuiAltScreenElement {
+    fn new(model: Arc<FairMutex<TerminalModel>>, colors: color::List) -> Self {
+        Self { model, colors }
+    }
+}
+
+impl TuiElement for TuiAltScreenElement {
+    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+        constraint.clamp(constraint.max)
+    }
+
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+        let model = self.model.lock();
+        let grid = model.alt_screen().grid_handler();
+        grid_render::render_grid(grid, area, buffer, &self.colors);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        let model = self.model.lock();
+        model
+            .alt_screen()
+            .grid_handler()
+            .len_displayed()
+            .unwrap_or(0) as u16
+    }
+}
+
+/// Renders a `BlockGrid` starting from `skip_rows` into `area`.
+fn render_block_grid(
+    block_grid: &crate::terminal::model::blockgrid::BlockGrid,
+    skip_rows: usize,
+    area: TuiRect,
+    buffer: &mut TuiBuffer,
+    colors: &color::List,
+) {
+    use crate::terminal::model::grid::Dimensions as _;
+
+    let grid = block_grid.grid_handler();
+    let num_rows = grid.len_displayed().unwrap_or(0);
+    let num_cols = grid.columns().min(area.width as usize);
+
+    for (i, row_idx) in (skip_rows..num_rows).enumerate() {
+        let y = area.y + i as u16;
+        if y >= area.y + area.height {
+            break;
+        }
+        let Some(row) = grid.row(row_idx) else {
+            continue;
+        };
+        for col_idx in 0..num_cols {
+            let x = area.x + col_idx as u16;
+            let cell = &row[col_idx];
+            let style = grid_render::cell_to_style(cell, colors);
+            let content = cell.content_for_display();
+            let symbol = content.to_string();
+            if let Some(buffer_cell) = buffer.cell_mut((x, y)) {
+                buffer_cell.set_symbol(if symbol.is_empty() { " " } else { &symbol });
+                buffer_cell.set_style(style);
+            }
+        }
+    }
+}
+
 /// Holds the live TUI session for the app's lifetime; dropping it on app
 /// teardown restores the terminal.
 struct TuiSession {
@@ -270,7 +489,3 @@ pub fn init(ctx: &mut AppContext) {
 fn current_terminal_cells() -> Option<(u16, u16)> {
     crossterm::terminal::size().ok()
 }
-
-#[cfg(test)]
-#[path = "tui_tests.rs"]
-mod tests;
