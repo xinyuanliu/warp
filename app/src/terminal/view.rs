@@ -6134,11 +6134,9 @@ impl TerminalView {
                     return;
                 }
 
-                // Record the current last AIBlock for this conversation before inserting the
-                // new one. After insertion we'll notify it directly so it re-renders to update
-                // state that depends on being the latest exchange (e.g.,
-                // `is_latest_visible_exchange_in_root_task`). This avoids broadcasting an
-                // O(n) re-render to every AIBlock via the history model subscription.
+                // Capture the current last AIBlock before inserting the new one. After
+                // insertion we notify it directly so it can update its last-block footer
+                // state (is_latest_visible_exchange_in_root_task).
                 let conversation_id_for_prev_notify = *conversation_id;
                 let prev_last_ai_block = self.rich_content_views.iter().rev().find_map(|rc| {
                     let ai_metadata = rc.ai_block_metadata()?;
@@ -6226,11 +6224,7 @@ impl TerminalView {
                     ctx,
                 );
 
-                // Notify the previous last AIBlock for this conversation so it can update
-                // state that depends on `is_latest_visible_exchange_in_root_task` (e.g.,
-                // hiding the last-block-only footer). This is a targeted O(1) notification
-                // that replaces the O(n) broadcast that previously fired via the
-                // `AppendedExchange` subscription in each `AIBlock`.
+                // Notify the previous last AIBlock to update its footer state.
                 if let Some(prev_last) = prev_last_ai_block {
                     prev_last.update(ctx, |_, ctx| ctx.notify());
                 }

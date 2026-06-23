@@ -1266,13 +1266,9 @@ impl AIBlock {
             }
         });
 
-        // Note: UpdatedStreamingExchange is handled by the dedicated on_updated_output()
-        // callback in model_impl.rs, so we don't need to respond to it here.
-        //
-        // Note: AppendedExchange is handled by the TerminalView, which directly notifies
-        // the previous last AIBlock in the conversation instead of broadcasting to all
-        // AIBlocks. This avoids O(n) re-renders when a new exchange is appended to a
-        // conversation with many exchanges.
+        // Note: UpdatedStreamingExchange is handled by on_updated_output() in model_impl.rs.
+        // AppendedExchange is handled by TerminalView, which notifies only the previous last
+        // AIBlock directly (avoids O(n) re-renders on every new exchange).
         ctx.subscribe_to_model(
             &BlocklistAIHistoryModel::handle(ctx),
             |me, _, event, ctx| {
