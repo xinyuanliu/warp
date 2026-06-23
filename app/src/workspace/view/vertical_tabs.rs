@@ -95,7 +95,9 @@ const GROUP_BODY_BOTTOM_PADDING: f32 = 8.;
 const GROUP_ITEM_SPACING: f32 = 4.;
 const TABS_MODE_ITEM_SPACING: f32 = 4.;
 const GROUP_ACTION_BUTTON_ICON_SIZE: f32 = 12.;
-const TAB_GROUP_HEADER_ACTION_ICON_SIZE: f32 = 14.;
+// Tab-group header overflow/close buttons reuse the pane-item action button icon
+// size so the two rows render at a consistent size.
+const TAB_GROUP_HEADER_ACTION_ICON_SIZE: f32 = GROUP_ACTION_BUTTON_ICON_SIZE;
 const PIN_INDICATOR_ICON_SIZE: f32 = 16.;
 const PIN_INDICATOR_CORNER_INSET: f32 = 6.;
 const GROUP_ACTION_BUTTON_PADDING: f32 = 2.;

@@ -19,7 +19,8 @@ use super::{
     vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
     TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
     VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel,
+    VerticalTabsSummaryPrimaryLabel, GROUP_ACTION_BUTTON_ICON_SIZE,
+    TAB_GROUP_HEADER_ACTION_ICON_SIZE,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::context_chips::display_chip::GitLineChanges;
@@ -1141,4 +1142,14 @@ fn summary_search_fragments_include_hidden_overflow_values() {
     assert!(search_fragments_contain_query(&fragments, "#789"));
     assert!(search_fragments_contain_query(&fragments, "+2"));
     assert!(search_fragments_contain_query(&fragments, "-3"));
+}
+
+// The overflow/close buttons on a tab-group header should be the same size as
+// the ones on individual pane items so the two rows look consistent.
+#[test]
+fn tab_group_header_action_buttons_match_pane_item_button_size() {
+    assert_eq!(
+        TAB_GROUP_HEADER_ACTION_ICON_SIZE, GROUP_ACTION_BUTTON_ICON_SIZE,
+        "tab-group header overflow/close icon size must match the pane-item action button icon size"
+    );
 }
