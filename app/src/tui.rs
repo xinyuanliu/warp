@@ -687,6 +687,8 @@ pub fn init(ctx: &mut AppContext) {
         sessions,
         model_events,
         pty_controller,
+        None,
+        None,
         event_loop_tx,
         event_loop_rx,
         inactive_pty_reads_rx,

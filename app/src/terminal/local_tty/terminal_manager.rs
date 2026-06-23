@@ -679,15 +679,6 @@ impl TerminalManager<TerminalView> {
             });
         }
 
-        wire_up_pty_controller_with_surface(
-            &pty_controller,
-            &view,
-            model.clone(),
-            sessions,
-            model_event_sender,
-            ctx,
-        );
-
         wire_up_remote_server_controller_with_view(&remote_server_controller, &view, ctx);
 
         let session_sharer_clone = session_sharer.clone();
@@ -1024,65 +1015,28 @@ impl TerminalManager<TerminalView> {
 
         Self::handle_network_status_events(&view, session_sharer.clone(), ctx);
 
-        #[cfg(windows)]
-        let event_loop_tx_clone = event_loop_tx.clone();
-
-        // Create the terminal manager itself.
-        let terminal_manager = Self {
-            event_loop_tx: Arc::new(Mutex::new(event_loop_tx)),
+        // Assemble the manager and async-spawn the PTY via the shared
+        // constructor. The view/agent/sharing wiring above is GUI-specific; the
+        // assembly and shell-determination flow is shared with the TUI.
+        let terminal_manager_model = Self::from_session_core(
+            view.clone(),
             model,
+            sessions,
             model_events,
-            event_loop_handle: None,
-            view: view.clone(),
-            #[cfg(unix)]
-            terminal_attributes_poller: None,
             pty_controller,
-            remote_server_controller,
-
-            #[cfg(feature = "integration_tests")]
-            pid: None,
-
+            Some(remote_server_controller),
+            Some(session_sharer),
+            event_loop_tx,
+            event_loop_rx,
             inactive_pty_reads_rx,
-            session_sharer,
-        };
-
-        let terminal_manager_model = ctx.add_model(|ctx| {
-            let terminal_manager: Box<dyn crate::terminal::TerminalManager> =
-                Box::new(terminal_manager);
-
-            ctx.spawn(
-                async move {
-                    match wsl_name_or_shell_starter {
-                        Some(starter_source) => starter_source.to_shell_starter_source().await,
-                        None => None,
-                    }
-                },
-                move |terminal_manager: &mut Box<dyn crate::terminal::TerminalManager>,
-                      shell_starter_source,
-                      ctx| {
-                    let Some(terminal_manager) =
-                        crate::terminal::TerminalManager::as_any_mut(terminal_manager.as_mut())
-                            .downcast_mut::<TerminalManager<TerminalView>>()
-                    else {
-                        return;
-                    };
-
-                    terminal_manager.on_shell_determined(
-                        startup_directory,
-                        env_vars,
-                        user_default_shell_unsupported_banner_model_handle,
-                        #[cfg(windows)]
-                        event_loop_tx_clone,
-                        event_loop_rx,
-                        channel_event_proxy,
-                        shell_starter_source,
-                        ctx,
-                    )
-                },
-            );
-
-            terminal_manager
-        });
+            channel_event_proxy,
+            wsl_name_or_shell_starter,
+            startup_directory,
+            env_vars,
+            user_default_shell_unsupported_banner_model_handle,
+            model_event_sender,
+            ctx,
+        );
 
         (terminal_manager_model, view)
     }
@@ -1098,16 +1052,20 @@ impl<S: TerminalSurface> TerminalManager<S> {
         self.model.clone()
     }
 
-    /// Builds a generic manager from an already-constructed session core and a
-    /// surface: wires the surface to the PTY, then asynchronously determines the
-    /// shell and spawns the PTY. Used by front-ends (e.g. the TUI) that build
-    /// their own surface; the GUI's `create_model` does the equivalent inline
-    /// plus its view/agent/sharing wiring.
+    /// Builds a manager from an already-constructed session core and a surface:
+    /// wires the surface to the PTY, assembles the manager, then asynchronously
+    /// determines the shell and spawns the PTY. Shared by the GUI's `create_model`
+    /// (which builds the `TerminalView` and its agent/sharing wiring first, then
+    /// delegates the assembly here) and the TUI (which builds its own
+    /// `RootTuiView`).
+    ///
+    /// `remote_server_controller` and `session_sharer` are passed in by callers
+    /// that have already set up surface-specific wiring against them (the GUI);
+    /// callers without that wiring (the TUI) pass `None` and get defaults.
     ///
     /// `wakeups_rx` from the session core is intentionally NOT taken here — the
     /// caller hands it to the surface, which is the sole drainer of that mpmc
     /// redraw channel.
-    #[cfg(feature = "tui")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_session_core(
         surface: ViewHandle<S>,
@@ -1115,6 +1073,8 @@ impl<S: TerminalSurface> TerminalManager<S> {
         sessions: ModelHandle<Sessions>,
         model_events: ModelHandle<ModelEventDispatcher>,
         pty_controller: ModelHandle<PtyController>,
+        remote_server_controller: Option<ModelHandle<RemoteServerController>>,
+        session_sharer: Option<Rc<RefCell<Option<ModelHandle<Network>>>>>,
         event_loop_tx: mio_channel::Sender<Message>,
         event_loop_rx: mio_channel::Receiver<Message>,
         inactive_pty_reads_rx: InactiveReceiver<Arc<Vec<u8>>>,
@@ -1138,9 +1098,9 @@ impl<S: TerminalSurface> TerminalManager<S> {
             ctx,
         );
 
-        let remote_server_controller =
-            init_remote_server_controller(&pty_controller, &model_events, ctx);
-        let session_sharer: Rc<RefCell<Option<ModelHandle<Network>>>> = Rc::new(RefCell::new(None));
+        let remote_server_controller = remote_server_controller
+            .unwrap_or_else(|| init_remote_server_controller(&pty_controller, &model_events, ctx));
+        let session_sharer = session_sharer.unwrap_or_else(|| Rc::new(RefCell::new(None)));
 
         #[cfg(windows)]
         let event_loop_tx_clone = event_loop_tx.clone();
