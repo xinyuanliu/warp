@@ -2473,7 +2473,11 @@ impl BlocklistAIController {
             .all_inputs()
             .any(|input| input.is_user_query());
 
-        #[allow(model_handle_in_subscription)]
+        #[allow(
+            unknown_lints,
+            model_handle_in_subscription,
+            reason = "capturing response_stream_clone ensures that the ResponseStream cannot be dropped until this subscriber handles ResponseStreamEvent::AfterStreamFinished"
+        )]
         ctx.subscribe_to_model(&response_stream, move |me, _, event, ctx| {
             me.handle_response_stream_event(
                 input_contains_user_query,

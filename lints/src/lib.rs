@@ -47,6 +47,15 @@ dylint_linting::declare_late_lint! {
     /// deliberate lifetime associations (e.g. a manager being updated in response
     /// to events from a different model).
     ///
+    /// **Suppressing:** if you genuinely need to capture the handle (e.g. to pass
+    /// it to a function that requires ownership), suppress with:
+    /// ```rust
+    /// #[allow(unknown_lints, model_handle_in_subscription)]
+    /// ctx.subscribe_to_model(&handle, move |me, _, event, ctx| { ... });
+    /// ```
+    /// `unknown_lints` is required so that regular `cargo clippy` (which does not
+    /// know this custom lint name) does not fail with `-D unknown-lints`.
+    ///
     /// **Limitation:** same-entity detection compares handle types, not identities.
     /// Two distinct `ModelHandle<T>` instances that happen to share the same `T`
     /// will both be flagged even if only one is the subscribed handle.  Suppress
