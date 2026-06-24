@@ -90,10 +90,6 @@ impl<T: TuiView, R: TuiTerminal> TuiScreen<T, R> {
         self.terminal.size()
     }
 
-    fn root_view_id(&self) -> EntityId {
-        self.root_view.id()
-    }
-
     /// Lays out and paints the root view through the presenter, then flushes the
     /// frame diff to the terminal. Draining this window's invalidations keeps
     /// the manual + autotracking sets from accumulating (the frame is repainted

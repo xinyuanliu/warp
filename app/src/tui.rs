@@ -27,7 +27,7 @@ use session::encode_keydown;
 use terminal_history_source::{TerminalHistoryItemId, TerminalHistorySource};
 use warpui_core::elements::tui::{
     TuiBuffer, TuiChildView, TuiColumn, TuiConstrainedBox, TuiConstraint, TuiElement,
-    TuiEventContext, TuiPresentationContext, TuiRect, TuiSize, TuiVirtualList,
+    TuiEventContext, TuiLayoutContext, TuiPresentationContext, TuiRect, TuiSize, TuiVirtualList,
     TuiVirtualListHandle,
 };
 use warpui_core::platform::{TerminationMode, WindowStyle};
@@ -258,8 +258,8 @@ impl TuiView for RootTuiView {
         "RootTuiView"
     }
 
-    fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
-        let input = TuiChildView::new(&self.input, ctx);
+    fn render(&self, _ctx: &AppContext) -> Box<dyn TuiElement> {
+        let input = TuiChildView::new(&self.input);
         let colors = self.model.lock().colors();
 
         // When the alt-screen is active, render it full-pane (no input view).
@@ -315,20 +315,16 @@ impl TuiKeyInterceptor {
 }
 
 impl TuiElement for TuiKeyInterceptor {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
-        self.child.layout(constraint)
+    fn layout(&mut self, constraint: TuiConstraint, ctx: &mut TuiLayoutContext) -> TuiSize {
+        self.child.layout(constraint, ctx)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
-        self.child.render(area, buffer);
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+        self.child.render(area, buffer, ctx);
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.child.desired_height(width)
-    }
-
-    fn cursor_position(&self, area: TuiRect) -> Option<(u16, u16)> {
-        self.child.cursor_position(area)
+    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
+        self.child.cursor_position(area, ctx)
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -339,7 +335,8 @@ impl TuiElement for TuiKeyInterceptor {
         &mut self,
         event: &Event,
         area: TuiRect,
-        ctx: &mut TuiEventContext,
+        event_ctx: &mut TuiEventContext,
+        ctx: &mut TuiLayoutContext,
         app: &AppContext,
     ) -> bool {
         if let Event::KeyDown {
@@ -371,7 +368,7 @@ impl TuiElement for TuiKeyInterceptor {
                         // Emit on the root view so the manager's surface wiring
                         // forwards the bytes to the PTY.
                         let root = self.root.clone();
-                        ctx.dispatch_app_update(move |app| {
+                        event_ctx.dispatch_app_update(move |app| {
                             if let Some(root_view) = root.upgrade(app) {
                                 root_view.update(app, move |_root, ctx| {
                                     ctx.emit(TuiRootEvent::WriteBytes(bytes));
@@ -384,7 +381,7 @@ impl TuiElement for TuiKeyInterceptor {
             }
         }
 
-        self.child.dispatch_event(event, area, ctx, app)
+        self.child.dispatch_event(event, area, event_ctx, ctx, app)
     }
 }
 
@@ -401,21 +398,14 @@ impl TuiAltScreenElement {
 }
 
 impl TuiElement for TuiAltScreenElement {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         constraint.clamp(constraint.max)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
         let model = self.model.lock();
         let grid = model.alt_screen().grid_handler();
         grid_render::render_grid(grid, area, buffer, &self.colors);
-    }
-
-    fn desired_height(&self, _width: u16) -> u16 {
-        use crate::terminal::model::grid::Dimensions as _;
-        let model = self.model.lock();
-        let grid = model.alt_screen().grid_handler();
-        grid.len_displayed().unwrap_or_else(|| grid.visible_rows()) as u16
     }
 }
 

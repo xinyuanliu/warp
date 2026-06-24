@@ -16,7 +16,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiRect, TuiSize};
+use super::{
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiLayoutContext, TuiRect, TuiSize,
+};
 use crate::geometry::vector::Vector2F;
 use crate::{AppContext, Event};
 
@@ -303,11 +305,11 @@ impl<S: TuiVirtualListSource> TuiVirtualList<S> {
 }
 
 impl<S: TuiVirtualListSource> TuiElement for TuiVirtualList<S> {
-    fn layout(&mut self, constraint: TuiConstraint) -> TuiSize {
+    fn layout(&mut self, constraint: TuiConstraint, _ctx: &mut TuiLayoutContext) -> TuiSize {
         constraint.max
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer) {
+    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, _ctx: &mut TuiLayoutContext) {
         if area.is_empty() {
             return;
         }
@@ -343,18 +345,12 @@ impl<S: TuiVirtualListSource> TuiElement for TuiVirtualList<S> {
         }
     }
 
-    fn desired_height(&self, width: u16) -> u16 {
-        self.source
-            .total_height(width)
-            .unwrap_or(u16::MAX as usize)
-            .min(u16::MAX as usize) as u16
-    }
-
     fn dispatch_event(
         &mut self,
         event: &Event,
         area: TuiRect,
-        _ctx: &mut TuiEventContext,
+        _event_ctx: &mut TuiEventContext,
+        _ctx: &mut TuiLayoutContext,
         _app: &AppContext,
     ) -> bool {
         if area.is_empty() {
