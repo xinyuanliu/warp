@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use async_channel::Receiver;
-use futures_util::stream::AbortHandle;
+use futures_util::stream::{abortable, AbortHandle};
 use futures_util::{SinkExt, StreamExt};
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -38,9 +38,11 @@ use websocket::{Message, Sink, Stream, WebsocketMessage as _};
 use crate::auth::auth_state::AuthState;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::telemetry_context;
+use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
@@ -143,6 +145,14 @@ pub struct Network {
     /// The next event number to use when sending a write to pty request to the server.
     write_to_pty_event_no: WriteToPtySeqNo,
     pty_bytes_batch_status: PtyBytesBatchStatus,
+
+    /// Abort handle for the currently-live websocket receive task. Stored so a hung or dead
+    /// socket can be torn down deterministically (e.g. on CPU sleep, network loss, or a
+    /// proactive reconnect) instead of relying on the graceful-close cascade, which never
+    /// runs for a connection whose TCP died silently (no FIN). Mirrors
+    /// [`crate::server::cloud_objects::listener::Listener`]'s
+    /// `current_subscription_abort_handle`.
+    live_stream_abort_handle: Option<AbortHandle>,
 }
 
 impl Network {
@@ -184,10 +194,12 @@ impl Network {
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
+            live_stream_abort_handle: None,
         };
 
         model.start_write_to_pty_events_listener(write_to_pty_events_rx, ctx);
         model.start_websocket(session_id, ws_proxy_rx, ctx);
+        Self::subscribe_to_connectivity_signals(ctx);
         ctx.spawn_stream_local(
             selection_throttled_rx,
             |network, selection, _ctx| {
@@ -245,7 +257,10 @@ impl Network {
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
+            live_stream_abort_handle: None,
         };
+
+        Self::subscribe_to_connectivity_signals(ctx);
 
         ctx.emit(NetworkEvent::JoinedSuccessfully {
             active_prompt,
@@ -310,6 +325,14 @@ impl Network {
         stream: impl Stream,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Wrap the inbound stream so we can deterministically tear it down (e.g. on CPU sleep,
+        // network loss, or a proactive reconnect) instead of relying on the graceful-close
+        // cascade, which never runs for a socket whose TCP died silently. Each connection gets
+        // its own abort handle: aborting one only suppresses that connection's completion
+        // handler, so a stale socket can't tear down a connection that has since been replaced.
+        let (stream, live_stream_abort_handle) = abortable(stream);
+        self.live_stream_abort_handle = Some(live_stream_abort_handle.clone());
+
         // Receive messages from the server.
         ctx.spawn_stream_local(
             stream,
@@ -321,8 +344,15 @@ impl Network {
                     log::error!("Got error from shared session viewer websocket: {e}");
                 }
             },
-            |network, ctx| {
+            move |network, ctx| {
                 log::info!("Websocket to session sharing server ended");
+                if live_stream_abort_handle.is_aborted() {
+                    // We deliberately tore this socket down (proactive reconnect, CPU sleep, or
+                    // network loss). The path that aborted it owns the reconnect decision, so do
+                    // nothing here. This also prevents a stale socket's completion handler from
+                    // tearing down a connection that has since been replaced by a healthy one.
+                    return;
+                }
                 if matches!(network.stage, Stage::JoinedSuccessfully) {
                     // The connection may have timed out or the server restarted.
                     log::info!("Viewer reconnecting: websocket closed by server");
@@ -517,6 +547,88 @@ impl Network {
                 }
             },
         );
+    }
+
+    /// Subscribe to OS-level connectivity signals so we can proactively detect that the
+    /// underlying socket may have silently died (laptop sleep, Wi-Fi change, NAT rebind) and
+    /// replace it. Without this, the viewer only reconnects when the websocket stream itself
+    /// ends, which never happens for a dead/hung TCP connection that received no FIN — leaving
+    /// `stage` stuck at `JoinedSuccessfully` and silently dropping follow-up prompts.
+    ///
+    /// Mirrors the proven pattern in
+    /// [`crate::server::cloud_objects::listener::Listener`] (CLD-172).
+    fn subscribe_to_connectivity_signals(ctx: &mut ModelContext<Self>) {
+        ctx.subscribe_to_model(&SystemStats::handle(ctx), Self::handle_cpu_event);
+        ctx.subscribe_to_model(
+            &NetworkStatus::handle(ctx),
+            Self::handle_network_status_changed_event,
+        );
+    }
+
+    fn handle_cpu_event(
+        &mut self,
+        _: ModelHandle<SystemStats>,
+        event: &SystemStatsEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match event {
+            SystemStatsEvent::CpuWasAwakened => self.reconnect_after_possible_disconnect(ctx),
+            SystemStatsEvent::CpuWillSleep => self.abort_live_connection(),
+        }
+    }
+
+    fn handle_network_status_changed_event(
+        &mut self,
+        _: ModelHandle<NetworkStatus>,
+        event: &NetworkStatusEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match event {
+            NetworkStatusEvent::NetworkStatusChanged { new_status } => match new_status {
+                NetworkStatusKind::Online => self.reconnect_after_possible_disconnect(ctx),
+                NetworkStatusKind::Offline => self.abort_live_connection(),
+            },
+        }
+    }
+
+    /// Triggered by an OS signal (CPU wake / network online) that indicates the underlying
+    /// socket may have silently died while we were away. Proactively replaces it with a fresh
+    /// rejoin so follow-up prompts aren't written into a dead sink.
+    fn reconnect_after_possible_disconnect(&mut self, ctx: &mut ModelContext<Self>) {
+        match &self.stage {
+            Stage::JoinedSuccessfully => {
+                log::info!("Viewer proactively reconnecting after CPU wake / network online");
+                self.reconnect_websocket(ctx);
+            }
+            Stage::Reconnecting { abort_handle } => {
+                // A reconnect is already in flight, but it may be stalled on a long backoff
+                // against a dead socket. Abort it and start a fresh attempt so the wake/online
+                // signal takes effect immediately. Clear the `Reconnecting` stage first so
+                // `reconnect_websocket` (which no-ops while reconnecting) proceeds.
+                log::info!("Viewer restarting in-flight reconnect after CPU wake / network online");
+                let abort_handle = abort_handle.clone();
+                abort_handle.abort();
+                self.stage = Stage::JoinedSuccessfully;
+                self.reconnect_websocket(ctx);
+            }
+            // Nothing to reconnect: we either haven't joined yet (the initial connect will
+            // surface its own failure) or the session has ended.
+            Stage::BeforeJoined | Stage::Finished => {}
+        }
+    }
+
+    /// Triggered by an OS signal (CPU will sleep / network offline) that indicates the socket
+    /// is about to die. Tears the live connection down so we stop writing into a soon-to-be-dead
+    /// sink; a paired wake/online signal then triggers a fresh reconnect. Stage is intentionally
+    /// left unchanged — we rely on the wake/online signal (or the existing reconnect handlers)
+    /// to re-establish the connection.
+    fn abort_live_connection(&mut self) {
+        if matches!(self.stage, Stage::JoinedSuccessfully) {
+            log::info!(
+                "Viewer tearing down live shared-session socket ahead of CPU sleep / network offline"
+            );
+            self.close();
+        }
     }
 
     fn process_websocket_message(&mut self, message: Message, ctx: &mut ModelContext<Self>) {
@@ -789,6 +901,14 @@ impl Network {
     /// Close the websocket to the session-sharing-server.
     pub fn close(&mut self) {
         if let Stage::Reconnecting { abort_handle } = &self.stage {
+            abort_handle.abort();
+        }
+        // Abort the live receive task so a hung/dead socket is torn down deterministically,
+        // rather than relying on the graceful-close cascade (send loop ends -> sink.close() ->
+        // server closes read half -> stream ends) which never runs for a connection whose TCP
+        // died silently. The aborted task's completion handler checks `is_aborted()` and so
+        // will not trigger another reconnect.
+        if let Some(abort_handle) = self.live_stream_abort_handle.take() {
             abort_handle.abort();
         }
         // Closing this channel will close the websocket.

@@ -5,12 +5,19 @@ use async_channel::Sender;
 use async_io::Timer;
 use instant::Instant;
 use parking_lot::FairMutex;
+use session_sharing_protocol::common::{Scrollback, WindowSize};
 use session_sharing_protocol::viewer::UpstreamMessage;
-use warpui::{App, ModelHandle};
+use warpui::{App, ModelHandle, SingletonEntity};
 
 use super::{Network, PtyBytesBatchStatus, Stage};
+use crate::network::NetworkStatus;
+use crate::system::SystemStats;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
+use crate::terminal::shared_session::viewer::event_loop::{
+    EventLoop, SharedSessionInitialLoadMode,
+};
+use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::TerminalModel;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -38,6 +45,91 @@ fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
     });
 
     (network, write_to_pty_events_tx)
+}
+
+/// Drives the network into a fully-joined state with a live [`EventLoop`], which
+/// [`Network::reconnect_websocket`] requires in order to actually attempt a reconnect.
+fn join_network_with_event_loop(app: &mut App, network: &ModelHandle<Network>) {
+    network.update(app, |network, ctx| {
+        // `EventLoop::new` loads scrollback into the terminal model, which debug-asserts the
+        // model is a viewer, so mark it as one first.
+        network.terminal_model.lock().set_shared_session_status(
+            SharedSessionStatus::ActiveViewer {
+                role: Default::default(),
+            },
+        );
+        let event_loop = ctx.add_model(|ctx| {
+            EventLoop::new(
+                network.terminal_model.clone(),
+                network.terminal_view.clone(),
+                network.channel_event_proxy.clone(),
+                WindowSize::default(),
+                Scrollback {
+                    blocks: vec![],
+                    is_alt_screen_active: false,
+                },
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                network.remote_update_guard.clone(),
+                ctx,
+            )
+        });
+        network.event_loop = Some(event_loop);
+        network.stage = Stage::JoinedSuccessfully;
+    });
+}
+
+#[test]
+fn test_cpu_wake_triggers_reconnect_when_joined() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app);
+        join_network_with_event_loop(&mut app, &network);
+
+        // Sanity check: we start out joined, not reconnecting.
+        network.read(&app, |network, _| {
+            assert!(matches!(network.stage, Stage::JoinedSuccessfully));
+        });
+
+        // A CPU wake signal indicates the socket may have silently died while asleep, so the
+        // viewer should proactively replace it (transitioning into `Reconnecting`).
+        let system_stats = SystemStats::handle(&app);
+        system_stats.update(&mut app, |system_stats, ctx| {
+            system_stats.dispatch_cpu_was_awakened(ctx);
+        });
+
+        network.read(&app, |network, _| {
+            assert!(
+                matches!(network.stage, Stage::Reconnecting { .. }),
+                "CpuWasAwakened while joined should trigger a reconnect"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_network_online_triggers_reconnect_when_joined() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app);
+        join_network_with_event_loop(&mut app, &network);
+
+        // Take the network offline (this tears down the live socket) and then back online.
+        // Coming back online indicates connectivity was restored, so the viewer should
+        // proactively reconnect rather than keep writing into a possibly-dead socket.
+        let network_status = NetworkStatus::handle(&app);
+        network_status.update(&mut app, |network_status, ctx| {
+            network_status.reachability_changed(false, ctx);
+        });
+        network_status.update(&mut app, |network_status, ctx| {
+            network_status.reachability_changed(true, ctx);
+        });
+
+        network.read(&app, |network, _| {
+            assert!(
+                matches!(network.stage, Stage::Reconnecting { .. }),
+                "NetworkStatusKind::Online while joined should trigger a reconnect"
+            );
+        });
+    });
 }
 
 #[test]
