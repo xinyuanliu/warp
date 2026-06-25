@@ -692,6 +692,10 @@ pub(super) struct VerticalTabsPanelState {
     pane_row_mouse_states: RefCell<HashMap<PaneId, MouseStateHandle>>,
     pane_title_mouse_states: RefCell<HashMap<PaneId, MouseStateHandle>>,
     pane_badge_mouse_states: RefCell<HashMap<PaneId, PaneRowBadgeMouseStates>>,
+    /// Hover states for the clickable GitHub PR chips on a Summary-mode tab card,
+    /// keyed by the card's representative pane id. A card can show multiple branch
+    /// lines (one per repo/branch), so each entry holds one handle per branch line.
+    summary_pr_badge_mouse_states: RefCell<HashMap<PaneId, Vec<MouseStateHandle>>>,
     detail_pane_badge_mouse_states: RefCell<HashMap<PaneId, PaneRowBadgeMouseStates>>,
     detail_scroll_state: ClippedScrollStateHandle,
     detail_sidecar_mouse_state: MouseStateHandle,
@@ -729,6 +733,7 @@ impl Default for VerticalTabsPanelState {
             pane_row_mouse_states: RefCell::default(),
             pane_title_mouse_states: RefCell::default(),
             pane_badge_mouse_states: RefCell::default(),
+            summary_pr_badge_mouse_states: RefCell::default(),
             detail_pane_badge_mouse_states: RefCell::default(),
             detail_scroll_state: ClippedScrollStateHandle::default(),
             detail_sidecar_mouse_state: Default::default(),
@@ -918,6 +923,9 @@ struct VerticalTabsSummaryBranchEntry {
     branch_name: String,
     diff_stats: Option<GitLineChanges>,
     pull_request_label: Option<String>,
+    /// Full PR URL backing the chip, used to open the PR in the browser when the
+    /// chip is clicked. Paired with `pull_request_label` (the display text).
+    pull_request_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1075,6 +1083,9 @@ fn coalesce_summary_branch_entries(
             }
             if existing.pull_request_label.is_none() {
                 existing.pull_request_label = entry.pull_request_label;
+            }
+            if existing.pull_request_url.is_none() {
+                existing.pull_request_url = entry.pull_request_url;
             }
         } else {
             indices.insert(key, coalesced.len());
@@ -1941,6 +1952,10 @@ fn render_groups(
         .borrow_mut()
         .retain(|id, _| all_pane_ids.contains(id));
     state
+        .summary_pr_badge_mouse_states
+        .borrow_mut()
+        .retain(|id, _| all_pane_ids.contains(id));
+    state
         .pane_title_mouse_states
         .borrow_mut()
         .retain(|id, _| all_pane_ids.contains(id));
@@ -2129,6 +2144,20 @@ fn render_tab_group_internal(
                     .entry(*pane_id)
                     .or_default()
                     .clone();
+                // One persistent hover handle per branch line so each PR chip
+                // highlights independently across frames.
+                let branch_line_count = summary
+                    .as_ref()
+                    .map(|summary| summary.branch_entries.len())
+                    .unwrap_or(0);
+                let pr_badge_mouse_states = {
+                    let mut map = state.summary_pr_badge_mouse_states.borrow_mut();
+                    let handles = map.entry(*pane_id).or_default();
+                    while handles.len() < branch_line_count {
+                        handles.push(MouseStateHandle::default());
+                    }
+                    handles[..branch_line_count].to_vec()
+                };
                 let Some(pane_props) = PaneProps::new(
                     pane_group,
                     *pane_id,
@@ -2164,6 +2193,7 @@ fn render_tab_group_internal(
                         .as_ref()
                         .expect("summary data must exist in summary mode"),
                     summary_pane_kind_icons,
+                    &pr_badge_mouse_states,
                     app,
                 ));
                 return rows.finish();
@@ -2829,6 +2859,10 @@ fn render_grouped_tabs_header(
         ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupCollapsed(group_id));
     });
     hoverable = hoverable.on_double_click(move |ctx, _, _| {
+        // The first click of a double-click already toggled the group's collapsed
+        // state via `on_click`. Undo that toggle so double-clicking to rename leaves
+        // the group's expanded/collapsed state unchanged.
+        ctx.dispatch_typed_action(WorkspaceAction::ToggleTabGroupCollapsed(group_id));
         ctx.dispatch_typed_action(WorkspaceAction::RenameTabGroup(group_id));
     });
     hoverable = hoverable.on_right_click(move |ctx, _, position| {
@@ -3518,15 +3552,16 @@ fn build_vertical_tabs_summary_data(
                         .current_git_branch(app)
                         .and_then(|branch| normalize_summary_text(&branch)),
                 ) {
+                    let pull_request_url = terminal_view.current_pull_request_url(app);
                     branch_entries.push(VerticalTabsSummaryBranchEntry {
                         repo_path,
                         branch_name,
                         diff_stats: terminal_view.current_diff_line_changes(app),
-                        pull_request_label: terminal_view
-                            .current_pull_request_url(app)
+                        pull_request_label: pull_request_url
                             .as_deref()
                             .map(terminal_pull_request_badge_label)
                             .and_then(|label| normalize_summary_text(&label)),
+                        pull_request_url,
                     });
                 }
             }
@@ -4000,9 +4035,9 @@ impl PaneGroup {
             IPaneType::AIFact => TypedPane::AIFact,
             IPaneType::AIDocument => TypedPane::AIDocument,
             IPaneType::ExecutionProfileEditor => TypedPane::ExecutionProfileEditor,
-            IPaneType::GetStarted
+            IPaneType::CustomRouterEditor
+            | IPaneType::GetStarted
             | IPaneType::NetworkLog
-            | IPaneType::Welcome
             | IPaneType::DeferredPlaceholder => TypedPane::Other,
             #[cfg(test)]
             IPaneType::Dummy => TypedPane::Other,
@@ -4384,6 +4419,7 @@ fn render_summary_tab_item(
     props: PaneProps<'_>,
     summary: &VerticalTabsSummaryData,
     summary_pane_kind_icons: Option<SummaryPaneKindIcons>,
+    pr_badge_mouse_states: &[MouseStateHandle],
     app: &AppContext,
 ) -> Box<dyn Element> {
     // Region caps for v2 per-line rendering: each region shows at most 3 visible lines
@@ -4538,11 +4574,22 @@ fn render_summary_tab_item(
     }
 
     // Branch region. Each branch line gets the existing 4px top margin from APP-3875.
-    for branch_entry in summary.branch_entries.iter().take(MAX_VISIBLE_BRANCH_LINES) {
+    let pr_chip_entrypoint = chip_entrypoint_for_granularity(props.display_granularity);
+    for (idx, branch_entry) in summary
+        .branch_entries
+        .iter()
+        .take(MAX_VISIBLE_BRANCH_LINES)
+        .enumerate()
+    {
         text_col.add_child(
-            Container::new(render_summary_branch_line(branch_entry, appearance))
-                .with_margin_top(REGION_GAP)
-                .finish(),
+            Container::new(render_summary_branch_line(
+                branch_entry,
+                pr_badge_mouse_states.get(idx).cloned(),
+                pr_chip_entrypoint,
+                appearance,
+            ))
+            .with_margin_top(REGION_GAP)
+            .finish(),
         );
     }
 
@@ -4853,6 +4900,8 @@ fn summary_pane_kind_icon(
 
 fn render_summary_branch_line(
     entry: &VerticalTabsSummaryBranchEntry,
+    pr_badge_mouse_state: Option<MouseStateHandle>,
+    pr_chip_entrypoint: VerticalTabsChipEntrypoint,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -4879,7 +4928,23 @@ fn render_summary_branch_line(
         ));
         has_right_badges = true;
     }
-    if let Some(pull_request_label) = &entry.pull_request_label {
+    // Prefer the clickable PR badge (opens the PR in the browser) when we have both
+    // the URL and a persistent hover handle for it; fall back to the passive badge
+    // (label only) so the chip still renders even if either is missing.
+    if let (Some(pull_request_label), Some(pull_request_url), Some(mouse_state)) = (
+        entry.pull_request_label.as_ref(),
+        entry.pull_request_url.as_ref(),
+        pr_badge_mouse_state,
+    ) {
+        right_badges.add_child(render_terminal_pull_request_badge(
+            pull_request_label.clone(),
+            pull_request_url.clone(),
+            pr_chip_entrypoint,
+            mouse_state,
+            appearance,
+        ));
+        has_right_badges = true;
+    } else if let Some(pull_request_label) = &entry.pull_request_label {
         right_badges.add_child(render_passive_terminal_pull_request_badge(
             pull_request_label,
             appearance,
@@ -5258,7 +5323,7 @@ fn compute_tab_group_color_mode(
     app: &AppContext,
 ) -> TabGroupColorMode {
     // Manual override applies to the whole group.
-    if !matches!(tab.selected_color, SelectedTabColor::Unset) {
+    if tab.selected_color != SelectedTabColor::Unset {
         return match tab.color() {
             Some(color) => TabGroupColorMode::Uniform(
                 color.to_ansi_color(&theme.terminal_colors().normal).into(),
@@ -5276,11 +5341,13 @@ fn compute_tab_group_color_mode(
         .map(|&pane_id| {
             let color = if let Some(tv) = pane_group.terminal_view_from_pane_id(pane_id, app) {
                 // Terminal pane: determine color from CWD.
-                tv.as_ref(app).pwd_if_local(app).and_then(|cwd| {
-                    dir_colors
-                        .color_for_directory(Path::new(&cwd))
-                        .and_then(|c| c.ansi_color())
-                })
+                tv.as_ref(app)
+                    .canonical_session_pwd_if_local(app)
+                    .and_then(|cwd| {
+                        dir_colors
+                            .color_for_directory(cwd.as_path())
+                            .and_then(|c| c.ansi_color())
+                    })
             } else if let Some(code_view) = pane_group.code_view_from_pane_id(pane_id, app) {
                 // Code pane: determine color from the open file path using longest-prefix
                 // matching against configured directories, so e.g. warp-internal/code.rs
@@ -5289,9 +5356,11 @@ fn compute_tab_group_color_mode(
                     .as_ref(app)
                     .local_path(app)
                     .as_deref()
+                    // TODO(andy): avoid canonicalizing on a render code path
+                    .and_then(|file_path| dunce::canonicalize(file_path).ok())
                     .and_then(|file_path| {
                         dir_colors
-                            .color_for_directory(file_path)
+                            .color_for_directory(&file_path)
                             .and_then(|c| c.ansi_color())
                     })
             } else {
