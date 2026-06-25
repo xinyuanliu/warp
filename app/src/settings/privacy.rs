@@ -632,6 +632,65 @@ impl PrivacySettings {
         );
         ctx.notify();
     }
+    pub fn is_computer_use_artifacts_enabled(&self) -> bool {
+        self.is_computer_use_artifact_storage_enabled
+            && self.is_computer_use_pr_screenshot_attachment_enabled
+    }
+
+    pub fn set_is_computer_use_artifacts_enabled(
+        &mut self,
+        new_value: bool,
+        ctx: &mut ModelContext<PrivacySettings>,
+    ) {
+        let old_artifact_storage_value = self.is_computer_use_artifact_storage_enabled;
+        let old_pr_screenshot_attachment_value =
+            self.is_computer_use_pr_screenshot_attachment_enabled;
+
+        if new_value == old_artifact_storage_value
+            && new_value == old_pr_screenshot_attachment_value
+        {
+            return;
+        }
+
+        self.is_computer_use_artifact_storage_enabled = new_value;
+        self.is_computer_use_pr_screenshot_attachment_enabled = new_value;
+
+        if self.auth_state.is_logged_in() {
+            let auth_client = self.auth_client.clone();
+            let _ = ctx.spawn(
+                async move {
+                    auth_client
+                        .update_user_settings(UpdateUserSettingsInput {
+                            computer_use_artifact_storage_enabled: Some(new_value),
+                            computer_use_pr_screenshot_attachment_enabled: Some(new_value),
+                            ..Default::default()
+                        })
+                        .await
+                },
+                |_, _, _| (),
+            );
+        }
+
+        if old_artifact_storage_value != new_value {
+            ctx.emit(
+                PrivacySettingsChangedEvent::UpdateIsComputerUseArtifactStorageEnabled {
+                    old_value: old_artifact_storage_value,
+                    new_value,
+                },
+            );
+        }
+
+        if old_pr_screenshot_attachment_value != new_value {
+            ctx.emit(
+                PrivacySettingsChangedEvent::UpdateIsComputerUsePrScreenshotAttachmentEnabled {
+                    old_value: old_pr_screenshot_attachment_value,
+                    new_value,
+                },
+            );
+        }
+
+        ctx.notify();
+    }
 
     pub fn set_is_computer_use_artifact_storage_enabled(
         &mut self,
