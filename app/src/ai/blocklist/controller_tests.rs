@@ -13,6 +13,7 @@ use crate::ai::agent::{
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, PendingAttachment, PendingFile};
+use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
@@ -273,22 +274,20 @@ fn success_with_actions_that_drop_in_preprocessing_does_not_orphan_conversation(
             );
         });
 
-        // Drive the spawned preprocessing future to completion.
-        for _ in 0..5 {
-            futures_lite::future::yield_now().await;
-        }
-
-        terminal.update(&mut app, |_terminal, ctx| {
-            let status = BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(&conversation_id)
-                .expect("conversation exists")
-                .status()
-                .clone();
-            assert!(
-                !matches!(status, ConversationStatus::InProgress),
-                "conversation whose only action dropped during preprocessing must not remain \
-                 InProgress; got {status:?}"
-            );
-        });
+        // Drive the spawned preprocessing future and resulting action-finished event to
+        // completion. On slower CI machines, a fixed number of yields can race this path.
+        assert_eventually!(
+            200 => !matches!(
+                terminal.read(&app, |_terminal, ctx| {
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(&conversation_id)
+                        .expect("conversation exists")
+                        .status()
+                        .clone()
+                }),
+                ConversationStatus::InProgress
+            ),
+            "conversation whose only action dropped during preprocessing must not remain InProgress"
+        );
     });
 }
