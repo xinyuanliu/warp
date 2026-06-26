@@ -1800,6 +1800,137 @@ fn create_cancelled_result_for_tool_call(
     })
 }
 
+/// Ensures every `tool_use` recorded in the outgoing task history is paired with a result, so
+/// the client can never send a dangling `tool_use` to the server.
+pub(crate) fn reconcile_unfinished_tool_calls(tasks: &mut [api::Task], inputs: &[AIAgentInput]) {
+    use api::message::Message;
+
+    // A tool call is "resolved" if a result for it already exists, either among the new inputs
+    // (an action result) or anywhere in the task history (a tool-call-result message).
+    let mut resolved_tool_call_ids: HashSet<String> = inputs
+        .iter()
+        .filter_map(|input| {
+            if let AIAgentInput::ActionResult { result, .. } = input {
+                Some(result.id.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    for task in tasks.iter() {
+        for message in &task.messages {
+            if let Some(Message::ToolCallResult(result)) = &message.message {
+                resolved_tool_call_ids.insert(result.tool_call_id.clone());
+            }
+        }
+    }
+
+    // Decide which unfinished tool calls need a synthetic result.
+    // `create_cancelled_result_for_tool_call` is the single source of truth for which tool
+    // types receive one (it returns `None` for server-side, subagent, and deprecated/no-result
+    // tools), so we reuse it purely as an eligibility check and discard the returned
+    // input-form result.
+    let tool_call_map: HashMap<String, &api::message::ToolCall> = tasks
+        .iter()
+        .flat_map(|task| &task.messages)
+        .filter_map(|message| match &message.message {
+            Some(Message::ToolCall(tool_call)) => Some((tool_call.tool_call_id.clone(), tool_call)),
+            _ => None,
+        })
+        .collect();
+    let mut tool_call_ids_to_cancel: HashSet<String> = HashSet::new();
+    for task in tasks.iter() {
+        for message in &task.messages {
+            let Some(Message::ToolCall(tool_call)) = &message.message else {
+                continue;
+            };
+            if resolved_tool_call_ids.contains(&tool_call.tool_call_id)
+                || tool_call_ids_to_cancel.contains(&tool_call.tool_call_id)
+            {
+                continue;
+            }
+            let is_cancellable = create_cancelled_result_for_tool_call(
+                &TaskId::new(message.task_id.clone()),
+                &tool_call.tool_call_id,
+                &tool_call_map,
+                Arc::new([]),
+            )
+            .is_some();
+            if is_cancellable {
+                tool_call_ids_to_cancel.insert(tool_call.tool_call_id.clone());
+            }
+        }
+    }
+    // Release the immutable borrows held by `tool_call_map` before mutating the tasks below.
+    drop(tool_call_map);
+
+    if tool_call_ids_to_cancel.is_empty() {
+        return;
+    }
+
+    // Splice a `Cancel` result in immediately after each unfinished tool call so the synthetic
+    // result stays adjacent to its `tool_use`, keeping the reconstructed provider turns valid.
+    for task in tasks.iter_mut() {
+        let has_unfinished_tool_call = task.messages.iter().any(|message| {
+            matches!(
+                &message.message,
+                Some(Message::ToolCall(tool_call))
+                    if tool_call_ids_to_cancel.contains(&tool_call.tool_call_id)
+            )
+        });
+        if !has_unfinished_tool_call {
+            continue;
+        }
+
+        let task_id = task.id.clone();
+        let mut reconciled_messages = Vec::with_capacity(task.messages.len() + 1);
+        for message in std::mem::take(&mut task.messages) {
+            let synthetic_result = match &message.message {
+                Some(Message::ToolCall(tool_call))
+                    if tool_call_ids_to_cancel.contains(&tool_call.tool_call_id) =>
+                {
+                    log::warn!(
+                        "Synthesizing a cancelled result for unfinished tool call '{}' to avoid \
+                         sending a dangling tool_use to the server.",
+                        tool_call.tool_call_id
+                    );
+                    Some(cancelled_tool_call_result_message(
+                        &task_id,
+                        &tool_call.tool_call_id,
+                    ))
+                }
+                _ => None,
+            };
+            reconciled_messages.push(message);
+            if let Some(synthetic_result) = synthetic_result {
+                reconciled_messages.push(synthetic_result);
+            }
+        }
+        task.messages = reconciled_messages;
+    }
+}
+
+/// Builds a synthetic message-history `ToolCallResult` carrying the canonical `Cancel` marker
+/// for the given tool call. Used by [`reconcile_unfinished_tool_calls`] to pair a dangling
+/// `tool_use` with a result before the request is sent.
+fn cancelled_tool_call_result_message(task_id: &str, tool_call_id: &str) -> api::Message {
+    api::Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        task_id: task_id.to_string(),
+        request_id: String::new(),
+        timestamp: None,
+        server_message_data: String::new(),
+        citations: Vec::new(),
+        message: Some(api::message::Message::ToolCallResult(
+            api::message::ToolCallResult {
+                tool_call_id: tool_call_id.to_string(),
+                context: None,
+                result: Some(api::message::tool_call_result::Result::Cancel(())),
+            },
+        )),
+    }
+}
+
 fn create_exchange_from_messages(
     inputs: &[AIAgentInput],
     outputs: &[AIAgentOutputMessage],

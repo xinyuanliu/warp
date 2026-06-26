@@ -2137,3 +2137,255 @@ fn test_handoff_rehydration_system_query_is_hidden() {
         "Agent output should still be rendered"
     );
 }
+
+// ----- reconcile_unfinished_tool_calls -----
+
+fn unfinished_run_shell_tool() -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::RunShellCommand(api::message::tool_call::RunShellCommand {
+        command: "echo hi".to_string(),
+        is_read_only: false,
+        uses_pager: false,
+        citations: vec![],
+        is_risky: false,
+        wait_until_complete_value: None,
+        risk_category: 0,
+    })
+}
+
+fn unfinished_server_tool() -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::Server(api::message::tool_call::Server {
+        payload: String::new(),
+    })
+}
+
+fn unfinished_tool_call_message(
+    message_id: &str,
+    task_id: &str,
+    tool_call_id: &str,
+    tool: api::message::tool_call::Tool,
+) -> api::Message {
+    api::Message {
+        id: message_id.to_string(),
+        task_id: task_id.to_string(),
+        request_id: String::new(),
+        timestamp: None,
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: tool_call_id.to_string(),
+            tool: Some(tool),
+        })),
+    }
+}
+
+fn unfinished_success_result_message(
+    message_id: &str,
+    task_id: &str,
+    tool_call_id: &str,
+) -> api::Message {
+    api::Message {
+        id: message_id.to_string(),
+        task_id: task_id.to_string(),
+        request_id: String::new(),
+        timestamp: None,
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCallResult(
+            api::message::ToolCallResult {
+                tool_call_id: tool_call_id.to_string(),
+                context: None,
+                result: Some(api::message::tool_call_result::Result::RunShellCommand(
+                    #[allow(deprecated)]
+                    api::RunShellCommandResult {
+                        command: "echo hi".to_string(),
+                        output: String::new(),
+                        exit_code: 0,
+                        result: Some(api::run_shell_command_result::Result::CommandFinished(
+                            api::ShellCommandFinished {
+                                command_id: "cmd".to_string(),
+                                output: "ok".to_string(),
+                                exit_code: 0,
+                                start_ts: None,
+                                finish_ts: None,
+                            },
+                        )),
+                    },
+                )),
+            },
+        )),
+    }
+}
+
+fn unfinished_task(id: &str, messages: Vec<api::Message>) -> api::Task {
+    api::Task {
+        id: id.to_string(),
+        messages,
+        dependencies: None,
+        description: String::new(),
+        summary: String::new(),
+        server_data: String::new(),
+    }
+}
+
+/// Returns the `tool_call_id`s carrying a `Cancel` tool-call result anywhere in `tasks`.
+fn collect_cancel_result_ids(tasks: &[api::Task]) -> Vec<String> {
+    let mut ids = vec![];
+    for task in tasks {
+        for message in &task.messages {
+            if let Some(api::message::Message::ToolCallResult(result)) = &message.message {
+                if matches!(
+                    result.result,
+                    Some(api::message::tool_call_result::Result::Cancel(()))
+                ) {
+                    ids.push(result.tool_call_id.clone());
+                }
+            }
+        }
+    }
+    ids
+}
+
+#[test]
+fn test_reconcile_synthesizes_cancel_for_unfinished_tool_call() {
+    let mut tasks = vec![unfinished_task(
+        "task1",
+        vec![unfinished_tool_call_message(
+            "tc1",
+            "task1",
+            "call_1",
+            unfinished_run_shell_tool(),
+        )],
+    )];
+
+    reconcile_unfinished_tool_calls(&mut tasks, &[]);
+
+    // The cancel result must be spliced in immediately after its tool call.
+    assert_eq!(tasks[0].messages.len(), 2);
+    assert!(matches!(
+        &tasks[0].messages[0].message,
+        Some(api::message::Message::ToolCall(tc)) if tc.tool_call_id == "call_1"
+    ));
+    match &tasks[0].messages[1].message {
+        Some(api::message::Message::ToolCallResult(result)) => {
+            assert_eq!(result.tool_call_id, "call_1");
+            assert!(matches!(
+                result.result,
+                Some(api::message::tool_call_result::Result::Cancel(()))
+            ));
+        }
+        other => panic!("Expected a cancel tool-call result, got {other:?}"),
+    }
+    // The synthetic message gets its own non-empty id and inherits the task id.
+    assert!(!tasks[0].messages[1].id.is_empty());
+    assert_eq!(tasks[0].messages[1].task_id, "task1");
+}
+
+#[test]
+fn test_reconcile_leaves_tool_call_resolved_by_result_message_untouched() {
+    let mut tasks = vec![unfinished_task(
+        "task1",
+        vec![
+            unfinished_tool_call_message("tc1", "task1", "call_1", unfinished_run_shell_tool()),
+            unfinished_success_result_message("res1", "task1", "call_1"),
+        ],
+    )];
+
+    reconcile_unfinished_tool_calls(&mut tasks, &[]);
+
+    assert_eq!(tasks[0].messages.len(), 2, "no message should be added");
+    assert!(collect_cancel_result_ids(&tasks).is_empty());
+}
+
+#[test]
+fn test_reconcile_leaves_tool_call_resolved_by_input_untouched() {
+    let mut tasks = vec![unfinished_task(
+        "task1",
+        vec![unfinished_tool_call_message(
+            "tc1",
+            "task1",
+            "call_1",
+            unfinished_run_shell_tool(),
+        )],
+    )];
+
+    // An action result for `call_1` is being sent as a new input this turn.
+    let action_result_input = convert_tool_call_result_to_input(
+        &crate::ai::agent::task::TaskId::new("task1".to_string()),
+        &api::message::ToolCallResult {
+            tool_call_id: "call_1".to_string(),
+            context: None,
+            result: Some(api::message::tool_call_result::Result::Cancel(())),
+        },
+        &HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .expect("cancel result should convert to an input");
+
+    reconcile_unfinished_tool_calls(&mut tasks, &[action_result_input]);
+
+    assert_eq!(tasks[0].messages.len(), 1, "no message should be added");
+    assert!(collect_cancel_result_ids(&tasks).is_empty());
+}
+
+#[test]
+fn test_reconcile_skips_server_tool_calls() {
+    let mut tasks = vec![unfinished_task(
+        "task1",
+        vec![unfinished_tool_call_message(
+            "tc1",
+            "task1",
+            "server_call",
+            unfinished_server_tool(),
+        )],
+    )];
+
+    reconcile_unfinished_tool_calls(&mut tasks, &[]);
+
+    assert_eq!(
+        tasks[0].messages.len(),
+        1,
+        "server tool calls are resolved by the server and must not be cancelled"
+    );
+    assert!(collect_cancel_result_ids(&tasks).is_empty());
+}
+
+#[test]
+fn test_reconcile_handles_mixed_tool_calls_and_is_idempotent() {
+    let mut tasks = vec![unfinished_task(
+        "task1",
+        vec![
+            // Resolved by an explicit success result.
+            unfinished_tool_call_message("tc1", "task1", "call_1", unfinished_run_shell_tool()),
+            // Unfinished and cancellable.
+            unfinished_tool_call_message("tc2", "task1", "call_2", unfinished_run_shell_tool()),
+            // Unfinished but server-managed (skipped).
+            unfinished_tool_call_message("tc3", "task1", "server_call", unfinished_server_tool()),
+            unfinished_success_result_message("res1", "task1", "call_1"),
+        ],
+    )];
+
+    reconcile_unfinished_tool_calls(&mut tasks, &[]);
+
+    // Only `call_2` should receive a synthetic cancel result...
+    assert_eq!(
+        collect_cancel_result_ids(&tasks),
+        vec!["call_2".to_string()]
+    );
+    // ...spliced immediately after `call_2`'s tool call (originally at index 1).
+    match &tasks[0].messages[2].message {
+        Some(api::message::Message::ToolCallResult(result)) => {
+            assert_eq!(result.tool_call_id, "call_2");
+        }
+        other => panic!("Expected cancel result right after call_2, got {other:?}"),
+    }
+
+    let len_after_first = tasks[0].messages.len();
+
+    // Running again must not add a second cancel result for the same tool call.
+    reconcile_unfinished_tool_calls(&mut tasks, &[]);
+    assert_eq!(tasks[0].messages.len(), len_after_first);
+    assert_eq!(
+        collect_cancel_result_ids(&tasks),
+        vec!["call_2".to_string()]
+    );
+}

@@ -16,6 +16,11 @@ pub async fn generate_multi_agent_output(
     mut params: RequestParams,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    // Guarantee that every tool_use in the task history is paired with a result before the
+    // request leaves the client, so a turn that ended abnormally can never produce a dangling
+    // tool_use that the server would turn into a malformed (e.g. Anthropic 400) provider request.
+    super::convert_conversation::reconcile_unfinished_tool_calls(&mut params.tasks, &params.input);
+
     let supported_tools = params
         .supported_tools_override
         .take()
