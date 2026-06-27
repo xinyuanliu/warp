@@ -327,6 +327,13 @@ impl BlocklistAIInputModel {
                     origin,
                     ..
                 } => {
+                    // Entering the agent view means the composed prompt (and buffer) is being
+                    // handed off to the agent, so any Agent Mode prompt anchor has served its
+                    // purpose. Clear it here because the terminal submit path (`submit_ai_query`)
+                    // enters the agent view and returns before `handle_input_buffer_submitted`
+                    // runs — without this the anchor could keep suppressing NLD after the prompt
+                    // was sent.
+                    me.agent_prompt_ai_anchor = false;
                     if display_mode.is_inline() {
                         me.set_input_config_internal(
                             InputConfig {
@@ -385,6 +392,8 @@ impl BlocklistAIInputModel {
                     is_exit_before_new_entrance,
                     ..
                 } => {
+                    // Returning to the terminal must not carry over a stale prompt anchor.
+                    me.agent_prompt_ai_anchor = false;
                     if !is_exit_before_new_entrance {
                         // When truly exiting agent view, use the terminal-specific NLD setting
                         // since the user is returning to terminal mode.

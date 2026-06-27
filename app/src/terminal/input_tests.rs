@@ -9060,3 +9060,66 @@ fn agent_mode_saved_prompt_anchor_cleared_when_buffer_cleared() {
         );
     });
 }
+
+/// Submitting a saved Agent Mode prompt from the terminal enters the agent view; the anchor must
+/// be cleared on entry so NLD isn't left suppressed for the next terminal command. Regression test
+/// for the review feedback that the submit path (`submit_ai_query` → enter agent view) returns
+/// before `handle_input_buffer_submitted` runs.
+#[test]
+fn agent_mode_saved_prompt_anchor_cleared_when_entering_agent_view() {
+    use crate::ai::blocklist::agent_view::AgentViewState;
+
+    App::test((), |mut app| async move {
+        let _am_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.show_workflows_info_box_on_workflow_selection(
+                WorkflowType::Local(Workflow::AgentMode {
+                    name: "summarize".to_owned(),
+                    query: "summarize the repo".to_owned(),
+                    description: None,
+                    arguments: vec![],
+                }),
+                WorkflowSource::Global,
+                WorkflowSelectionSource::Undefined,
+                None,
+                ctx,
+            );
+        });
+
+        assert!(input.read(&app, |input, _| {
+            app.read_model(input.ai_input_model(), |ai_input, _| {
+                ai_input.has_agent_prompt_ai_anchor()
+            })
+        }));
+
+        input.update(&mut app, |input, ctx| {
+            input.input_enter(ctx);
+        });
+
+        // The agent view should be active and the anchor cleared.
+        terminal.read(&app, |terminal, _| {
+            let state = terminal
+                .model
+                .lock()
+                .block_list()
+                .agent_view_state()
+                .clone();
+            assert!(matches!(state, AgentViewState::Active { .. }));
+        });
+        assert!(
+            !input.read(&app, |input, _| {
+                app.read_model(input.ai_input_model(), |ai_input, _| {
+                    ai_input.has_agent_prompt_ai_anchor()
+                })
+            }),
+            "entering the agent view on submit must clear the Agent Mode prompt anchor"
+        );
+    });
+}
