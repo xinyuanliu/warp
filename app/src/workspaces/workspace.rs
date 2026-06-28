@@ -978,3 +978,17 @@ pub struct TeamByoEndpointModel {
     pub display_name: String,
     pub enabled: bool,
 }
+
+impl TeamByoSettings {
+    /// Returns the owning endpoint's display name for a team-provided model's
+    /// `config_key`, if one matches an endpoint in this projection.
+    pub fn endpoint_name_for_model(&self, config_key: &str) -> Option<&str> {
+        self.endpoints.iter().find_map(|endpoint| {
+            endpoint
+                .models
+                .iter()
+                .any(|model| model.config_key == config_key)
+                .then_some(endpoint.name.as_str())
+        })
+    }
+}

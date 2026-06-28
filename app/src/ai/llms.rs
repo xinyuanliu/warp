@@ -917,7 +917,8 @@ impl LLMPreferences {
             .flatten()
     }
 
-    /// Iterator over the user's custom-endpoint LLMs, gated on the feature flag and entitlement.
+    /// Iterator over the user's custom-endpoint LLMs, gated on the feature flag,
+    /// entitlement, and the team's allow-user-endpoints policy.
     pub fn custom_llm_choices(&self, app: &AppContext) -> std::slice::Iter<'_, LLMInfo> {
         if Self::custom_inference_enabled(app) {
             self.custom_llms.iter()
@@ -928,9 +929,19 @@ impl LLMPreferences {
         }
     }
 
+    /// Whether the member may use their own custom-endpoint models: requires the
+    /// feature flag, the tier entitlement, and — when on a team with team-managed
+    /// BYO — the team's `allow_user_endpoints` policy. Gates both the picker
+    /// choices and active-model resolution, so member endpoints disallowed by the
+    /// team never surface client-side. The server enforces the same policy
+    /// independently, regardless of what the client renders.
     fn custom_inference_enabled(app: &AppContext) -> bool {
+        let user_workspaces = UserWorkspaces::as_ref(app);
         FeatureFlag::CustomInferenceEndpoints.is_enabled()
-            && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
+            && user_workspaces.is_custom_inference_enabled(app)
+            && user_workspaces
+                .current_team_byo()
+                .is_none_or(|byo| byo.allow_user_endpoints)
     }
 
     /// Resolves a custom model router by its `config_key`/`LLMId`.
