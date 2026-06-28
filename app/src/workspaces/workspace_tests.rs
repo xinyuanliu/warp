@@ -178,6 +178,47 @@ fn team_byo_null_projection_maps_to_none() {
 }
 
 #[test]
+fn team_byo_endpoint_name_for_model_matches_config_key() {
+    let settings = TeamByoSettings {
+        first_party_enabled: true,
+        endpoints_enabled: true,
+        allow_user_keys: false,
+        allow_user_endpoints: false,
+        first_party: TeamByoFirstPartyKeys::default(),
+        endpoints: vec![
+            TeamByoEndpoint {
+                id: "ep-1".into(),
+                name: "Team GPU".into(),
+                enabled: true,
+                models: vec![TeamByoEndpointModel {
+                    config_key: "cfg-1".into(),
+                    slug: "m1".into(),
+                    alias: None,
+                    display_name: "M1".into(),
+                    enabled: true,
+                }],
+            },
+            TeamByoEndpoint {
+                id: "ep-2".into(),
+                name: "Team CPU".into(),
+                enabled: true,
+                models: vec![TeamByoEndpointModel {
+                    config_key: "cfg-2".into(),
+                    slug: "m2".into(),
+                    alias: None,
+                    display_name: "M2".into(),
+                    enabled: true,
+                }],
+            },
+        ],
+    };
+
+    assert_eq!(settings.endpoint_name_for_model("cfg-1"), Some("Team GPU"));
+    assert_eq!(settings.endpoint_name_for_model("cfg-2"), Some("Team CPU"));
+    assert_eq!(settings.endpoint_name_for_model("unknown"), None);
+}
+
+#[test]
 fn team_byo_serialized_form_carries_no_secret_keys() {
     // Compile-time guarantee: `TeamByoSettings` has no api key / base url /
     // ciphertext field (it would not compile otherwise). Runtime guard: the
