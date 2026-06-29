@@ -36,6 +36,8 @@ use crate::terminal::view::TerminalView;
 use crate::terminal::CLIAgent;
 use crate::util::bindings::CustomAction;
 
+pub const OPEN_BRANCH_SELECTOR_BINDING_NAME: &str = "code_review:open_branch_selector";
+
 /// Arguments needed to open or toggle the code review panel.
 /// Bundled into a struct so that events can atomically open the
 /// review and perform follow-up work without relying on event ordering.
@@ -86,12 +88,6 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("CodeReviewView_NotEditing"))
         .with_key_binding("f")
         .with_enabled(|| crate::features::FeatureFlag::GitOperationsInCodeReview.is_enabled()),
-        EditableBinding::new(
-            "code_review:open_branch_selector",
-            "Open branch selector in code review",
-            CodeReviewAction::OpenDiffSelector,
-        )
-        .with_context_predicate(id!("CodeReviewView_NotEditing")),
     ]);
 
     app.register_fixed_bindings([
@@ -112,6 +108,10 @@ pub fn init(app: &mut AppContext) {
     diff_menu::init(app);
     diff_selector::init(app);
     git_dialog::init(app);
+}
+
+pub(crate) fn is_code_review_text_input_view_name(name: &str) -> bool {
+    matches!(name, "EditorView" | "RichTextEditorView" | "CodeEditorView")
 }
 
 /// Uses heuristics to determine if a file is auto-generated.

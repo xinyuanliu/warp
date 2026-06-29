@@ -9,12 +9,12 @@ use crate::util::bindings::keybinding_name_to_keystroke;
 #[test]
 fn test_open_branch_selector_binding_is_editable_with_no_default() {
     App::test((), |mut app| async move {
-        app.update(crate::code_review::init);
+        app.update(crate::workspace::register_code_review_branch_selector_binding);
 
         app.update(|ctx| {
             let binding = ctx
                 .editable_bindings()
-                .find(|binding| binding.name == "code_review:open_branch_selector")
+                .find(|binding| binding.name == crate::code_review::OPEN_BRANCH_SELECTOR_BINDING_NAME)
                 .expect(
                     "code_review:open_branch_selector should be registered as an editable binding",
                 );
@@ -27,23 +27,27 @@ fn test_open_branch_selector_binding_is_editable_with_no_default() {
             );
             assert_eq!(
                 None,
-                keybinding_name_to_keystroke("code_review:open_branch_selector", ctx),
+                keybinding_name_to_keystroke(
+                    crate::code_review::OPEN_BRANCH_SELECTOR_BINDING_NAME,
+                    ctx
+                ),
                 "an unassigned editable binding should resolve to no keystroke"
             );
 
-            let mut editing_context = Context::default();
-            editing_context.set.insert("CodeReviewView");
+            let inactive_context = Context::default();
             assert!(
-                !binding.in_context(&editing_context),
-                "code_review:open_branch_selector should not be active while editing"
+                !binding.in_context(&inactive_context),
+                "code_review:open_branch_selector should not be active without an open code review panel"
             );
 
-            let mut not_editing_context = Context::default();
-            not_editing_context.set.insert("CodeReviewView");
-            not_editing_context.set.insert("CodeReviewView_NotEditing");
+            let mut open_panel_context = Context::default();
+            open_panel_context.set.insert("Workspace");
+            open_panel_context
+                .set
+                .insert(crate::workspace::WORKSPACE_CODE_REVIEW_PANEL_OPEN_NOT_EDITING);
             assert!(
-                binding.in_context(&not_editing_context),
-                "code_review:open_branch_selector should be active in the non-editing code review context"
+                binding.in_context(&open_panel_context),
+                "code_review:open_branch_selector should be active when code review is open and not editing"
             );
         });
     });
