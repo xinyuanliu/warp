@@ -210,5 +210,5 @@ impl Entity for GlobalCodeReviewModel {
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
