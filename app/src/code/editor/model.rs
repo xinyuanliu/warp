@@ -27,6 +27,7 @@ use vim::{
     vim_a_quote, vim_a_word, vim_find_char_on_line, vim_find_matching_bracket, vim_inner_block,
     vim_inner_paragraph, vim_inner_quote, vim_inner_word, vim_word_iterator_from_offset,
 };
+use warp_core::features::FeatureFlag;
 use warp_core::platform::SessionPlatform;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::theme::Fill;
@@ -53,6 +54,7 @@ use warp_editor::render::model::{
     UpdateDecorationAfterLayout, WidthSetting,
 };
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warp_util::file_type::is_soft_wrap_extension;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::{
     AnchorPair, OffsetPositioning, OffsetType, PositionedElementOffsetBounds, PositioningAxis,
@@ -589,7 +591,20 @@ impl CodeEditorModel {
             RenderEvent::LayoutUpdated => {
                 ctx.emit(CodeEditorModelEvent::LayoutInvalidated);
             }
-            RenderEvent::NeedsResize => {}
+            RenderEvent::NeedsResize => {
+                // The viewport width changed. When soft wrap is enabled
+                // (`WidthSetting::FitViewport`) the content must be re-laid-out so it
+                // re-wraps to the new width. For the default non-wrapping layout
+                // (`InfiniteWidth`) the content width is intrinsic and horizontal
+                // scrolling handles overflow, so a width change needs no relayout.
+                if !self
+                    .render_state
+                    .as_ref(ctx)
+                    .container_scrolls_horizontally()
+                {
+                    self.rebuild_layout_and_refresh_diff(ctx);
+                }
+            }
         }
     }
 
@@ -1293,20 +1308,56 @@ impl CodeEditorModel {
         path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
     ) {
-        let language = language_by_filename(path);
-
-        if let Some(language) = language {
+        if let Some(language) = language_by_filename(path) {
             self.set_language(language, ctx);
         }
+        self.apply_soft_wrap_for_extension(path.extension(), ctx);
     }
 
     /// Set the language of the syntax map based on the local filesystem path.
     pub fn set_language_with_local_path(&mut self, path: &Path, ctx: &mut ModelContext<Self>) {
-        let language = language_by_local_filename(path);
-
-        if let Some(language) = language {
+        if let Some(language) = language_by_local_filename(path) {
             self.set_language(language, ctx);
         }
+        self.apply_soft_wrap_for_extension(path.extension().and_then(|ext| ext.to_str()), ctx);
+    }
+
+    /// Enables or disables soft wrap (visual line wrapping) for this editor.
+    ///
+    /// Soft wrap is purely a layout concern: the buffer text is never modified,
+    /// so no newlines are inserted and saving the file is byte-identical. When
+    /// the setting changes, the existing content is relaid out so the new
+    /// wrapping takes effect immediately.
+    pub fn set_soft_wrap(&mut self, enabled: bool, ctx: &mut ModelContext<Self>) {
+        let setting = if enabled {
+            WidthSetting::FitViewport
+        } else {
+            WidthSetting::InfiniteWidth
+        };
+        let changed = self.render_state.update(ctx, |render_state, _| {
+            render_state.set_width_setting(setting)
+        });
+        if changed {
+            self.rebuild_layout_with_syntax_highlighting(ctx);
+        }
+    }
+
+    /// Applies the default soft-wrap behavior for a file with the given
+    /// extension, gated behind [`FeatureFlag::SoftWrapTextFiles`]. Markdown and
+    /// plain-text files wrap; all other files keep the editor's default
+    /// non-wrapping (horizontally scrollable) layout. Applies to every surface
+    /// that opens a file through the path-aware language setters, including the
+    /// code-review / diff views.
+    fn apply_soft_wrap_for_extension(
+        &mut self,
+        extension: Option<&str>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !FeatureFlag::SoftWrapTextFiles.is_enabled() {
+            return;
+        }
+        let should_wrap = extension.is_some_and(is_soft_wrap_extension);
+        self.set_soft_wrap(should_wrap, ctx);
     }
 
     pub fn set_language_with_name(&mut self, name: &str, ctx: &mut ModelContext<Self>) {

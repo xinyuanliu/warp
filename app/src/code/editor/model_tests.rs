@@ -94,6 +94,54 @@ fn test_no_trailing_newline() {
 }
 
 #[test]
+fn test_set_soft_wrap_does_not_modify_buffer() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let long_line = "This is a very long single line of text that should wrap when soft wrap is on but must never gain a newline in the underlying buffer.";
+        let editor = mock_model(&mut app, long_line, ContentVersion::new());
+        layout_model(&mut app, &editor).await;
+
+        // A code file (.rs) defaults to no wrap: the editor scrolls horizontally.
+        app.read(|ctx| {
+            assert!(editor
+                .as_ref(ctx)
+                .render_state
+                .as_ref(ctx)
+                .container_scrolls_horizontally());
+        });
+
+        // Enabling soft wrap switches the layout to fit the viewport.
+        editor.update(&mut app, |editor, ctx| editor.set_soft_wrap(true, ctx));
+        layout_model(&mut app, &editor).await;
+        app.read(|ctx| {
+            assert!(!editor
+                .as_ref(ctx)
+                .render_state
+                .as_ref(ctx)
+                .container_scrolls_horizontally());
+        });
+
+        // The buffer text is unchanged — soft wrap never inserts a newline.
+        app.read(|ctx| {
+            assert_eq!(
+                editor.as_ref(ctx).content.as_ref(ctx).text().as_str(),
+                long_line
+            );
+        });
+
+        // Disabling soft wrap restores the non-wrapping layout.
+        editor.update(&mut app, |editor, ctx| editor.set_soft_wrap(false, ctx));
+        app.read(|ctx| {
+            assert!(editor
+                .as_ref(ctx)
+                .render_state
+                .as_ref(ctx)
+                .container_scrolls_horizontally());
+        });
+    })
+}
+
+#[test]
 fn test_toggle_comment() {
     App::test((), |mut app| async move {
         initialize_deps(&mut app);
