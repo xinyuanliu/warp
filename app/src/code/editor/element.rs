@@ -8,10 +8,12 @@ use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
+use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_editor::content::buffer::{Buffer, ToBufferPoint};
 use warp_editor::editor::EditorView;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
@@ -352,10 +354,24 @@ pub struct LineNumberConfig {
     pub mode: CodeEditorLineNumberMode,
     pub active_line_number: Option<LineCount>,
     pub active_cursor_is_visible: bool,
+    /// The editor's buffer, used to map a block's char offset to its logical
+    /// (buffer) line. Under soft wrap a logical line spans multiple visual rows,
+    /// so the gutter must number by logical line rather than the soft-wrapped
+    /// row index. `None` falls back to the render model's visual line index.
+    pub buffer: Option<ModelHandle<Buffer>>,
 }
 impl LineNumberConfig {
     pub fn absolute_line_number(&self, line_count: LineCount) -> usize {
         line_count.as_usize() + self.starting_line_number.unwrap_or(1)
+    }
+
+    /// The 0-based logical (buffer) line number for a block starting at `offset`,
+    /// if a buffer is available. Keeps gutter numbers and diff lookups aligned
+    /// with the buffer's logical lines under soft wrap.
+    fn logical_line_count(&self, offset: CharOffset, app: &AppContext) -> Option<LineCount> {
+        let buffer = self.buffer.as_ref()?;
+        let row = offset.to_buffer_point(buffer.as_ref(app)).row;
+        Some(LineCount::from(row.saturating_sub(1) as usize))
     }
 
     pub fn display_line_number(&self, line_count: LineCount) -> usize {
@@ -606,7 +622,14 @@ impl<V: EditorView> EditorWrapper<V> {
         let mut removed_hunk_line_number: Option<LineCount> = None;
         let mut removed_hunk_line_index: usize = 0;
         for (block_idx, block) in blocks.iter().enumerate() {
-            let Some(line_count) = model.start_line_index(&**block) else {
+            // Prefer the block's logical (buffer) line so gutter numbers and diff
+            // lookups stay correct under soft wrap, where one logical line spans
+            // multiple visual rows. Falls back to the render model's visual line
+            // index when no buffer is available.
+            let Some(line_count) = line_number_config
+                .logical_line_count(block.viewport_item().block_offset(), app)
+                .or_else(|| model.start_line_index(&**block))
+            else {
                 continue;
             };
 
