@@ -1,0 +1,25 @@
+name: Warp Maestro Light
+accent: '#9C58F0'
+cursor: '#9C58F0'
+background: '#F5F5F5'
+foreground: '#1E1E1D'
+details: lighter
+terminal_colors:
+  normal:
+    black: '#1E1E1D'
+    red: '#C5371E'
+    green: '#2E7A00'
+    yellow: '#8F6800'
+    blue: '#085AFF'
+    magenta: '#8341DD'
+    cyan: '#0E7C8C'
+    white: '#AAAAAA'
+  bright:
+    black: '#555555'
+    red: '#FF5233'
+    green: '#45BB00'
+    yellow: '#B07B00'
+    blue: '#2E6BFF'
+    magenta: '#9C58F0'
+    cyan: '#1497A8'
+    white: '#FFFFFF'
