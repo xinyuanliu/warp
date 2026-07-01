@@ -28,7 +28,7 @@ If the PR includes Rust/native code changes, run presubmit before opening or upd
 ```
 
 `./script/presubmit` runs:
-- `cargo fmt` — code formatting
+- `./script/format --check` — code formatting
 - `cargo clippy` — linting with all warnings as errors
 - All tests (unit, doc, and integration)
 
@@ -36,7 +36,8 @@ The individual commands (matching the versions in `./script/presubmit`) are:
 
 ```bash
 ./script/format
-cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
+cargo clippy --workspace --exclude warp_completer --all-targets --tests -- -D warnings
+cargo clippy -p warp_completer --all-targets --tests -- -D warnings
 ```
 
 You **must** run `./script/format` and `cargo clippy` before:

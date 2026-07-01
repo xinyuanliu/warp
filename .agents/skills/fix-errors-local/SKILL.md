@@ -29,18 +29,19 @@ Run checks separately when debugging specific issues.
 
 **Rust formatting:**
 ```bash
-cargo fmt -- --check
+./script/format --check
 ```
+Run `./script/format` to fix formatting. It wraps `cargo fmt` with `RUSTC_BOOTSTRAP` and the repo's import-grouping configuration.
 
 **Clippy (full workspace):**
 ```bash
-cargo clippy --workspace --exclude warp_completer --all-targets --all-features --tests -- -D warnings
+cargo clippy --workspace --exclude warp_completer --all-targets --tests -- -D warnings
 cargo clippy -p warp_completer --all-targets --tests -- -D warnings
 ```
 
 **WASM clippy:**
 ```bash
-cargo clippy --target wasm32-unknown-unknown --profile release-wasm-debug_assertions --no-deps
+cargo clippy --locked --target wasm32-unknown-unknown --profile release-wasm-debug_assertions -- -D warnings
 ```
 
 **Objective-C/C/C++ formatting:**

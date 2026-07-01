@@ -21,21 +21,23 @@ When parsing `statusCheckRollup`, map failures to these checks:
 - `Run MacOS tests`
 - `Run Linux tests`
 - `Run Windows tests`
-- `WASM build`
+- `Formatting + Clippy (wasm)`
+- `Verify compilation with release flags (wasm)`
 - `Check CI results` — the summary/rollup check; a failure here usually reflects one of the checks above, so trace it back to the underlying job before diagnosing.
 
 ## Cargo-specific error categories
 
 When categorizing extracted logs, group errors into:
-- **Formatting issues** — `cargo fmt -- --check` failures. Fix with `./script/format`.
+- **Formatting issues** — `./script/format --check` failures. Fix with `./script/format`.
 - **Linting issues** — `cargo clippy` warnings/errors (note the specific lint name, e.g. `uninlined_format_args`, `dead_code`).
 - **Compilation errors** — type mismatches, missing/unused imports, signature changes, non-exhaustive matches.
 - **Test failures** — failing `cargo nextest`/doc tests with their names and failure reasons.
-- **Platform-specific issues** — split by job: macOS / Linux / Windows test failures, and `WASM build` failures (typically `local_fs`-gating problems on the `wasm32-unknown-unknown` target).
+- **Platform-specific issues** — split by job: macOS / Linux / Windows test failures, and WASM failures (typically `local_fs`-gating problems on the `wasm32-unknown-unknown` target).
 
 ## Notes
 
 - Cross-reference the `fix-errors` skill (and `fix-errors-local`) for detailed resolution strategies and the exact reproduction commands for each category.
-- A failure in `WASM build` almost always means filesystem-using code needs gating behind `local_fs`; reproduce locally with `cargo clippy --target wasm32-unknown-unknown --profile release-wasm-debug_assertions --no-deps`.
+- A failure in `Formatting + Clippy (wasm)` almost always means filesystem-using code needs gating behind `local_fs`; reproduce locally with `cargo clippy --locked --target wasm32-unknown-unknown --profile release-wasm-debug_assertions -- -D warnings`.
+- A failure in `Verify compilation with release flags (wasm)` is usually reproduced by the workflow's `./script/wasm/bundle --channel oss --nouniversal --check-only` command.
 - If tests passed in CI but fail locally, they may be environment-specific or flaky; prefer the CI result as the source of truth.
 - The validation steps in the generated fix plan should reference `./script/presubmit` as the final local gate.
