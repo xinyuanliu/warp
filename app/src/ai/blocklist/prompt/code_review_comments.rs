@@ -29,6 +29,7 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
@@ -43,6 +44,11 @@ use crate::ui_components::blended_colors;
 use crate::BlocklistAIHistoryModel;
 
 const COMMENTS_BUTTON_SAVE_POSITION_ID: &str = "code_review_comments::comments_button";
+
+/// Defensive upper bound on the length of a comment's one-line summary in the popup.
+/// The row also clips with an ellipsis based on the available width, so this only guards
+/// against laying out pathologically long single-line strings.
+const COMMENT_SUMMARY_MAX_CHARS: usize = 120;
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -468,7 +474,7 @@ impl CodeReviewCommentsPopupView {
             Expanded::new(
                 1.0,
                 Text::new(
-                    comment.title(),
+                    comment.summary(COMMENT_SUMMARY_MAX_CHARS),
                     styles.ui_font_family,
                     styles.detail_font_size,
                 )
@@ -477,6 +483,10 @@ impl CodeReviewCommentsPopupView {
                 } else {
                     styles.main_text_color
                 })
+                // Keep each comment on a single line, clipping with an ellipsis when the
+                // text is wider than the popup rather than wrapping across multiple lines.
+                .soft_wrap(false)
+                .with_clip(ClipConfig::ellipsis())
                 .finish(),
             )
             .finish(),
