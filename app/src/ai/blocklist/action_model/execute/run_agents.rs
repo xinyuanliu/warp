@@ -27,13 +27,17 @@ use crate::ai::agent::{
     StartAgentExecutionMode,
 };
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
+use crate::ai::blocklist::inline_action::orchestration_controls::{
+    unavailable_model_reason, OrchestrationEditState,
+};
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::document::plan_publication::{
     prepare_plan_publications, wait_for_plan_publications,
 };
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
+use crate::settings::{AISettings, OrchestrationInvalidModelBehavior};
+use crate::LLMPreferences;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -174,6 +178,34 @@ impl RunAgentsExecutor {
             log::warn!("RunAgentsExecutor: validation failure: {error}");
             let _ = sender.try_send(RunAgentsResult::Failure { error });
             return receiver;
+        }
+
+        // Pre-flight model check: mirror the server's pre-spawn model validation
+        // (warp-server `AddTask`) so we fail fast (or auto-select) rather than
+        // dispatching children the server would reject. The model_id/harness_type
+        // are already resolved from any approved config upstream, so this sees
+        // the final run-wide values.
+        let mut request = request;
+        let is_local = !request.execution_mode.is_remote();
+        if let Some(reason) =
+            unavailable_model_reason(&request.model_id, &request.harness_type, is_local, ctx)
+        {
+            match AISettings::as_ref(ctx).orchestration_invalid_model_behavior {
+                OrchestrationInvalidModelBehavior::Block => {
+                    log::warn!("RunAgentsExecutor: unavailable model: {reason}");
+                    let _ = sender.try_send(RunAgentsResult::Failure { error: reason });
+                    return receiver;
+                }
+                OrchestrationInvalidModelBehavior::AutoSelect => {
+                    // Substitute the Oz default; an empty default means "inherit".
+                    let fallback = LLMPreferences::as_ref(ctx).oz_cloud_default_agent_model_id();
+                    request.model_id = if fallback.trim().is_empty() {
+                        String::new()
+                    } else {
+                        fallback
+                    };
+                }
+            }
         }
         let pending_plan_publications = prepare_plan_publications(parent_conversation_id, ctx);
 
