@@ -29,13 +29,13 @@ Options:
   --install-common-skills-globally
                             Install or update common agent skills in ~/.agents/skills.
   --skip-common-skills     Skip installing common agent skills.
-  --skip-warp-skills       Skip installing the internal warp-skills (optional; not required for external contributors).
+  --skip-warp-skills       Skip installing team-specific warp-skills.
 
 Environment:
   WARP_SKIP_COMMON_SKILLS_INSTALL=1
       Skip installing common agent skills, even when --install-common-skills is provided.
   WARP_SKIP_WARP_SKILLS_INSTALL=1
-      Skip installing the internal warp-skills.
+      Skip installing team-specific warp-skills.
   WARP_COMMON_SKILLS_INSTALL_TARGET=project|global
       Choose the install target when no explicit prompt answer is provided.
       Target prompting and duplicate checks are delegated to
@@ -145,12 +145,13 @@ maybe_install_common_skills() {
   fi
 }
 
-# Optionally install the internal warp-skills after the common-skills step.
-# install_warp_skills is best-effort and never fails, but guard with || true
-# so an unexpected error can't abort bootstrap.
+# Optionally install the internal warp-skills after the common-skills step, via
+# the shared install_warp_skills wrapper resolved from warpdotdev/common-skills.
+# It is best-effort and never fails, but guard with || true so an unexpected
+# error can't abort bootstrap.
 maybe_install_warp_skills() {
   if [[ "${INSTALL_WARP_SKILLS}" -eq 1 ]]; then
-    ./script/install_warp_skills || true
+    ./script/resolve_common_skills install_warp_skills -- --repo-root "${REPO_ROOT}" --if-needed || true
   fi
 }
 
