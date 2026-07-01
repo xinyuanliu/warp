@@ -37,6 +37,7 @@ use warpui::{
 };
 
 use crate::ai::agent::comment::ReviewComment;
+use crate::ai::agent::icons::addressed_comment_icon;
 use crate::ai::blocklist::{BlocklistAIContextEvent, BlocklistAIContextModel};
 use crate::code_review::comments::CommentId;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
@@ -446,15 +447,14 @@ impl CodeReviewCommentsPopupView {
         let comment_id = comment.id;
         let is_expanded = self.expanded.contains(&comment_id);
 
-        let icon = if resolved {
-            Icon::AddressedComment
+        // Resolved comments get the same green check treatment as the blocklist's
+        // "addressed comment" chips; pending comments use a neutral chat icon.
+        let icon_element = if resolved {
+            addressed_comment_icon(appearance).finish()
         } else {
             Icon::MessageChatSquare
-        };
-        let icon_color = if resolved {
-            styles.sub_text_color
-        } else {
-            styles.main_text_color
+                .to_warpui_icon(Fill::Solid(styles.main_text_color))
+                .finish()
         };
 
         let mut header_row = Flex::row()
@@ -462,7 +462,7 @@ impl CodeReviewCommentsPopupView {
             .with_main_axis_size(MainAxisSize::Max);
         header_row.add_child(
             Container::new(
-                ConstrainedBox::new(icon.to_warpui_icon(Fill::Solid(icon_color)).finish())
+                ConstrainedBox::new(icon_element)
                     .with_width(16.)
                     .with_height(16.)
                     .finish(),
