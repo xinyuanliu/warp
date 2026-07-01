@@ -45,6 +45,7 @@ use crate::ai::local_harness_setup::{
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::menu::{MenuItem, MenuItemFields};
+use crate::settings::{AISettings, OrchestrationInvalidModelBehavior};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::{
@@ -674,7 +675,11 @@ pub fn unavailable_model_reason(
             return None;
         }
         let suggestions = llm_prefs.oz_cloud_agent_model_suggestions(3);
-        return Some(unavailable_model_message(trimmed, "cloud agents", &suggestions));
+        return Some(unavailable_model_message(
+            trimmed,
+            "cloud agents",
+            &suggestions,
+        ));
     }
 
     if is_model_in_filtered_choices_in_app(model_id, harness_type, is_local, ctx) {
@@ -696,6 +701,38 @@ fn unavailable_model_message(model_id: &str, target: &str, suggestions: &[String
          unavailable models in Settings \u{2192} Agents (also in the Command Palette).",
     );
     message
+}
+
+/// Under the [`OrchestrationInvalidModelBehavior::AutoSelect`] setting,
+/// substitutes a valid model when the current `state.model_id` is unavailable
+/// for the run target. Prefers the Oz cloud default; falls back to the empty
+/// string (inherit the default) when even that is unavailable for the target.
+///
+/// A no-op under [`OrchestrationInvalidModelBehavior::Block`] (the accept gate
+/// surfaces the error instead) and when the current model is already valid.
+/// Returns `true` when `state.model_id` was changed so callers can repopulate
+/// the picker.
+pub fn maybe_auto_select_valid_model(state: &mut OrchestrationEditState, ctx: &AppContext) -> bool {
+    match AISettings::as_ref(ctx).orchestration_invalid_model_behavior {
+        OrchestrationInvalidModelBehavior::Block => return false,
+        OrchestrationInvalidModelBehavior::AutoSelect => {}
+    }
+    let is_local = !state.execution_mode.is_remote();
+    if unavailable_model_reason(&state.model_id, &state.harness_type, is_local, ctx).is_none() {
+        return false;
+    }
+    let fallback = LLMPreferences::as_ref(ctx).oz_cloud_default_agent_model_id();
+    let new_id =
+        if unavailable_model_reason(&fallback, &state.harness_type, is_local, ctx).is_none() {
+            fallback
+        } else {
+            String::new()
+        };
+    if state.model_id == new_id {
+        return false;
+    }
+    state.model_id = new_id;
+    true
 }
 
 /// Returns the default model_id for the given harness.
@@ -1232,6 +1269,20 @@ pub fn accept_disabled_reason_with_auth(
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
     }
+    // When the run-wide model isn't available for the chosen target, either
+    // block with an actionable message or (under auto-select) let the reset
+    // paths substitute a valid model instead of blocking here.
+    let is_local = !state.execution_mode.is_remote();
+    match AISettings::as_ref(ctx).orchestration_invalid_model_behavior {
+        OrchestrationInvalidModelBehavior::Block => {
+            if let Some(reason) =
+                unavailable_model_reason(&state.model_id, &state.harness_type, is_local, ctx)
+            {
+                return Some(reason);
+            }
+        }
+        OrchestrationInvalidModelBehavior::AutoSelect => {}
+    }
     if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
         if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
             match local_harness_setup_state(harness) {
@@ -1540,6 +1591,9 @@ pub fn apply_execution_mode_change<A: OrchestrationControlAction, V: View>(
             .unwrap_or_default();
         state.model_id = reset_id;
     }
+    // Under auto-select, replace a model that is valid locally but not for the
+    // new (e.g. cloud) target with a valid fallback. No-op under Block.
+    maybe_auto_select_valid_model(state, ctx);
     if let Some(handle) = &handles.model_picker {
         populate_model_picker_for_harness(
             handle,
@@ -1583,6 +1637,9 @@ pub fn repopulate_all_pickers<A: OrchestrationControlAction, V: View>(
             state.model_id = first_id;
         }
     }
+    // Under auto-select, replace a model unavailable for the target (e.g. a
+    // local-only model on a cloud run) with a valid fallback. No-op under Block.
+    maybe_auto_select_valid_model(state, ctx);
     if let Some(handle) = &handles.model_picker {
         populate_model_picker_for_harness(
             handle,

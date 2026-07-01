@@ -23178,6 +23178,17 @@ impl Workspace {
             }
         }
 
+        match ai_settings.orchestration_invalid_model_behavior {
+            crate::settings::OrchestrationInvalidModelBehavior::Block => {
+                context.set.insert(flags::ORCHESTRATION_INVALID_MODEL_BLOCK);
+            }
+            crate::settings::OrchestrationInvalidModelBehavior::AutoSelect => {
+                context
+                    .set
+                    .insert(flags::ORCHESTRATION_INVALID_MODEL_AUTO_SELECT);
+            }
+        }
+
         match ai_settings.default_prompt_submission_mode {
             crate::settings::PromptSubmissionMode::Interrupt => {
                 context.set.insert(flags::PROMPT_SUBMISSION_INTERRUPT);

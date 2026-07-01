@@ -94,8 +94,9 @@ use crate::settings::{
     CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
     IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled,
     LongRunningCommandSubmissionMode, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
-    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    NaturalLanguageAutosuggestionsEnabled, OrchestrationInvalidModelBehavior,
+    OrchestrationMessageDisplayMode, PromptSubmissionMode, RuleSuggestionsEnabled,
+    SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
@@ -370,6 +371,32 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     mode.command_palette_description(),
                     builder(SettingsAction::AI(
                         AISettingsPageAction::SetOrchestrationMessageDisplayMode(mode),
+                    )),
+                    ai_context.clone() & !id!(context_flag),
+                )
+                .with_group(bindings::BindingGroup::WarpAi.as_str())
+            })
+            .collect();
+        app.register_fixed_bindings(mode_bindings);
+    }
+    {
+        use warpui::keymap::FixedBinding;
+
+        let ai_context = context.clone() & id!(flags::IS_ANY_AI_ENABLED);
+        let mode_bindings: Vec<FixedBinding> = OrchestrationInvalidModelBehavior::iter()
+            .map(|mode| {
+                let context_flag = match mode {
+                    OrchestrationInvalidModelBehavior::Block => {
+                        flags::ORCHESTRATION_INVALID_MODEL_BLOCK
+                    }
+                    OrchestrationInvalidModelBehavior::AutoSelect => {
+                        flags::ORCHESTRATION_INVALID_MODEL_AUTO_SELECT
+                    }
+                };
+                FixedBinding::empty(
+                    mode.command_palette_description(),
+                    builder(SettingsAction::AI(
+                        AISettingsPageAction::SetOrchestrationInvalidModelBehavior(mode),
                     )),
                     ai_context.clone() & !id!(context_flag),
                 )
@@ -711,6 +738,7 @@ pub struct AISettingsPageView {
 
     thinking_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     orchestration_message_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    orchestration_invalid_model_behavior_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     default_prompt_submission_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     lrc_submission_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     #[cfg(feature = "local_fs")]
@@ -885,6 +913,17 @@ impl AISettingsPageView {
             orchestration_message_display_mode_dropdown.update(ctx, |dropdown, ctx| {
                 dropdown.set_selected_by_action(
                     AISettingsPageAction::SetOrchestrationMessageDisplayMode(current_mode),
+                    ctx,
+                );
+            });
+        }
+        let orchestration_invalid_model_behavior_dropdown =
+            OtherAIWidget::create_orchestration_invalid_model_behavior_dropdown(ctx);
+        {
+            let current_mode = AISettings::as_ref(ctx).orchestration_invalid_model_behavior;
+            orchestration_invalid_model_behavior_dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_action(
+                    AISettingsPageAction::SetOrchestrationInvalidModelBehavior(current_mode),
                     ctx,
                 );
             });
@@ -1330,6 +1369,20 @@ impl AISettingsPageView {
                                 ctx,
                             );
                         });
+                }
+                AISettingsChangedEvent::OrchestrationInvalidModelBehavior { .. } => {
+                    let current_mode = AISettings::as_ref(ctx).orchestration_invalid_model_behavior;
+                    me.orchestration_invalid_model_behavior_dropdown.update(
+                        ctx,
+                        |dropdown, ctx| {
+                            dropdown.set_selected_by_action(
+                                AISettingsPageAction::SetOrchestrationInvalidModelBehavior(
+                                    current_mode,
+                                ),
+                                ctx,
+                            );
+                        },
+                    );
                 }
                 AISettingsChangedEvent::PromptSubmissionMode { .. } => {
                     let current_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
@@ -1965,6 +2018,7 @@ impl AISettingsPageView {
             mcp_denylist_mouse_state_handles,
             thinking_display_mode_dropdown,
             orchestration_message_display_mode_dropdown,
+            orchestration_invalid_model_behavior_dropdown,
             default_prompt_submission_mode_dropdown,
             lrc_submission_mode_dropdown,
             #[cfg(feature = "local_fs")]
@@ -3582,6 +3636,7 @@ pub enum AISettingsPageAction {
     ToggleShowOzUpdatesInZeroState,
     SetThinkingDisplayMode(ThinkingDisplayMode),
     SetOrchestrationMessageDisplayMode(OrchestrationMessageDisplayMode),
+    SetOrchestrationInvalidModelBehavior(OrchestrationInvalidModelBehavior),
     SetPromptSubmissionMode(PromptSubmissionMode),
     SetLongRunningCommandSubmissionMode(LongRunningCommandSubmissionMode),
     AttemptLoginGatedUpgrade,
@@ -4052,6 +4107,14 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .orchestration_message_display_mode
+                        .set_value(*mode, ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetOrchestrationInvalidModelBehavior(mode) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .orchestration_invalid_model_behavior
                         .set_value(*mode, ctx));
                 });
                 ctx.notify();
@@ -7238,6 +7301,29 @@ impl OtherAIWidget {
             dropdown
         })
     }
+
+    fn create_orchestration_invalid_model_behavior_dropdown(
+        ctx: &mut ViewContext<AISettingsPageView>,
+    ) -> ViewHandle<Dropdown<AISettingsPageAction>> {
+        let items: Vec<DropdownItem<AISettingsPageAction>> =
+            OrchestrationInvalidModelBehavior::iter()
+                .map(|mode| {
+                    DropdownItem::new(
+                        mode.display_name(),
+                        AISettingsPageAction::SetOrchestrationInvalidModelBehavior(mode),
+                    )
+                })
+                .collect();
+
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            dropdown.add_items(items, ctx);
+            dropdown
+        })
+    }
 }
 
 impl SettingsWidget for OtherAIWidget {
@@ -7343,6 +7429,23 @@ impl SettingsWidget for OtherAIWidget {
             ),
             (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
             &view.orchestration_message_display_mode_dropdown,
+        ));
+
+        column.add_child(render_dropdown_item(
+            appearance,
+            "Unavailable orchestration model",
+            Some(
+                "What happens when an agent's model isn't available for the run target: block with an error or auto-select a valid model.",
+            ),
+            None,
+            LocalOnlyIconState::for_setting(
+                OrchestrationInvalidModelBehavior::storage_key(),
+                OrchestrationInvalidModelBehavior::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
+            &view.orchestration_invalid_model_behavior_dropdown,
         ));
 
         // TODO: OpenConversationLayoutPreference should not depend on local_fs, but it lives under the external editor settings
