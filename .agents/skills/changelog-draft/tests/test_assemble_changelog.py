@@ -472,6 +472,50 @@ class TestConverterCompatibility(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Community section URL behaviour (regression: was synthesizing URLs from pr_number)
+# ---------------------------------------------------------------------------
+
+class TestCommunityContributorUrls(unittest.TestCase):
+
+    def test_community_section_uses_stored_url(self):
+        """External contributor PR links in Community section use the stored url field.
+
+        Regression test: previously the code synthesized
+        https://github.com/warpdotdev/warp/pull/{pn} from the PR number instead
+        of using the url already stored on the entry, violating the spec's
+        'no synthesized PR URLs' constraint.
+        """
+        pr = _make_pr(
+            200,
+            author="contrib-user",
+            url="https://github.com/warpdotdev/warp/pull/200",
+            explicit_entries=[{"category": "IMPROVEMENT", "text": "Community fix"}],
+        )
+        _, md = _assemble([pr], classifications=[], attribution="external-only")
+        self.assertIn("### Contributors", md)
+        # Must link to the stored URL
+        self.assertIn("[#200](https://github.com/warpdotdev/warp/pull/200)", md)
+
+    def test_community_section_omits_hyperlink_when_url_empty(self):
+        """When the stored url is empty, Community section shows plain #N (no synthesized link)."""
+        pr = _make_pr(
+            201,
+            author="contrib-user",
+            url="",
+            explicit_entries=[{"category": "IMPROVEMENT", "text": "Community fix"}],
+        )
+        _, md = _assemble([pr], classifications=[], attribution="external-only")
+        self.assertIn("### Contributors", md)
+        # URL is empty — PR reference must be plain #201 with no hyperlink around it
+        contrib_section = md.split("### Contributors")[1].split("### ")[0] if "### Contributors" in md else ""
+        # No synthesized PR URL should appear (the profile link itself has https:// so
+        # we check specifically that no PR pull URL is synthesized)
+        self.assertNotIn("https://github.com/warpdotdev/warp/pull/201", contrib_section)
+        self.assertNotIn("[#201](", contrib_section)  # no hyperlinked #201
+        self.assertIn("#201", contrib_section)  # plain reference still present
+
+
+# ---------------------------------------------------------------------------
 # Python syntax validation for all scripts
 # ---------------------------------------------------------------------------
 

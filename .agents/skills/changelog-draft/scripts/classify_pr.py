@@ -246,15 +246,20 @@ def classify_one_pr(
     feature_flags: dict,
     bot_bucket: set[str],
     unknown_bucket: set[str],
-) -> dict | None:
+) -> dict:
     """Apply deterministic rules to a single unmarked PR.
 
-    Returns a classification dict if the PR is deterministically excluded,
-    or None if it requires agent judgment (is a candidate).
+    Returns a classification dict (source='deterministic') if the PR is
+    deterministically excluded, or a candidate dict (source='candidate') if
+    it requires agent judgment.
 
-    The classification dict shape:
+    Classification dict shape (deterministic exclude):
         {pr_number, include, category, text, confidence, rationale,
          feature_flag (compat), feature_flags, needs_review, matched_rules, source}
+
+    Candidate dict shape (agent required):
+        {pr_number, title, url, author, changed_files, source_repo,
+         [detected_feature_flags], [uncertain_flag_touch], [unknown_contributor], source}
     """
     pr_number = pr.get("number")
     author = pr.get("author", "") or ""
@@ -328,6 +333,7 @@ def classify_one_pr(
         "author": author,
         "changed_files": changed_files,
         "source_repo": pr.get("source_repo", ""),
+        "source": "candidate",
     }
     if detected_flags:
         candidate["detected_feature_flags"] = detected_flags
@@ -336,7 +342,7 @@ def classify_one_pr(
     if author in unknown_bucket:
         candidate["unknown_contributor"] = True
 
-    return None  # signal: this PR needs agent judgment
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -372,30 +378,10 @@ def run_pass1(
             unknown_contributors.append(author)
 
         det = classify_one_pr(pr, channel, feature_flags, bot_bucket, unknown_bucket)
-        if det is not None:
+        if det.get("source") == "deterministic":
             classifications.append(det)
         else:
-            # Build agent_required entry
-            changed_files = pr.get("changed_files") or []
-            detected_flags = detect_feature_flags(pr)
-            touches_flag_file = FEATURE_FLAG_FILE in changed_files
-            uncertain_flag_touch = touches_flag_file and not detected_flags
-
-            candidate: dict = {
-                "pr_number": pr_number,
-                "title": pr.get("title", ""),
-                "url": pr.get("url", ""),
-                "author": author,
-                "changed_files": changed_files,
-                "source_repo": pr.get("source_repo", ""),
-            }
-            if detected_flags:
-                candidate["detected_feature_flags"] = detected_flags
-            if uncertain_flag_touch:
-                candidate["uncertain_flag_touch"] = True
-            if author in unknown_bucket:
-                candidate["unknown_contributor"] = True
-            agent_required.append(candidate)
+            agent_required.append(det)
 
     deterministic_exclude = len(classifications)
     agent_classify = len(agent_required)
@@ -486,7 +472,7 @@ def run_pass2(
         # Re-run deterministic checks
         det = classify_one_pr(pr, channel, feature_flags, bot_bucket, unknown_bucket)
 
-        if det is not None:
+        if det.get("source") == "deterministic":
             # Deterministic exclude — check for agent conflict
             agent_entry = agent_by_pr.get(pr_number)
             if agent_entry and agent_entry.get("include") is True:
@@ -497,11 +483,9 @@ def run_pass2(
             # Emit the deterministic result regardless
             classifications.append(det)
         else:
-            # Candidate — look up agent's answer
-            detected_flags = detect_feature_flags(pr)
-            changed_files = pr.get("changed_files") or []
-            touches_flag_file = FEATURE_FLAG_FILE in changed_files
-            uncertain_flag_touch = touches_flag_file and not detected_flags
+            # Candidate — derive flag annotations from the returned candidate dict
+            detected_flags = det.get("detected_feature_flags", [])
+            uncertain_flag_touch = det.get("uncertain_flag_touch", False)
 
             agent_entry = agent_by_pr.get(pr_number)
             if agent_entry is None:

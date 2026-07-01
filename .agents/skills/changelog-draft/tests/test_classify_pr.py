@@ -515,6 +515,49 @@ class TestSubjectiveMerge(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# classify_one_pr return value (regression: was returning None instead of candidate)
+# ---------------------------------------------------------------------------
+
+class TestClassifyOnePrReturnValue(unittest.TestCase):
+
+    def test_candidate_pr_returns_dict_not_none(self):
+        """classify_one_pr must return a candidate dict (not None) for agent-required PRs.
+
+        Regression test: previously the function built the candidate dict and then
+        discarded it by returning None, forcing callers to duplicate the logic.
+        """
+        pr = _make_pr(100, author="alice")
+        result = classify_pr.classify_one_pr(
+            pr,
+            channel="stable",
+            feature_flags=FEATURE_FLAGS,
+            bot_bucket=BOT_BUCKET,
+            unknown_bucket=UNKNOWN_BUCKET,
+        )
+        self.assertIsNotNone(result, "classify_one_pr must return a candidate dict, not None")
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("pr_number"), 100)
+        self.assertIn("url", result)
+        self.assertIn("title", result)
+        self.assertIn("changed_files", result)
+        self.assertEqual(result.get("source"), "candidate")
+
+    def test_candidate_dict_fields_propagate_to_agent_required(self):
+        """Candidate fields (uncertain_flag_touch, unknown_contributor) reach agent_required."""
+        pr = _make_pr(
+            101,
+            body="Refactored feature registry",
+            changed_files=["crates/warp_features/src/lib.rs"],
+            author="unknown-user",
+        )
+        result = _pass1([pr])
+        self.assertEqual(len(result["agent_required"]), 1)
+        candidate = result["agent_required"][0]
+        self.assertTrue(candidate.get("uncertain_flag_touch"))
+        self.assertTrue(candidate.get("unknown_contributor"))
+
+
+# ---------------------------------------------------------------------------
 # Summary accounting
 # ---------------------------------------------------------------------------
 

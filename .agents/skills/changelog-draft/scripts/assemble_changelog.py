@@ -317,16 +317,17 @@ def assemble(
     }
 
     # Collect external contributors for Community section
-    # Only PRs in entries with external authors
-    ext_contributors: dict[str, list[int]] = {}
+    # Only PRs in entries with external authors; store the entry's url to avoid
+    # synthesizing PR URLs (spec constraint: use stored url, omit link when empty).
+    ext_contributors: dict[str, list[dict]] = {}
     for entry in entries:
         if entry.get("is_external") and attribution != "none":
             a = entry.get("author", "")
             pn = entry.get("pr_number")
-            if a:
+            if a and pn is not None:
                 ext_contributors.setdefault(a, [])
-                if pn not in ext_contributors[a]:
-                    ext_contributors[a].append(pn)
+                if not any(e["pr_number"] == pn for e in ext_contributors[a]):
+                    ext_contributors[a].append({"pr_number": pn, "url": entry.get("url") or None})
 
     markdown = _build_markdown(
         channel=channel,
@@ -346,7 +347,7 @@ def _build_markdown(
     range_data: dict,
     generated_at: str,
     entries: list[dict],
-    ext_contributors: dict[str, list[int]],
+    ext_contributors: dict[str, list[dict]],
     issue_reporters: list[dict],
     attribution: str,
 ) -> str:
@@ -401,12 +402,10 @@ def _build_markdown(
 
         if has_contributors:
             lines.append("### Contributors")
-            for author, pr_numbers in sorted(ext_contributors.items()):
+            for author, pr_entries in sorted(ext_contributors.items()):
                 pr_links = ", ".join(
-                    f"[#{pn}](https://github.com/warpdotdev/warp/pull/{pn})"
-                    if pr_numbers
-                    else ""
-                    for pn in sorted(pr_numbers)
+                    f"[#{e['pr_number']}]({e['url']})" if e.get("url") else f"#{e['pr_number']}"
+                    for e in sorted(pr_entries, key=lambda x: x["pr_number"])
                 )
                 lines.append(f"- {github_profile_link(author)} — {pr_links}  ✨")
             lines.append("")
