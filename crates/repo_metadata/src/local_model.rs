@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 #[cfg(feature = "local_fs")]
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use futures::future::{self, BoxFuture, FutureExt as _};
@@ -587,6 +587,7 @@ impl LocalRepoMetadataModel {
         for (repo_path, repo_scoped_update) in repo_updates {
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&repo_path) {
                 let repo_path_clone = repo_path.clone();
+                let repo_root_local = repo_path.to_local_path().unwrap_or_default();
                 let gitignores_clone = state.gitignores.clone();
                 let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
@@ -596,6 +597,7 @@ impl LocalRepoMetadataModel {
                         let (mutations, standing_results, removed_roots) =
                             Self::compute_file_tree_mutations(
                                 &repo_scoped_update,
+                                &repo_root_local,
                                 &gitignores_clone,
                                 &force_included_paths,
                                 &standing_query_definitions,
@@ -1139,8 +1141,13 @@ impl LocalRepoMetadataModel {
     /// are emitted as unloaded placeholders rather than fully-materialized
     /// subtrees, matching the lazy tree model; the directory is materialized
     /// (and watched) on demand when the user expands it via `load_directory`.
+    ///
+    /// `repo_root` is the repository root on the local filesystem. It bounds the
+    /// ancestor walk used to consult nested (per-directory) `.gitignore` files
+    /// when classifying added paths (see [`Self::incremental_path_is_ignored`]).
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
+        repo_root: &Path,
         gitignores: &[Gitignore],
         force_included_paths: &[PathBuf],
         standing_query_definitions: &StandingQueryDefinitions,
@@ -1174,7 +1181,7 @@ impl LocalRepoMetadataModel {
                 continue;
             }
 
-            let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
+            let is_ignored = Self::incremental_path_is_ignored(repo_root, path_to_add, gitignores);
 
             if path_to_add.is_dir() {
                 if lazy_load {
@@ -1453,6 +1460,27 @@ impl LocalRepoMetadataModel {
         // Check if path matches any gitignore patterns
         let is_dir = path.is_dir();
         matches_gitignores(path, is_dir, gitignores, true)
+    }
+
+    /// Classifies whether an incrementally-added `path` is gitignored.
+    ///
+    /// In addition to the cached repo-root + global `base_gitignores`
+    /// (`state.gitignores`), this reads nested (per-directory) `.gitignore` files
+    /// from disk along the ancestor chain from `repo_root`, matching how the
+    /// initial index (`evaluate_entry`) accumulates them as it descends. Without
+    /// it, a live-created file matched only by a nested `.gitignore` (e.g. a
+    /// `sub/.gitignore` containing `*.log`) would be tagged un-ignored and
+    /// render normally, diverging from the dimmed initial-index representation.
+    fn incremental_path_is_ignored(
+        repo_root: &Path,
+        path: &Path,
+        base_gitignores: &[Gitignore],
+    ) -> bool {
+        if Self::path_is_ignored(path, base_gitignores) {
+            return true;
+        }
+        let nested = nested_gitignores_for_path(repo_root, path);
+        !nested.is_empty() && matches_gitignores(path, path.is_dir(), &nested, true)
     }
 
     /// Fully indexes a local directory after registering it with the directory watcher.
@@ -1744,6 +1772,43 @@ impl LocalRepoMetadataModel {
 
 impl warpui_core::Entity for LocalRepoMetadataModel {
     type Event = RepositoryMetadataEvent;
+}
+
+/// Reads the per-directory `.gitignore` files that apply to `path`, walking the
+/// ancestor directory chain from `repo_root` down to `path`'s parent directory
+/// (inclusive). This mirrors the nested-`.gitignore` accumulation the initial
+/// index performs in `evaluate_entry`, so an incrementally-added path can be
+/// classified against the same per-directory rules. A directory's own
+/// `.gitignore` never ignores the directory itself, so the walk stops at the
+/// parent. Returns an empty vec when `path` is not under `repo_root`.
+fn nested_gitignores_for_path(repo_root: &Path, path: &Path) -> Vec<Gitignore> {
+    let deepest = path.parent().unwrap_or(repo_root);
+    let Ok(relative) = deepest.strip_prefix(repo_root) else {
+        return Vec::new();
+    };
+    let mut gitignores = Vec::new();
+    let mut dir = repo_root.to_path_buf();
+    push_directory_gitignore(&dir, &mut gitignores);
+    for component in relative.components() {
+        if let Component::Normal(name) = component {
+            dir.push(name);
+            push_directory_gitignore(&dir, &mut gitignores);
+        }
+    }
+    gitignores
+}
+
+/// Loads `dir/.gitignore` (if present and non-empty) and appends it to
+/// `gitignores`. Each [`Gitignore`] is rooted at `dir`, so it only matches
+/// paths beneath that directory.
+fn push_directory_gitignore(dir: &Path, gitignores: &mut Vec<Gitignore>) {
+    let gitignore_path = dir.join(".gitignore");
+    if gitignore_path.exists() {
+        let (gitignore, _) = Gitignore::new(&gitignore_path);
+        if !gitignore.is_empty() {
+            gitignores.push(gitignore);
+        }
+    }
 }
 
 /// Helper function to recursively collect contents (files and optionally directories) from an Entry tree.
