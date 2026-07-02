@@ -363,11 +363,18 @@ pub struct FileTreeState {
     pub gitignores: Vec<Gitignore>,
 
     /// Handle to the backing repository (None for lazily-loaded standalone paths).
-    #[expect(unused)]
     repository: Option<ModelHandle<Repository>>,
 }
 
 impl FileTreeState {
+    /// Returns the handle to the backing repository, if any.
+    ///
+    /// `None` for lazily-loaded standalone paths and remote-model states. Used
+    /// to rebuild the tree from scratch when the repo's ignore rules change.
+    pub(crate) fn repository(&self) -> Option<&ModelHandle<Repository>> {
+        self.repository.as_ref()
+    }
+
     /// Creates a new FileTreeState.
     pub fn new(
         entry: Entry,
