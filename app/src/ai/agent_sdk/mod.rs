@@ -840,17 +840,24 @@ impl AgentDriverRunner {
         {
             foreground
                 .spawn(|_, _| {
-                    command::blocking::Command::new("gh")
+                    let output = command::blocking::Command::new("gh")
                         .args(["auth", "setup-git"])
-                        .spawn()
+                        .output()
                         .map_err(|err| {
                             AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
-                                "gh auth setup-git failed: {err:?}"
+                                "failed to run gh auth setup-git: {err:?}"
                             ))
-                        })
+                        })?;
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
+                            "gh auth setup-git failed: {}",
+                            stderr.trim()
+                        )));
+                    }
+                    Ok(())
                 })
-                .await?
-                .map(|_| ())?;
+                .await??;
             return Ok(());
         }
 

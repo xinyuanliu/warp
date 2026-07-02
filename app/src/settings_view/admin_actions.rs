@@ -7,9 +7,17 @@ use crate::server::ids::ServerId;
 pub struct AdminActions;
 
 impl AdminActions {
+    /// Generate the admin panel root URL
+    pub fn admin_panel_link() -> String {
+        format!("{}/admin", ChannelState::server_root_url())
+    }
     /// Generate the admin panel URL for a given team
     pub fn admin_panel_link_for_team(team_uid: ServerId) -> String {
-        format!("{}/admin/{}", ChannelState::server_root_url(), team_uid)
+        format!("{}/{}", Self::admin_panel_link(), team_uid)
+    }
+    /// Generate the admin platform settings URL for a given team
+    pub fn admin_platform_link_for_team(team_uid: ServerId) -> String {
+        format!("{}/platform", Self::admin_panel_link_for_team(team_uid))
     }
 
     /// Open the admin panel for a specific team
