@@ -1215,7 +1215,16 @@ impl LocalRepoMetadataModel {
                 }
 
                 let mut files = Vec::new();
+                // Seed the subtree build with the nested (per-directory)
+                // `.gitignore` files along the added directory's ancestor chain,
+                // not just the cached root/global set. Otherwise a descendant
+                // matched only by an ancestor nested `.gitignore` (e.g.
+                // `sub/.gitignore = *.log` with a live-added `sub/newdir/file.log`)
+                // would materialize un-ignored, diverging from the initial index.
+                // `build_tree` reads deeper `.gitignore` files itself as it
+                // descends, so only the ancestors need seeding here.
                 let mut gitignores = gitignores.to_owned();
+                gitignores.extend(nested_gitignores_for_path(repo_root, path_to_add));
                 let mut file_limit = MAX_FILES_PER_REPO;
                 match Entry::build_tree_with_standing_queries(
                     path_to_add,

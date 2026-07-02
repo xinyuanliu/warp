@@ -2966,3 +2966,81 @@ fn bugbash_incremental_add_direct_child_of_root_ignored_dir() {
         );
     });
 }
+
+/// BUG BASH regression: when a whole directory is live-added, descendants
+/// matched only by an ancestor nested `.gitignore` must materialize ignored.
+/// The subtree build is seeded with the added dir's ancestor nested
+/// `.gitignore` files, so `sub/newdir/file.log` under `sub/.gitignore = *.log`
+/// is tagged ignored=true (while a non-matching sibling stays un-ignored).
+#[test]
+fn bugbash_incremental_dir_add_respects_nested_ancestor_gitignore() {
+    fn find_file_ignored(entry: &Entry, file_name: &str) -> Option<bool> {
+        match entry {
+            Entry::File(f) => {
+                let matches = f
+                    .path
+                    .to_local_path_lossy()
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    == Some(file_name);
+                matches.then_some(f.ignored)
+            }
+            Entry::Directory(dir) => dir
+                .children
+                .iter()
+                .find_map(|child| find_file_ignored(child, file_name)),
+        }
+    }
+
+    VirtualFS::test("bugbash_incremental_dir_add_nested", |dirs, mut vfs| {
+        vfs.mkdir("repo/sub/newdir").with_files(vec![
+            Stub::FileWithContent("repo/sub/.gitignore", "*.log\n"),
+            Stub::FileWithContent("repo/sub/newdir/file.log", "y"),
+            Stub::FileWithContent("repo/sub/newdir/keep.txt", "y"),
+        ]);
+
+        let repo_local = dirs.tests().join("repo");
+        let newdir_local = repo_local.join("sub").join("newdir");
+
+        let gitignores = crate::gitignores_for_directory(&repo_local);
+        let definitions = StandingQueryDefinitions::default();
+
+        let update = RepoUpdate {
+            added: vec![newdir_local.clone()],
+            ..Default::default()
+        };
+        let (mutations, _standing_results, _removed) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &repo_local,
+                &gitignores,
+                &[], /* force_included_paths */
+                &definitions,
+                false, /* lazy_load */
+            ));
+
+        let subtree = mutations
+            .iter()
+            .find_map(|m| match m {
+                FileTreeMutation::AddDirectorySubtree { dir_path, subtree }
+                    if dir_path == &newdir_local =>
+                {
+                    Some(subtree)
+                }
+                _ => None,
+            })
+            .expect("expected an AddDirectorySubtree mutation for sub/newdir");
+
+        assert_eq!(
+            find_file_ignored(subtree, "file.log"),
+            Some(true),
+            "file.log under the live-added dir is matched by the ancestor nested sub/.gitignore \
+             (*.log), so it should materialize ignored=true"
+        );
+        assert_eq!(
+            find_file_ignored(subtree, "keep.txt"),
+            Some(false),
+            "keep.txt matches no gitignore rule and should materialize un-ignored"
+        );
+    });
+}
