@@ -9,7 +9,7 @@ description: Repo-specific error-fixing guidance for the warp Rust client. Layer
 
 ## Prerequisite: install the parent skill
 
-This skill specializes the core `fix-errors` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable at `.agents/skills/fix-errors/SKILL.md`. If it is missing, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/fix-errors`). Then continue with the guidance below.
+This skill specializes the core `fix-errors` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable by name — either project-locally at `.agents/skills/fix-errors/SKILL.md` or globally at `~/.agents/skills/fix-errors/SKILL.md`. If it is missing from both locations, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/fix-errors`). Then continue with the guidance below.
 
 This file is a companion to the core `fix-errors` skill. It does not redefine the generic categories of compilation, lint, and test errors. It only layers the Warp client's exact cargo toolchain commands and the WASM/`local_fs` conventions specific to this repository.
 

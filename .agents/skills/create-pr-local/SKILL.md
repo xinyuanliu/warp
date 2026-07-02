@@ -9,7 +9,7 @@ description: Repo-specific PR-creation guidance for the warp client. Layers Warp
 
 ## Prerequisite: install the parent skill
 
-This skill specializes the core `create-pr` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable at `.agents/skills/create-pr/SKILL.md`. If it is missing, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/create-pr`). Then continue with the guidance below.
+This skill specializes the core `create-pr` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable by name — either project-locally at `.agents/skills/create-pr/SKILL.md` or globally at `~/.agents/skills/create-pr/SKILL.md`. If it is missing from both locations, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/create-pr`). Then continue with the guidance below.
 
 This file is a companion to the core `create-pr` skill. It does not redefine the generic PR workflow (branch review, Linear linking, description structure, `gh` usage). It only layers the Warp client's toolchain-specific checks and testing requirements.
 

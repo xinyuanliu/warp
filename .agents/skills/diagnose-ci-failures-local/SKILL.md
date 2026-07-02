@@ -9,7 +9,7 @@ description: Repo-specific CI-diagnosis guidance for the warp client. Layers War
 
 ## Prerequisite: install the parent skill
 
-This skill specializes the core `diagnose-ci-failures` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable at `.agents/skills/diagnose-ci-failures/SKILL.md`. If it is missing, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/diagnose-ci-failures`). Then continue with the guidance below.
+This skill specializes the core `diagnose-ci-failures` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable by name — either project-locally at `.agents/skills/diagnose-ci-failures/SKILL.md` or globally at `~/.agents/skills/diagnose-ci-failures/SKILL.md`. If it is missing from both locations, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/diagnose-ci-failures`). Then continue with the guidance below.
 
 This file is a companion to the core `diagnose-ci-failures` skill. It does not redefine the generic workflow (verify the PR, check status with `gh`, extract logs, categorize, then produce a fix plan). It only layers the Warp client's specific CI check names and the cargo-centric error categories to look for.
 
