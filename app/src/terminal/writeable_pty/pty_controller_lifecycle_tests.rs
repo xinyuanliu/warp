@@ -4,6 +4,7 @@ use parking_lot::{FairMutex, Mutex};
 use warpui::App;
 
 use super::*;
+use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{Handler, PreexecValue};
 use crate::terminal::model::session::Sessions;
@@ -26,6 +27,76 @@ fn terminal_model() -> Arc<FairMutex<TerminalModel>> {
         None,
         Some(ChannelEventListener::new_for_test()),
     )))
+}
+
+fn add_test_controller(
+    app: &mut App,
+) -> (
+    ModelHandle<PtyController<TestEventLoopSender>>,
+    TestEventLoopSender,
+    async_channel::Sender<Event>,
+) {
+    let model = terminal_model();
+    let (model_events_tx, model_events_rx) = async_channel::unbounded();
+    let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let sessions = app.add_model(|_| Sessions::new_for_test());
+    let model_events =
+        app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+    let line_editor_status =
+        app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
+    let sender = TestEventLoopSender::default();
+    let controller = app.add_model(|ctx| {
+        PtyController::new(
+            sender.clone(),
+            model_events,
+            line_editor_status,
+            sessions,
+            executor_command_rx,
+            model,
+            ctx,
+        )
+    });
+    (controller, sender, model_events_tx)
+}
+
+#[test]
+fn only_public_passthrough_writes_mark_input_as_unreported() {
+    App::test((), |mut app| async move {
+        let (controller, _, model_events_tx) = add_test_controller(&mut app);
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.write_bytes_internal(b"bootstrap", ctx);
+            assert!(!controller.has_unreported_user_input);
+
+            controller.write_bytes(b"user input", ctx);
+            assert!(controller.has_unreported_user_input);
+        });
+
+        drop(model_events_tx);
+    });
+}
+
+#[test]
+fn accepted_command_clears_unreported_input_before_queueing() {
+    App::test((), |mut app| async move {
+        let (controller, _, model_events_tx) = add_test_controller(&mut app);
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.write_bytes(b"typeahead", ctx);
+            assert!(controller.has_unreported_user_input);
+
+            let outcome = controller.write_command(
+                "echo hi",
+                ShellType::Zsh,
+                CommandExecutionSource::User,
+                ctx,
+            );
+            assert_eq!(outcome, StartCommandOutcome::Accepted);
+            assert!(!controller.has_unreported_user_input);
+        });
+
+        drop(model_events_tx);
+    });
 }
 
 #[test]

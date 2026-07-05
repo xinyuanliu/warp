@@ -18,6 +18,14 @@ pwd";
 }
 
 #[test]
+fn disabled_warp_key_bindings_disable_input_reporting() {
+    let shell = Shell::new(ShellType::PowerShell, None, None, Default::default(), None)
+        .with_supports_warp_key_bindings(false);
+
+    assert_eq!(shell.input_reporting_sequence(), None);
+}
+
+#[test]
 fn test_strip_zsh_extended_prefix() {
     // Extended history format.
     assert_eq!(

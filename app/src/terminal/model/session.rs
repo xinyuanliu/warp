@@ -789,7 +789,8 @@ impl SessionInfo {
                 options,
                 bootstrapped_value.shell_plugins.unwrap_or_default(),
                 bootstrapped_value.shell_path,
-            ),
+            )
+            .with_supports_warp_key_bindings(bootstrapped_value.key_bindings_ok.unwrap_or(true)),
             launch_data: self.launch_data.take(),
             histfile: bootstrapped_value.histfile,
             user: self.user,

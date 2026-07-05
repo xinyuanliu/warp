@@ -296,6 +296,13 @@ impl DProtoHook {
                 "wsl_name" => {
                     value.wsl_name = map_empty_to_none(v);
                 }
+                "key_bindings_ok" => {
+                    value.key_bindings_ok = match v.as_str() {
+                        "1" => Some(true),
+                        "0" => Some(false),
+                        _ => v.parse::<bool>().ok(),
+                    };
+                }
                 "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field {key} to Bootstrapped hook");
@@ -682,6 +689,9 @@ pub struct BootstrappedValue {
     /// The full path to the running shell binary (e.g. "/usr/bin/zsh").
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub shell_path: Option<String>,
+
+    #[serde(default)]
+    pub key_bindings_ok: Option<bool>,
 }
 
 /// Custom serde deserializer that parses a float from a string.

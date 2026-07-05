@@ -137,6 +137,11 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     function Warp-Bootstrapped {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', 'WARP_BOOTSTRAPPED', Justification = 'False positive as we are assigning to global')]
         param([decimal]$rcStartTime, [decimal]$rcEndTime)
+        $historyPath = try {
+            (Get-PSReadLineOption).HistorySavePath
+        } catch {
+            ''
+        }
 
         $envVarNames = (Get-ChildItem env: | Select-Object -ExpandProperty Name | ForEach-Object { 'env:' + $_ }) + `
         (Get-Variable | Select-Object -ExpandProperty Name) -join ' '
@@ -219,7 +224,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             hook = 'Bootstrapped'
             value = @{
                 session_id = $global:_warpSessionId
-                histfile = $(Get-PSReadLineOption).HistorySavePath
+                histfile = $historyPath
                 shell = 'pwsh'
                 home_dir = "$HOME"
                 path = $env:PATH
@@ -238,6 +243,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 os_category = $osCategory
                 linux_distribution = "$linuxDistribution"
                 shell_path = (Get-Process -Id $PID).Path
+                key_bindings_ok = $script:warpKeyBindingsOk
             }
         }
         Warp-Send-JsonMessage $bootstrappedMsg
@@ -349,60 +355,70 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # and both $ExecutionContext.InvokeCommand.PostCommandLookupAction and Warp-Precmd where
     # it is set to $false.
     $script:commandNotFound = $false
+    $script:warpKeyBindingsOk = $true
 
     function Warp-Configure-PSReadLine {
-        # Set-PSReadLineKeyHandler is the PowerShell equivalent of zsh's bindkey.
-        Set-PSReadLineKeyHandler -Chord 'Alt+2' -Function BackwardDeleteLine
+        try {
+            # Set-PSReadLineKeyHandler is the PowerShell equivalent of zsh's bindkey.
+            Set-PSReadLineKeyHandler -Chord 'Alt+2' -Function BackwardDeleteLine
 
-        # Input reporting. Note that ESC-1 is used instead of ESC-i as for all other shells. This
-        # is because PowerShell on Windows does some virtual key code translation which depends on
-        # the selected input language. On languages without an "i" on any key, this translation
-        # fails and the binding gets dropped.
-        Set-PSReadLineKeyHandler -Chord 'Alt+1' -ScriptBlock {
-            $inputBuffer = $null
-            $cursorPosition = $null
-            [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$inputBuffer, [ref]$cursorPosition)
-            $inputBufferMsg = @{
-                hook = 'InputBuffer'
-                value = @{
-                    session_id = $global:_warpSessionId
-                    buffer = $inputBuffer
+            # Input reporting. Note that ESC-1 is used instead of ESC-i as for all other shells. This
+            # is because PowerShell on Windows does some virtual key code translation which depends on
+            # the selected input language. On languages without an "i" on any key, this translation
+            # fails and the binding gets dropped.
+            Set-PSReadLineKeyHandler -Chord 'Alt+1' -ScriptBlock {
+                $inputBuffer = $null
+                $cursorPosition = $null
+                [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$inputBuffer, [ref]$cursorPosition)
+                $inputBufferMsg = @{
+                    hook = 'InputBuffer'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        buffer = $inputBuffer
+                    }
                 }
+                Warp-Send-JsonMessage $inputBufferMsg
+                [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteLine()
+                # This is triggered after precmd, so output here goes to the "early output" handler,
+                # i.e. the background block. This clears the line the cursor is on. We clear it out b/c
+                # at this point, the only stuff in the early output handler is typeahead, and that
+                # shouldn't be displayed in a background block at all. It should be in the input
+                # editor. Most shells will automatically emit the correct ANSI escape codes to delete
+                # the contents of the early output handler when we kill the line editor's buffer.
+                # However, PowerShell doesn't do this correctly due to cursor position mismatch. So,
+                # we do it manually here instead.
+                Write-Host -NoNewline "$([char]0x1b)[2K"
             }
-            Warp-Send-JsonMessage $inputBufferMsg
-            [Microsoft.PowerShell.PSConsoleReadLine]::BackwardDeleteLine()
-            # This is triggered after precmd, so output here goes to the "early output" handler,
-            # i.e. the background block. This clears the line the cursor is on. We clear it out b/c
-            # at this point, the only stuff in the early output handler is typeahead, and that
-            # shouldn't be displayed in a background block at all. It should be in the input
-            # editor. Most shells will automatically emit the correct ANSI escape codes to delete
-            # the contents of the early output handler when we kill the line editor's buffer.
-            # However, PowerShell doesn't do this correctly due to cursor position mismatch. So,
-            # we do it manually here instead.
-            Write-Host -NoNewline "$([char]0x1b)[2K"
-        }
 
-        # Sets the prompt mode to custom prompt (PS1)
-        # Is the equivalent of warp_change_prompt_modes_to_ps1 in other shells
-        Set-PSReadLineKeyHandler -Chord 'Alt+p' -ScriptBlock {
-            $env:WARP_HONOR_PS1 = '1'
-            Warp-Redraw-Prompt
-        }
-
-        # Sets the prompt mode to warp prompt
-        # Is the equivalent of warp_change_prompt_modes_to_warp_prompt in other shells
-        Set-PSReadLineKeyHandler -Chord 'Alt+w' -ScriptBlock {
-            $env:WARP_HONOR_PS1 = '0'
-            Warp-Redraw-Prompt
-        }
-
-        Set-PSReadLineOption -AddToHistoryHandler {
-            param([string]$line)
-
-            if ($line -match '^Warp-Run-GeneratorCommand') {
-                return $false
+            # Sets the prompt mode to custom prompt (PS1)
+            # Is the equivalent of warp_change_prompt_modes_to_ps1 in other shells
+            Set-PSReadLineKeyHandler -Chord 'Alt+p' -ScriptBlock {
+                $env:WARP_HONOR_PS1 = '1'
+                Warp-Redraw-Prompt
             }
-            return $true
+
+            # Sets the prompt mode to warp prompt
+            # Is the equivalent of warp_change_prompt_modes_to_warp_prompt in other shells
+            Set-PSReadLineKeyHandler -Chord 'Alt+w' -ScriptBlock {
+                $env:WARP_HONOR_PS1 = '0'
+                Warp-Redraw-Prompt
+            }
+
+            Set-PSReadLineOption -AddToHistoryHandler {
+                param([string]$line)
+
+                if ($line -match '^Warp-Run-GeneratorCommand') {
+                    return $false
+                }
+                return $true
+            }
+
+            $handlers = Get-PSReadLineKeyHandler
+            $hasInputReportingBinding = [bool]($handlers | Where-Object { $_.Key -eq 'Alt+1' -or $_.Key -eq 'Escape,1' } | Select-Object -First 1)
+            $hasKillBufferBinding = [bool]($handlers | Where-Object { ($_.Key -eq 'Alt+2' -or $_.Key -eq 'Escape,2') -and $_.Function -eq 'BackwardDeleteLine' } | Select-Object -First 1)
+            $script:warpKeyBindingsOk = $hasInputReportingBinding -and $hasKillBufferBinding
+        } catch {
+            $script:warpKeyBindingsOk = $false
         }
 
         Warp-Disable-PSPrediction

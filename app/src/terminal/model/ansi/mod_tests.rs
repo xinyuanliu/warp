@@ -811,7 +811,8 @@ fn parse_dcs_bootstrapped() {
                     "rcfiles_start_time": "1675789245.4744160175",
                     "rcfiles_end_time": "1675789246.9067308903",
                     "shell_plugins": "powerlevel10k pure",
-                    "shell_path": "/usr/local/bin/bash"
+                    "shell_path": "/usr/local/bin/bash",
+                    "key_bindings_ok": false
                 }
             }"#,
     );
@@ -850,7 +851,8 @@ fn parse_dcs_bootstrapped() {
                 os_category: None,
                 linux_distribution: None,
                 wsl_name: None,
-                shell_path: Some("/usr/local/bin/bash".to_string())
+                shell_path: Some("/usr/local/bin/bash".to_string()),
+                key_bindings_ok: Some(false)
             }
         ),
         _ => panic!("incorrect dcs value"),

@@ -96,6 +96,7 @@ pub struct PtyController<T: EventLoopSender> {
     #[cfg(not(target_family = "wasm"))]
     bootstrap_file: Option<TempBootstrapFile>,
     in_flight_native_completions_state: Option<NativeShellCompletionsState>,
+    has_unreported_user_input: bool,
 }
 
 impl<T: EventLoopSender> PtyController<T> {
@@ -176,16 +177,19 @@ impl<T: EventLoopSender> PtyController<T> {
 
         ctx.subscribe_to_model(&line_editor_status, |me, _, event, ctx| {
             if let LineEditorStatusEvent::Active = event {
-                let input_reporting_seq = me
-                    .model_event_dispatcher
-                    .as_ref(ctx)
-                    .active_session_id()
-                    .and_then(|id| me.sessions.as_ref(ctx).get(id))
-                    .and_then(|session| session.shell().input_reporting_sequence());
-                if let Some(bytes) = input_reporting_seq {
-                    me.pending_writes.push_front(PtyWrite::Bytes {
-                        bytes: Cow::Owned(bytes.to_vec()),
-                    });
+                if me.has_unreported_user_input {
+                    let input_reporting_seq = me
+                        .model_event_dispatcher
+                        .as_ref(ctx)
+                        .active_session_id()
+                        .and_then(|id| me.sessions.as_ref(ctx).get(id))
+                        .and_then(|session| session.shell().input_reporting_sequence());
+                    if let Some(bytes) = input_reporting_seq {
+                        me.pending_writes.push_front(PtyWrite::Bytes {
+                            bytes: Cow::Owned(bytes.to_vec()),
+                        });
+                    }
+                    me.has_unreported_user_input = false;
                 }
                 me.execute_next_queued_write(ctx);
             }
@@ -222,12 +226,16 @@ impl<T: EventLoopSender> PtyController<T> {
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
             in_flight_native_completions_state: None,
+            has_unreported_user_input: false,
         }
     }
 
     /// Sends bindkey to notify shell process to switch to PS1 logic for prompt
     /// with the combined prompt/command grid (we restore the saved PS1 value).
     pub fn send_switch_to_ps1_bindkey(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.active_session_supports_warp_key_bindings(ctx) {
+            return;
+        }
         self.pending_writes.push_back(PtyWrite::Bytes {
             bytes: SWITCH_TO_PS1_ESCAPE_SEQUENCE.into(),
         });
@@ -254,6 +262,9 @@ impl<T: EventLoopSender> PtyController<T> {
     /// with the combined prompt/command grid (we unset the PS1, but save the value for potential
     /// future restoration).
     pub fn send_switch_to_warp_prompt_bindkey(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.active_session_supports_warp_key_bindings(ctx) {
+            return;
+        }
         self.pending_writes.push_back(PtyWrite::Bytes {
             bytes: SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE.into(),
         });
@@ -384,9 +395,9 @@ impl<T: EventLoopSender> PtyController<T> {
     fn write_terminating_bootstrap_bytes(&mut self, ctx: &mut ModelContext<PtyController<T>>) {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                self.write_bytes(&b"\n"[..], ctx);
+                self.write_bytes_internal(&b"\n"[..], ctx);
             } else if #[cfg(target_os = "windows")] {
-                self.write_bytes(&b"\r"[..], ctx);
+                self.write_bytes_internal(&b"\r"[..], ctx);
             }
         }
     }
@@ -432,10 +443,10 @@ impl<T: EventLoopSender> PtyController<T> {
 
                 self.bootstrap_file = Some(file);
             } else {
-                self.write_bytes(&b" "[..], ctx);
-                self.write_bytes(escape_sequences::BRACKETED_PASTE_START, ctx);
-                self.write_bytes(bootstrap, ctx);
-                self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);
+                self.write_bytes_internal(&b" "[..], ctx);
+                self.write_bytes_internal(escape_sequences::BRACKETED_PASTE_START, ctx);
+                self.write_bytes_internal(bootstrap, ctx);
+                self.write_bytes_internal(escape_sequences::BRACKETED_PASTE_END, ctx);
                 self.write_terminating_bootstrap_bytes(ctx);
             }
         } else if bootstrap::is_container_subshell(pending_session_info) {
@@ -448,11 +459,11 @@ impl<T: EventLoopSender> PtyController<T> {
             for (i, chunk) in chunks.into_iter().enumerate() {
                 ctx.spawn(
                     warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),
-                    move |me, _, ctx| me.write_bytes(chunk, ctx),
+                    move |me, _, ctx| me.write_bytes_internal(chunk, ctx),
                 );
             }
         } else {
-            self.write_bytes(bootstrap, ctx);
+            self.write_bytes_internal(bootstrap, ctx);
         }
     }
 
@@ -472,13 +483,13 @@ impl<T: EventLoopSender> PtyController<T> {
             ShellType::PowerShell => {
                 let path_str = String::from_utf8_lossy(&path_to_script);
                 let escaped = ShellFamily::PowerShell.escape(&path_str).into_owned();
-                self.write_bytes(b" . ", ctx);
-                self.write_bytes(escaped.into_bytes(), ctx);
+                self.write_bytes_internal(b" . ", ctx);
+                self.write_bytes_internal(escaped.into_bytes(), ctx);
             }
             _ => {
-                self.write_bytes(b" source '", ctx);
-                self.write_bytes(path_to_script, ctx);
-                self.write_bytes(b"'", ctx);
+                self.write_bytes_internal(b" source '", ctx);
+                self.write_bytes_internal(path_to_script, ctx);
+                self.write_bytes_internal(b"'", ctx);
             }
         }
         self.write_terminating_bootstrap_bytes(ctx);
@@ -492,7 +503,7 @@ impl<T: EventLoopSender> PtyController<T> {
         _shell_type: ShellType,
         bootstrap: Cow<'static, [u8]>,
     ) {
-        self.write_bytes(bootstrap, ctx);
+        self.write_bytes_internal(bootstrap, ctx);
     }
 
     /// Handles the shell having finished bootstrapping.
@@ -555,6 +566,7 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         self.pending_writes.clear();
+        self.has_unreported_user_input = false;
         self.is_user_command_executing = true;
 
         // Send the write to the PTY event loop.
@@ -576,7 +588,7 @@ impl<T: EventLoopSender> PtyController<T> {
 
     /// Synchronously writes the EOT (End-of-Transmission) char to the PTY.
     pub fn write_end_of_transmission_char(&mut self, ctx: &mut ModelContext<Self>) {
-        self.write_bytes(&[escape_sequences::C0::EOT][..], ctx);
+        self.write_bytes_internal(&[escape_sequences::C0::EOT][..], ctx);
 
         // Consider the active block to be "started" since a user performed an action that
         // results in bytes being written to the pty. This makes the output from ctrl-d during ssh
@@ -607,6 +619,7 @@ impl<T: EventLoopSender> PtyController<T> {
         mode: &AIAgentPtyWriteMode,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.has_unreported_user_input = true;
         self.send_write_to_event_loop(
             PtyWrite::AgentInput {
                 bytes: bytes.into(),
@@ -621,6 +634,15 @@ impl<T: EventLoopSender> PtyController<T> {
     /// This should only be called for non-command input (e.g. input that should be passed through
     /// in a long-running command or in the alt screen, rather than from the input editor).
     pub fn write_bytes<B: Into<Cow<'static, [u8]>>>(
+        &mut self,
+        bytes: B,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.has_unreported_user_input = true;
+        self.write_bytes_internal(bytes, ctx);
+    }
+
+    fn write_bytes_internal<B: Into<Cow<'static, [u8]>>>(
         &mut self,
         bytes: B,
         ctx: &mut ModelContext<Self>,
@@ -654,6 +676,7 @@ impl<T: EventLoopSender> PtyController<T> {
                     command.as_str(),
                     shell_type,
                     self.is_bracketed_paste_enabled,
+                    self.active_session_supports_warp_key_bindings(ctx),
                 )),
                 true,
                 on_write_fn,
@@ -687,6 +710,7 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         if is_for_command {
+            self.has_unreported_user_input = false;
             self.line_editor_status
                 .update(ctx, |line_editor_status, ctx| {
                     line_editor_status.did_execute_command(ctx)
@@ -695,6 +719,15 @@ impl<T: EventLoopSender> PtyController<T> {
 
         self.send_message_to_event_loop(Message::Input(bytes_to_write), ctx);
         true
+    }
+
+    fn active_session_supports_warp_key_bindings(&self, ctx: &mut ModelContext<Self>) -> bool {
+        self.model_event_dispatcher
+            .as_ref(ctx)
+            .active_session_id()
+            .and_then(|id| self.sessions.as_ref(ctx).get(id))
+            .map(|session| session.shell().supports_warp_key_bindings())
+            .unwrap_or(true)
     }
 
     /// Sends a message to the event loop. If the send fails with `SendError::Disconnected`, emits
@@ -747,8 +780,13 @@ fn bytes_to_execute_command(
     command: &str,
     shell_type: ShellType,
     is_bracketed_paste_enabled: bool,
+    include_kill_bytes: bool,
 ) -> Vec<u8> {
-    let mut command_bytes = shell_type.kill_buffer_bytes().to_vec();
+    let mut command_bytes = if include_kill_bytes {
+        shell_type.kill_buffer_bytes().to_vec()
+    } else {
+        Vec::new()
+    };
     let command = match ShellFamily::from(shell_type) {
         ShellFamily::Posix if cfg!(windows) => LINEFEED_REGEX.replace_all(command, "\n"),
         ShellFamily::PowerShell => LINEFEED_REGEX.replace_all(command, "\r"),

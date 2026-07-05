@@ -92,6 +92,8 @@ pub struct Shell {
     /// redundant with `ShellLaunchData::executable_path`; for SSH sessions this
     /// is the authoritative path on the remote host.
     shell_path: Option<String>,
+
+    supports_warp_key_bindings: bool,
 }
 
 impl Shell {
@@ -108,11 +110,21 @@ impl Shell {
             options,
             plugins,
             shell_path,
+            supports_warp_key_bindings: true,
         }
+    }
+
+    pub fn with_supports_warp_key_bindings(mut self, supports_warp_key_bindings: bool) -> Self {
+        self.supports_warp_key_bindings = supports_warp_key_bindings;
+        self
     }
 
     pub fn shell_path(&self) -> &Option<String> {
         &self.shell_path
+    }
+
+    pub fn supports_warp_key_bindings(&self) -> bool {
+        self.supports_warp_key_bindings
     }
 
     pub fn shell_type(&self) -> ShellType {
@@ -164,6 +176,9 @@ impl Shell {
     /// cannot use a binding that contains the letter "i"  because it does virtual key code
     /// translation based on the current layout, and not all layouts have the letter "i".
     pub fn input_reporting_sequence(&self) -> Option<[u8; 2]> {
+        if !self.supports_warp_key_bindings {
+            return None;
+        }
         match self.shell_type {
             ShellType::PowerShell => Some([escape_sequences::C0::ESC, b'1']),
             ShellType::Fish | ShellType::Zsh => Some([escape_sequences::C0::ESC, b'i']),
