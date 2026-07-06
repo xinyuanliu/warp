@@ -991,6 +991,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::OnTheFlyStandingQueries,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
