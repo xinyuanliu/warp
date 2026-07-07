@@ -476,7 +476,6 @@ background_computer_use = []
 agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
-agent_onboarding = []
 agent_shared_sessions = []
 ask_user_question = []
 async_find = []
@@ -605,7 +604,6 @@ default = [
     "named_agents",
     "agent_tips",
     "pluggable_notifications",
-    "agent_onboarding",
     "global_search",
     "cloud_conversations",
     "list_skills",

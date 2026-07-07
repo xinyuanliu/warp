@@ -230,9 +230,6 @@ pub enum FeatureFlag {
     /// Enables the XML output system prompt for the pre-plan agent in Agent Mode.
     AgentModePrePlanXML,
 
-    /// Enables Agent Mode onboarding.
-    AgentOnboarding,
-
     /// Enables suggested rules.
     SuggestedRules,
 
