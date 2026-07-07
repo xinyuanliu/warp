@@ -102,6 +102,9 @@ impl crate::Recorder for Recorder {
         Ok(RecordingHandle {
             width,
             height,
+            // A live capture starts with no observed exit; `poll_exit` reaps the
+            // child via `try_wait` and records the kind here on early exit.
+            exit_state: std::sync::Arc::new(std::sync::Mutex::new(None)),
             path,
             started_at: Instant::now(),
             process,
@@ -112,6 +115,7 @@ impl crate::Recorder for Recorder {
         let RecordingHandle {
             width,
             height,
+            exit_state: _,
             path,
             started_at,
             mut process,

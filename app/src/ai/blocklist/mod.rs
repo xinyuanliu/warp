@@ -1,5 +1,5 @@
 //! This module contains model, controller, and view logic for Blocklist AI.
-mod action_model;
+pub(crate) mod action_model;
 pub mod agent_view;
 pub mod block;
 pub mod code_block;

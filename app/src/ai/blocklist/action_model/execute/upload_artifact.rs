@@ -18,6 +18,7 @@ use crate::{
     ai::{
         agent::{AIAgentAction, AIAgentActionResultType, AIAgentActionType, UploadArtifactResult},
         agent_sdk::artifact_upload::{FileArtifactUploadRequest, FileArtifactUploader},
+        blocklist::action_model::artifact_upload_state::ArtifactUploadState,
         blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions},
         paths::host_native_absolute_path,
     },
@@ -135,9 +136,13 @@ impl UploadArtifactExecutor {
             let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
             let server_api = ServerApiProvider::as_ref(ctx).get();
             let description = request.description.clone();
+            // Register the upload as in-flight so the driver run-tail drain waits
+            // for it before the process is torn down.
+            let upload_guard = ArtifactUploadState::global().begin();
 
             ActionExecution::new_async(
                 async move {
+                    let _upload_guard = upload_guard;
                     let uploader = FileArtifactUploader::new(ai_client, server_api);
                     let request = FileArtifactUploadRequest {
                         path: resolved_path,

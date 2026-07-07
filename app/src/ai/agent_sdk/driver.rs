@@ -50,6 +50,13 @@ use crate::ai::ambient_agents::{
     conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
 };
 use crate::ai::bedrock_credentials;
+use crate::ai::blocklist::action_model::artifact_upload_state::ArtifactUploadState;
+use crate::ai::blocklist::action_model::recording_controller::{
+    FinalizeReason, RecordingController,
+};
+use crate::ai::blocklist::action_model::recording_finalize::{
+    recording_finalize_deps, spawn_detached_finalize,
+};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
@@ -162,6 +169,9 @@ pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 /// If no follow-up status arrives within this window, the driver terminates with the
 /// original error so the CLI does not hang indefinitely.
 const AUTO_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
+/// Time budget for draining in-flight artifact uploads (recordings, screenshots,
+/// files) during the run tail before the caller triggers process termination.
+const RECORDING_UPLOAD_DRAIN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Signals to Claude child-harness hooks that Warp already owns the background
 /// message-listener lifecycle, so the plugin should reuse the shared state
 /// files instead of spawning and cleaning up its own listener.
@@ -818,6 +828,25 @@ impl AgentDriver {
         unregister_agent_event_consumer(conversation_id, ctx.model_id(), ctx);
     }
 
+    /// Finalizes any recording still active at the end of the run (the agent
+    /// finished without stopping it), spawning the stop+upload so the run-tail
+    /// drain can await it before the process is torn down.
+    fn finalize_active_recordings(&self, ctx: &mut ModelContext<Self>) {
+        let active =
+            RecordingController::handle(ctx).update(ctx, |controller, _| controller.take_active());
+        if let Some((_recording_id, conversation_id, handle)) = active {
+            let (token, ai_client, server_api) = recording_finalize_deps(ctx, conversation_id);
+            spawn_detached_finalize(
+                ctx,
+                handle,
+                FinalizeReason::AgentFinished,
+                token,
+                ai_client,
+                server_api,
+            );
+        }
+    }
+
     pub fn set_output_format(&mut self, output_format: OutputFormat) {
         self.output_format = output_format;
     }
@@ -892,6 +921,16 @@ impl AgentDriver {
                 // async it awaits (presigned URL fetch, uploads, timers) would get abandoned
                 // mid-flight. Provider cleanup is just local temp-file teardown, so it's safe
                 // to run after the send.
+                // Finalize any still-active recording (agent finished without
+                // stopping it) and drain in-flight artifact uploads before signaling
+                // the caller — process termination on receipt abandons async work.
+                let _ = foreground
+                    .spawn(|me, ctx| me.finalize_active_recordings(ctx))
+                    .await;
+                ArtifactUploadState::global()
+                    .drain(RECORDING_UPLOAD_DRAIN_TIMEOUT)
+                    .await;
+
                 Self::run_snapshot_upload(&foreground).await;
 
                 if tx.send(result).is_err() {

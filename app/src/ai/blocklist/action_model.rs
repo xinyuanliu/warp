@@ -12,9 +12,11 @@
 //! example, the input should be hidden if there is a pending AI requested command that requires
 //! action from the user.
 
+pub(crate) mod artifact_upload_state;
 mod execute;
 mod preprocess;
 pub(crate) mod recording_controller;
+pub(crate) mod recording_finalize;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;

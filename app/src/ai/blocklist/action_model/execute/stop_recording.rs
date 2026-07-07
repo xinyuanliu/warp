@@ -1,4 +1,7 @@
 #[cfg(not(target_family = "wasm"))]
+use std::sync::Arc;
+
+#[cfg(not(target_family = "wasm"))]
 use ai::agent::action_result::{RecordingStopped, StopRecordingResult};
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -12,22 +15,43 @@ use crate::ai::agent::AIAgentActionType;
 use crate::{
     ai::{
         agent::AIAgentActionResultType,
-        agent_sdk::artifact_upload::{FileArtifactUploadRequest, FileArtifactUploader},
+        blocklist::action_model::artifact_upload_state::ArtifactUploadState,
         blocklist::action_model::recording_controller::{
-            RecordingController, StopRecordingControllerError,
+            FinalizeReason, RecordingController, StopRecordingControllerError,
+        },
+        blocklist::action_model::recording_finalize::{
+            finalize_recording, RealRecordingUploader, RecordingTerminalOutcome, RecordingUploader,
         },
         blocklist::BlocklistAIHistoryModel,
     },
     server::server_api::ServerApiProvider,
 };
 
+/// Maps a finalize outcome to the `stop_recording` tool-call result.
 #[cfg(not(target_family = "wasm"))]
-fn format_stop_recording_error(err: &anyhow::Error) -> String {
-    let error_chain = format!("{err:#}");
-    if error_chain != err.to_string() {
-        format!("Recording upload failed: {error_chain}")
-    } else {
-        error_chain
+fn stop_recording_result_from_outcome(outcome: RecordingTerminalOutcome) -> StopRecordingResult {
+    match outcome {
+        RecordingTerminalOutcome::Published {
+            artifact_uid,
+            duration,
+            width_px,
+            height_px,
+            size_bytes,
+            completion_status,
+            termination_reason,
+        } => StopRecordingResult::Success(RecordingStopped {
+            artifact_uid,
+            duration,
+            width_px,
+            height_px,
+            size_bytes,
+            completion_status,
+            termination_reason,
+        }),
+        RecordingTerminalOutcome::Discarded { termination_reason } => {
+            StopRecordingResult::Error(termination_reason)
+        }
+        RecordingTerminalOutcome::Failed { error } => StopRecordingResult::Error(error),
     }
 }
 
@@ -97,56 +121,25 @@ impl StopRecordingExecutor {
 
             let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
             let server_api = ServerApiProvider::as_ref(ctx).get();
+            let uploader: Arc<dyn RecordingUploader> =
+                Arc::new(RealRecordingUploader::new(ai_client, server_api));
+            // Register the upload as in-flight synchronously so a concurrent run-tail
+            // drain waits for it even if this action is cancelled mid-upload.
+            let upload_guard = ArtifactUploadState::global().begin();
+            let recorder = computer_use::create_recorder();
 
             ActionExecution::new_async(
                 async move {
-                    let recorder = computer_use::create_recorder();
-                    let output = match recorder.stop(handle).await {
-                        Ok(output) => output,
-                        Err(error) => return StopRecordingResult::Error(error.to_string()),
-                    };
-
-                    // The local file is an implementation detail; publish it and
-                    // delete it so results only ever carry the artifact ref.
-                    let local_path = output.path.clone();
-                    let uploader = FileArtifactUploader::new(ai_client, server_api);
-                    let request = FileArtifactUploadRequest {
-                        path: output.path,
-                        run_id: None,
-                        conversation_id: Some(server_conversation_token),
-                        description: None,
-                    };
-                    let upload_result = async {
-                        let association = uploader.resolve_upload_association(&request).await?;
-                        uploader.upload_with_association(request, association).await
-                    }
+                    let outcome = finalize_recording(
+                        recorder,
+                        uploader,
+                        upload_guard,
+                        handle,
+                        FinalizeReason::StoppedByAgent,
+                        Some(server_conversation_token),
+                    )
                     .await;
-                    // TODO(vkodithala): Retain or retry the local file if upload fails.
-                    let _ = std::fs::remove_file(&local_path);
-
-                    match upload_result {
-                        Ok(upload) => {
-                            let completion_status = output.completion_status;
-                            let termination_reason = match completion_status {
-                                computer_use::RecordingCompletionStatus::Completed => {
-                                    "Stopped by agent".to_string()
-                                }
-                                computer_use::RecordingCompletionStatus::StoppedEarly => {
-                                    "Recording stopped before the agent requested it".to_string()
-                                }
-                            };
-                            StopRecordingResult::Success(RecordingStopped {
-                                artifact_uid: upload.artifact.artifact_uid,
-                                duration: output.duration,
-                                width_px: output.width as i32,
-                                height_px: output.height as i32,
-                                size_bytes: output.size_bytes as i64,
-                                completion_status,
-                                termination_reason,
-                            })
-                        }
-                        Err(err) => StopRecordingResult::Error(format_stop_recording_error(&err)),
-                    }
+                    stop_recording_result_from_outcome(outcome)
                 },
                 |result, _ctx| AIAgentActionResultType::StopRecording(result),
             )

@@ -6,9 +6,14 @@ mod imp;
 mod noop;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
+/// In-memory recorder for tests; off-Linux only, where the real capture fields
+/// on [`RecordingHandle`] are absent.
+#[cfg(all(feature = "test-util", not(linux)))]
+pub mod testing;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -238,12 +243,29 @@ impl Default for RecordingConfig {
     }
 }
 
+/// Why an in-progress capture ended on its own, observed by polling the handle.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RecordingExitKind {
+    /// ffmpeg stopped itself at the configured duration or size cap.
+    LimitReached,
+    /// The capture process exited unexpectedly (crash or external kill).
+    Crashed,
+}
+
+/// Shared flag set once a capture is observed to have exited on its own. Shared so
+/// a watcher can observe the exit without owning the process.
+pub type RecordingExitState = Arc<Mutex<Option<RecordingExitKind>>>;
+
 /// An opaque handle to an in-progress recording, returned by [`Recorder::start`]
 /// and consumed by [`Recorder::stop`]. It owns the live capture process and the
 /// metadata needed to report the applied capture settings.
 pub struct RecordingHandle {
     width: u32,
     height: u32,
+    /// Set once the capture process is observed to have exited on its own (cap or
+    /// crash). Shared so a watcher can poll for early exit without owning the
+    /// process; the real recorder also updates it from `try_wait` in `poll_exit`.
+    exit_state: RecordingExitState,
     // The live capture process plus the fields used to finalize it are only
     // populated by the real Linux recorder; the no-op recorders never construct
     // a handle.
@@ -264,6 +286,51 @@ impl RecordingHandle {
     /// The applied capture height in pixels.
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// Returns the exit kind if the capture process has already ended on its own,
+    /// consulting the shared flag and (on the real recorder) reaping the child.
+    /// Cheap and non-blocking; intended to be polled on an interval by a watcher.
+    pub fn poll_exit(&mut self) -> Option<RecordingExitKind> {
+        if let Some(kind) = *self
+            .exit_state
+            .lock()
+            .expect("recording exit_state poisoned")
+        {
+            return Some(kind);
+        }
+        #[cfg(linux)]
+        {
+            if let Ok(Some(status)) = self.process.try_wait() {
+                let kind = if status.success() {
+                    RecordingExitKind::LimitReached
+                } else {
+                    RecordingExitKind::Crashed
+                };
+                *self
+                    .exit_state
+                    .lock()
+                    .expect("recording exit_state poisoned") = Some(kind);
+                return Some(kind);
+            }
+        }
+        None
+    }
+}
+
+#[cfg(all(feature = "test-util", not(linux)))]
+impl RecordingHandle {
+    /// Builds a handle for tests, returning a clone of the shared exit flag so a
+    /// test can simulate the capture process exiting mid-recording. Only compiled
+    /// off-Linux, where the real capture fields are absent.
+    pub fn new_test(width: u32, height: u32) -> (Self, RecordingExitState) {
+        let exit_state: RecordingExitState = Arc::new(Mutex::new(None));
+        let handle = Self {
+            width,
+            height,
+            exit_state: exit_state.clone(),
+        };
+        (handle, exit_state)
     }
 }
 

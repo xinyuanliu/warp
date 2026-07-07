@@ -10,6 +10,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::AIAgentActionType;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::action_model::recording_finalize::spawn_recording_exit_watcher;
 
 pub struct StartRecordingExecutor;
 
@@ -35,7 +36,10 @@ impl StartRecordingExecutor {
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
-        let ExecuteActionInput { action, .. } = input;
+        let ExecuteActionInput {
+            action,
+            conversation_id,
+        } = input;
         let AIAgentActionType::StartRecording {
             frame_rate,
             max_duration,
@@ -75,14 +79,17 @@ impl StartRecordingExecutor {
                 };
                 recorder.start(config).await
             },
-            |result, ctx| match result {
+            move |result, ctx| match result {
                 Ok(handle) => {
                     let recording_id = Uuid::new_v4().to_string();
                     let started_at = SystemTime::now();
                     let width_px = handle.width() as i32;
                     let height_px = handle.height() as i32;
-                    RecordingController::handle(ctx).update(ctx, |controller, _| {
-                        controller.finish_start(recording_id.clone(), handle);
+                    RecordingController::handle(ctx).update(ctx, |controller, ctx| {
+                        controller.finish_start(recording_id.clone(), conversation_id, handle);
+                        // Watch for an early capture exit (duration/size cap or crash)
+                        // so it is finalized and published without waiting for stop_recording.
+                        spawn_recording_exit_watcher(recording_id.clone(), ctx);
                     });
                     AIAgentActionResultType::StartRecording(StartRecordingResult::Success(
                         RecordingStarted {

@@ -91,7 +91,12 @@ use crate::ai::agent::{
     FileLocations, ServerOutputId,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::action_model::recording_controller::{
+    FinalizeReason, RecordingController,
+};
+use crate::ai::blocklist::action_model::recording_finalize::{
+    recording_finalize_deps, spawn_detached_finalize,
+};
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(feature = "local_fs")]
 use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
@@ -953,6 +958,30 @@ impl BlocklistAIActionExecutor {
             .collect::<Vec<_>>();
         for action_id in action_ids {
             self.cancel_running_async_action(&action_id, reason, ctx);
+        }
+
+        // An active recording is not tracked as an async action, so the loop
+        // above misses it. Finalize it (or release a start that is racing with
+        // cancellation) so a cancelled/preempted conversation never orphans a
+        // live capture.
+        let taken = RecordingController::handle(ctx).update(ctx, |controller, _| {
+            if controller.is_starting() {
+                controller.abort_start();
+                None
+            } else {
+                controller.take_for_conversation(conversation_id)
+            }
+        });
+        if let Some((_recording_id, handle)) = taken {
+            let (token, ai_client, server_api) = recording_finalize_deps(ctx, conversation_id);
+            spawn_detached_finalize(
+                ctx,
+                handle,
+                FinalizeReason::Cancelled,
+                token,
+                ai_client,
+                server_api,
+            );
         }
     }
 
