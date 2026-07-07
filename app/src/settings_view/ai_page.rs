@@ -703,6 +703,7 @@ pub struct AISettingsPageView {
 
     base_model_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     coding_model_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    orchestration_worker_model_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
 
     context_window_slider_state: SliderStateHandle,
     context_window_editor: ViewHandle<EditorView>,
@@ -842,6 +843,15 @@ impl AISettingsPageView {
             dropdown
         });
         Self::refresh_base_model_menu(&base_model_dropdown, ctx);
+
+        let orchestration_worker_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            dropdown
+        });
+        Self::refresh_orchestration_worker_model_menu(&orchestration_worker_model_dropdown, ctx);
 
         let initial_context_window_value = Self::initial_context_window_value(ctx);
         let clamped_initial = Self::configurable_context_window(ctx)
@@ -1093,6 +1103,10 @@ impl AISettingsPageView {
             // Re-render if teams-related data changed that may affect whether features such as voice input are enabled.
             Self::refresh_base_model_menu(&me.base_model_dropdown, ctx);
             Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
+            Self::refresh_orchestration_worker_model_menu(
+                &me.orchestration_worker_model_dropdown,
+                ctx,
+            );
             me.sync_custom_endpoint_buttons(ctx);
             ctx.notify();
         });
@@ -1147,6 +1161,10 @@ impl AISettingsPageView {
                 LLMPreferencesEvent::UpdatedAvailableLLMs => {
                     Self::refresh_base_model_menu(&me.base_model_dropdown, ctx);
                     Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
+                    Self::refresh_orchestration_worker_model_menu(
+                        &me.orchestration_worker_model_dropdown,
+                        ctx,
+                    );
                     me.sync_context_window_editor(ctx, false);
                 }
                 LLMPreferencesEvent::UpdatedActiveAgentModeLLM => {
@@ -1163,6 +1181,10 @@ impl AISettingsPageView {
         ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |me, _model, _event, ctx| {
             Self::refresh_base_model_menu(&me.base_model_dropdown, ctx);
             Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
+            Self::refresh_orchestration_worker_model_menu(
+                &me.orchestration_worker_model_dropdown,
+                ctx,
+            );
             me.sync_context_window_editor(ctx, false);
             me.sync_custom_endpoint_buttons(ctx);
             // Driving the prompt off the key-store update (rather than the editor's
@@ -1244,10 +1266,20 @@ impl AISettingsPageView {
                     );
                     Self::refresh_base_model_menu(&me.base_model_dropdown, ctx);
                     Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
+                    Self::refresh_orchestration_worker_model_menu(
+                        &me.orchestration_worker_model_dropdown,
+                        ctx,
+                    );
                     Self::refresh_mcp_allowlist_dropdown(&me.mcp_allowlist_dropdown, ctx);
                     Self::refresh_mcp_denylist_dropdown(&me.mcp_denylist_dropdown, ctx);
                     me.sync_context_window_editor(ctx, true);
                     me.sync_custom_endpoint_buttons(ctx);
+                }
+                AISettingsChangedEvent::OrchestrationWorkerModel { .. } => {
+                    Self::refresh_orchestration_worker_model_menu(
+                        &me.orchestration_worker_model_dropdown,
+                        ctx,
+                    );
                 }
                 AISettingsChangedEvent::VoiceInputEnabled { .. } => {
                     me.update_voice_input_dropdown_enablement(ctx);
@@ -1700,6 +1732,10 @@ impl AISettingsPageView {
             }
             Self::refresh_base_model_menu(&me.base_model_dropdown, ctx);
             Self::refresh_coding_model_menu(&me.coding_model_dropdown, ctx);
+            Self::refresh_orchestration_worker_model_menu(
+                &me.orchestration_worker_model_dropdown,
+                ctx,
+            );
         });
 
         let profile_views = Self::create_profile_views(ctx);
@@ -1939,6 +1975,7 @@ impl AISettingsPageView {
             cli_agent_toolbar_inline_editor,
             base_model_dropdown,
             coding_model_dropdown,
+            orchestration_worker_model_dropdown,
             context_window_slider_state,
             context_window_editor,
             last_synced_context_window_editor_value,
@@ -3100,6 +3137,58 @@ impl AISettingsPageView {
         ctx.notify();
     }
 
+    pub fn refresh_orchestration_worker_model_menu(
+        menu: &ViewHandle<Dropdown<AISettingsPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        menu.update(ctx, |menu, ctx| {
+            let disabled_by_ai_toggle = !AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+
+            if disabled_by_ai_toggle {
+                menu.set_disabled(ctx);
+            } else {
+                menu.set_enabled(ctx);
+            }
+
+            let choices = LLMPreferences::as_ref(ctx)
+                .get_base_llm_choices_for_agent_mode(ctx)
+                .collect_vec();
+
+            let auto_item = MenuItemFields::new("Auto (inherit base model)")
+                .with_on_select_action(DropdownAction::select_action_and_close(
+                    AISettingsPageAction::SetOrchestrationWorkerModel(LLMId::from("auto")),
+                ))
+                .into_item();
+
+            let mut items = vec![auto_item];
+            items.extend(available_model_menu_items(
+                choices,
+                |llm| {
+                    DropdownAction::select_action_and_close(
+                        AISettingsPageAction::SetOrchestrationWorkerModel(llm.id.clone()),
+                    )
+                },
+                None,
+                None,
+                false,
+                false,
+                ctx,
+            ));
+            menu.set_rich_items(items, ctx);
+
+            let current = AISettings::as_ref(ctx)
+                .orchestration_worker_model
+                .value()
+                .clone();
+            menu.set_selected_by_action(
+                AISettingsPageAction::SetOrchestrationWorkerModel(LLMId::from(current)),
+                ctx,
+            );
+            ctx.notify();
+        });
+        ctx.notify();
+    }
+
     fn refresh_autonomy_dropdown_menu(
         menu: &ViewHandle<Dropdown<AISettingsPageAction>>,
         ctx: &mut ViewContext<Self>,
@@ -3592,6 +3681,7 @@ pub enum AISettingsPageAction {
     OpenExecutionProfileEditor(ClientProfileId),
     SetBaseModel(LLMId),
     SetCodingModel(LLMId),
+    SetOrchestrationWorkerModel(LLMId),
     /// Called while the user is actively dragging the context window slider.
     ContextWindowSliderDragged(u32),
     /// Called when the user commits a new context window value (slider drop or
@@ -4122,6 +4212,18 @@ impl TypedActionView for AISettingsPageView {
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.update_preferred_coding_llm(id, None, ctx);
                 });
+            }
+            AISettingsPageAction::SetOrchestrationWorkerModel(id) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .orchestration_worker_model
+                        .set_value(id.to_string(), ctx));
+                });
+                Self::refresh_orchestration_worker_model_menu(
+                    &self.orchestration_worker_model_dropdown,
+                    ctx,
+                );
+                ctx.notify();
             }
             AISettingsPageAction::ContextWindowSliderDragged(value) => {
                 if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
@@ -5593,7 +5695,25 @@ impl AgentsWidget {
                 .with_margin_bottom(8.0)
                 .finish();
 
-        let mut children = vec![model_subheader, base_model_setting];
+        let orchestration_worker_model_setting = Container::new(render_dropdown_item(
+            appearance,
+            "Orchestration worker model",
+            Some(
+                "The default model pre-selected for child agents when none is specified in the orchestration config.",
+            ),
+            None,
+            LocalOnlyIconState::Hidden,
+            (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
+            &view.orchestration_worker_model_dropdown,
+        ))
+        .with_margin_bottom(8.0)
+        .finish();
+
+        let mut children = vec![
+            model_subheader,
+            base_model_setting,
+            orchestration_worker_model_setting,
+        ];
         if let Some(context_window_setting) =
             self.render_context_window_setting(view, ai_settings, appearance, app)
         {

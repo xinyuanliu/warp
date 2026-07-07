@@ -59,6 +59,7 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
+use crate::settings::AISettings;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
@@ -263,7 +264,12 @@ fn resolve_interactive_defaults(
         let harness =
             warp_cli::agent::Harness::parse_orchestration_harness(&state.orch.harness_type);
         if matches!(harness, Some(warp_cli::agent::Harness::Oz) | None) {
-            if let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
+            // Check the user's preferred default model for orchestration workers.
+            // If it's "auto" (or empty), fall back to the conversation's base model.
+            let preferred: &str = &AISettings::as_ref(ctx).orchestration_worker_model;
+            if !preferred.is_empty() && preferred != "auto" {
+                state.orch.model_id = preferred.to_string();
+            } else if let Some(base) = block_model.base_model(ctx).map(|id| id.to_string()) {
                 state.orch.model_id = base;
             }
         }

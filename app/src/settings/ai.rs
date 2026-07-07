@@ -1066,6 +1066,21 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.model",
         description: "The default model the TUI agent uses.",
     }
+    // The default model pre-selected for orchestration child agents (GUI setting).
+    //
+    // When set to "auto" (the default), the orchestration confirmation card
+    // inherits the conversation's base model. Any other value is a specific
+    // model ID that will be pre-filled in the card's model picker.
+    orchestration_worker_model: OrchestrationWorkerModel {
+        type: String,
+        default: "auto".to_string(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.orchestration.worker_model",
+        description: "The default model used by orchestration child agents when none is specified.",
+    }
     // Whether or not the profile-level command autoexecution speedbump has been shown.
     //
     // Not a user-visible setting - we model it as a setting so we can track how often
