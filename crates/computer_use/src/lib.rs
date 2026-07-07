@@ -4,6 +4,7 @@
 #[cfg(not(noop))]
 mod imp;
 mod noop;
+mod overlay;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
 /// In-memory recorder for tests; off-Linux only, where the real capture fields
@@ -12,7 +13,7 @@ mod screenshot_utils;
 pub mod testing;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ use async_trait::async_trait;
 // module definition.
 #[cfg(noop)]
 use noop as imp;
+pub use overlay::{ActionLogEntry, DEFAULT_PILL_DURATION, OverlayKind};
 pub use pathfinder_geometry::vector::Vector2I;
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationSecondsWithFrac, serde_as};
@@ -200,6 +202,28 @@ pub fn create_recorder() -> Box<dyn Recorder> {
         Box::new(noop::Recorder::new())
     } else {
         Box::new(imp::Recorder::new())
+    }
+}
+
+/// Burns keyboard action pills into a recorded video, returning the path to the
+/// annotated file. The original file is left untouched; the caller owns cleanup
+/// of both. Real compositing (ffmpeg + libass) only runs on the Linux capture
+/// path; every other target (and any `test-util` build) returns `input`
+/// unchanged so callers can treat annotation as best-effort and upload the
+/// original on any failure.
+pub async fn burn_in_action_log(
+    input: &Path,
+    entries: &[ActionLogEntry],
+    dimensions: (u32, u32),
+) -> Result<PathBuf, RecordingError> {
+    #[cfg(all(linux, not(feature = "test-util"), not(noop)))]
+    {
+        imp::burn_in_action_log(input, entries, dimensions).await
+    }
+    #[cfg(not(all(linux, not(feature = "test-util"), not(noop))))]
+    {
+        let _ = (entries, dimensions);
+        Ok(input.to_path_buf())
     }
 }
 

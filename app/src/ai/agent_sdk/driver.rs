@@ -834,11 +834,12 @@ impl AgentDriver {
     fn finalize_active_recordings(&self, ctx: &mut ModelContext<Self>) {
         let active =
             RecordingController::handle(ctx).update(ctx, |controller, _| controller.take_active());
-        if let Some((_recording_id, conversation_id, handle)) = active {
+        if let Some((_recording_id, conversation_id, handle, actions)) = active {
             let (token, ai_client, server_api) = recording_finalize_deps(ctx, conversation_id);
             spawn_detached_finalize(
                 ctx,
                 handle,
+                actions,
                 FinalizeReason::AgentFinished,
                 token,
                 ai_client,

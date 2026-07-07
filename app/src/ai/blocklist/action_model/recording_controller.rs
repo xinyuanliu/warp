@@ -5,7 +5,11 @@
 //! from a later resumed turn), so the live handle lives here rather than in a
 //! per-call executor.
 
-use computer_use::{RecordingCompletionStatus, RecordingExitKind};
+use computer_use::{
+    ActionLogEntry, OverlayKind, RecordingCompletionStatus, RecordingExitKind,
+    DEFAULT_PILL_DURATION,
+};
+use instant::Instant;
 use thiserror::Error;
 use warpui::{Entity, SingletonEntity};
 
@@ -72,13 +76,17 @@ impl FinalizeReason {
     }
 }
 
-/// The single in-progress recording: controller id, owning conversation, and
-/// live capture handle.
+/// The single in-progress recording: controller id, owning conversation, live
+/// capture handle, and the keyboard action log accumulated while it records.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 struct ActiveRecording {
     id: String,
     conversation_id: AIConversationId,
     handle: computer_use::RecordingHandle,
+    /// When capture went live; action offsets are measured from here.
+    started_at: Instant,
+    /// Keyboard actions to burn into the video, in dispatch order.
+    actions: Vec<ActionLogEntry>,
 }
 
 /// Enforces a single active recording per client runtime and owns the
@@ -122,12 +130,29 @@ impl RecordingController {
             id: recording_id,
             conversation_id,
             handle,
+            started_at: Instant::now(),
+            actions: Vec::new(),
         });
     }
 
     /// Releases the start reservation after a failed start.
     pub fn abort_start(&mut self) {
         self.starting = false;
+    }
+
+    /// Appends a keyboard overlay entry to the active recording, timestamped
+    /// relative to capture start. No-op when nothing is recording, so callers can
+    /// record unconditionally.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn record_action(&mut self, kind: OverlayKind, label: String) {
+        if let Some(active) = self.active.as_mut() {
+            active.actions.push(ActionLogEntry {
+                offset: active.started_at.elapsed(),
+                kind,
+                label,
+                show_duration: DEFAULT_PILL_DURATION,
+            });
+        }
     }
 
     /// Removes and returns the live handle for `recording_id` (the agent-driven
@@ -137,9 +162,10 @@ impl RecordingController {
     pub fn take_handle_or_err(
         &mut self,
         recording_id: &str,
-    ) -> Result<computer_use::RecordingHandle, StopRecordingControllerError> {
+    ) -> Result<(computer_use::RecordingHandle, Vec<ActionLogEntry>), StopRecordingControllerError>
+    {
         match self.active.take() {
-            Some(active) if active.id == recording_id => Ok(active.handle),
+            Some(active) if active.id == recording_id => Ok((active.handle, active.actions)),
             other => {
                 self.active = other;
                 Err(StopRecordingControllerError::NoActiveRecording {
@@ -156,10 +182,14 @@ impl RecordingController {
     pub fn take_by_id(
         &mut self,
         recording_id: &str,
-    ) -> Option<(AIConversationId, computer_use::RecordingHandle)> {
+    ) -> Option<(
+        AIConversationId,
+        computer_use::RecordingHandle,
+        Vec<ActionLogEntry>,
+    )> {
         match self.active.take() {
             Some(active) if active.id == recording_id => {
-                Some((active.conversation_id, active.handle))
+                Some((active.conversation_id, active.handle, active.actions))
             }
             other => {
                 self.active = other;
@@ -176,10 +206,10 @@ impl RecordingController {
     pub fn take_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
-    ) -> Option<(String, computer_use::RecordingHandle)> {
+    ) -> Option<(String, computer_use::RecordingHandle, Vec<ActionLogEntry>)> {
         match self.active.take() {
             Some(active) if active.conversation_id == conversation_id => {
-                Some((active.id, active.handle))
+                Some((active.id, active.handle, active.actions))
             }
             other => {
                 self.active = other;
@@ -193,10 +223,20 @@ impl RecordingController {
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn take_active(
         &mut self,
-    ) -> Option<(String, AIConversationId, computer_use::RecordingHandle)> {
-        self.active
-            .take()
-            .map(|active| (active.id, active.conversation_id, active.handle))
+    ) -> Option<(
+        String,
+        AIConversationId,
+        computer_use::RecordingHandle,
+        Vec<ActionLogEntry>,
+    )> {
+        self.active.take().map(|active| {
+            (
+                active.id,
+                active.conversation_id,
+                active.handle,
+                active.actions,
+            )
+        })
     }
 
     /// True while a start reservation is outstanding but no recording has been

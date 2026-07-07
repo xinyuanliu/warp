@@ -4,7 +4,7 @@ mod wayland;
 mod x11;
 
 use async_trait::async_trait;
-pub use recording::Recorder;
+pub use recording::{Recorder, burn_in_action_log};
 
 use crate::{ActionResult, Options, TargetedAction};
 

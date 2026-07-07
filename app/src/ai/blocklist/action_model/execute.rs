@@ -972,11 +972,12 @@ impl BlocklistAIActionExecutor {
                 controller.take_for_conversation(conversation_id)
             }
         });
-        if let Some((_recording_id, handle)) = taken {
+        if let Some((_recording_id, handle, actions)) = taken {
             let (token, ai_client, server_api) = recording_finalize_deps(ctx, conversation_id);
             spawn_detached_finalize(
                 ctx,
                 handle,
+                actions,
                 FinalizeReason::Cancelled,
                 token,
                 ai_client,

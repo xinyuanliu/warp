@@ -124,6 +124,7 @@ pub async fn finalize_recording(
     uploader: Arc<dyn RecordingUploader>,
     _upload_guard: ArtifactUploadGuard,
     handle: computer_use::RecordingHandle,
+    actions: Vec<computer_use::ActionLogEntry>,
     reason: FinalizeReason,
     server_conversation_token: Option<ServerConversationToken>,
 ) -> RecordingTerminalOutcome {
@@ -153,22 +154,43 @@ pub async fn finalize_recording(
     let local_path = output.path.clone();
     let log_path = local_path.with_extension("log");
 
-    // TODO(recording burn-in, #3): composite click/keyboard overlays onto
-    // `local_path` here, before upload, once the overlay feature lands.
+    // Burn keyboard action pills into the video before upload. Best-effort: on
+    // any failure the original capture is uploaded unannotated (a no-labels video
+    // beats no video). The overlay file, when produced, is a sibling of the mp4.
+    let mut upload_path = local_path.clone();
+    let mut overlay_path: Option<std::path::PathBuf> = None;
+    if !actions.is_empty() {
+        match computer_use::burn_in_action_log(&local_path, &actions, (output.width, output.height))
+            .await
+        {
+            Ok(path) if path != local_path => {
+                overlay_path = Some(path.clone());
+                upload_path = path;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                log::warn!("Recording overlay burn-in failed; uploading original: {error}");
+            }
+        }
+    }
 
     let request = FileArtifactUploadRequest {
-        path: output.path,
+        path: upload_path,
         run_id: None,
         conversation_id: server_conversation_token,
         description: None,
     };
     let upload_result = uploader.upload(request).await;
 
-    // Invariant: remove the temp mp4 + sidecar log on every terminal branch.
+    // Invariant: remove the temp mp4 + sidecar log (and the overlay, if any) on
+    // every terminal branch.
     // TODO(recording upload retry, follow-on): on upload failure, retain the
     // local file and retry via the upload registry instead of discarding it.
     let _ = std::fs::remove_file(&local_path);
     let _ = std::fs::remove_file(&log_path);
+    if let Some(overlay_path) = overlay_path.as_ref() {
+        let _ = std::fs::remove_file(overlay_path);
+    }
 
     let outcome = match upload_result {
         Ok(upload) => RecordingTerminalOutcome::Published {
@@ -218,6 +240,7 @@ pub fn recording_finalize_deps(
 pub fn spawn_detached_finalize<T: Entity>(
     ctx: &mut ModelContext<T>,
     handle: computer_use::RecordingHandle,
+    actions: Vec<computer_use::ActionLogEntry>,
     reason: FinalizeReason,
     token: Option<ServerConversationToken>,
     ai_client: Arc<dyn AIClient>,
@@ -228,7 +251,7 @@ pub fn spawn_detached_finalize<T: Entity>(
     let guard = ArtifactUploadState::global().begin();
     let recorder = computer_use::create_recorder();
     ctx.spawn(
-        finalize_recording(recorder, uploader, guard, handle, reason, token),
+        finalize_recording(recorder, uploader, guard, handle, actions, reason, token),
         |_model, _outcome, _ctx| {},
     );
 }
@@ -254,7 +277,9 @@ pub fn spawn_recording_exit_watcher(
         },
         move |controller, _output, ctx| match controller.poll_active_exit(&recording_id) {
             Some(kind) => {
-                if let Some((conversation_id, handle)) = controller.take_by_id(&recording_id) {
+                if let Some((conversation_id, handle, actions)) =
+                    controller.take_by_id(&recording_id)
+                {
                     let reason = match kind {
                         computer_use::RecordingExitKind::LimitReached => {
                             FinalizeReason::LimitReached
@@ -263,7 +288,9 @@ pub fn spawn_recording_exit_watcher(
                     };
                     let (token, ai_client, server_api) =
                         recording_finalize_deps(ctx, conversation_id);
-                    spawn_detached_finalize(ctx, handle, reason, token, ai_client, server_api);
+                    spawn_detached_finalize(
+                        ctx, handle, actions, reason, token, ai_client, server_api,
+                    );
                 }
             }
             None => {

@@ -106,11 +106,11 @@ impl StopRecordingExecutor {
                 .into();
             };
 
-            let handle = RecordingController::handle(ctx).update(ctx, |controller, _| {
+            let claimed = RecordingController::handle(ctx).update(ctx, |controller, _| {
                 controller.take_handle_or_err(recording_id)
             });
-            let handle = match handle {
-                Ok(handle) => handle,
+            let (handle, actions) = match claimed {
+                Ok(claimed) => claimed,
                 Err(error) => {
                     return ActionExecution::<()>::Sync(AIAgentActionResultType::StopRecording(
                         StopRecordingResult::Error(error.to_string()),
@@ -135,6 +135,7 @@ impl StopRecordingExecutor {
                         uploader,
                         upload_guard,
                         handle,
+                        actions,
                         FinalizeReason::StoppedByAgent,
                         Some(server_conversation_token),
                     )
