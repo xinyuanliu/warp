@@ -119,7 +119,7 @@ use crate::quit_warning::UnsavedStateSummary;
 use crate::send_telemetry_from_ctx;
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
-use crate::settings::AISettings;
+use crate::settings::{AISettings, CodeSettings};
 use crate::settings_view::SettingsSection;
 use crate::terminal::cli_agent::{
     build_selection_line_range_prompt, build_selection_substring_prompt,
@@ -4950,8 +4950,11 @@ impl CodeReviewView {
             );
         }
 
-        left_section.add_child(if let Some(editor_state) = &file.editor_state {
-            if editor_state.has_unsaved_changes(app) {
+        // When auto-save is enabled, edits are persisted automatically, so the
+        // per-file unsaved dot would just flicker on and off as the user types.
+        let auto_save_enabled = *CodeSettings::as_ref(app).auto_save;
+        left_section.add_child(match file.editor_state.as_ref() {
+            Some(editor_state) if !auto_save_enabled && editor_state.has_unsaved_changes(app) => {
                 let save_keystroke = Keystroke::parse("cmdorctrl-s").unwrap_or_default();
                 let save_shortcut = save_keystroke.displayed();
                 let tooltip_text =
@@ -4963,11 +4966,8 @@ impl CodeReviewView {
                     8.,
                     appearance,
                 )
-            } else {
-                Empty::new().finish()
             }
-        } else {
-            Empty::new().finish()
+            _ => Empty::new().finish(),
         });
         left_section.add_child(
             EventHandler::new(
