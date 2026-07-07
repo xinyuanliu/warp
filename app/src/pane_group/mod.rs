@@ -4408,7 +4408,9 @@ impl PaneGroup {
         }
 
         let summary = UnsavedStateSummary::for_pane(self, pane_id, ctx);
-        if summary.should_display_warning(ctx) && ChannelState::channel() != Channel::Integration {
+        if summary.save_unsaved_code_and_should_warn(ctx)
+            && ChannelState::channel() != Channel::Integration
+        {
             log::info!("Displaying unsaved changes warning for pane");
             let confirm_self = ctx.handle();
             let show_process_self = ctx.handle();

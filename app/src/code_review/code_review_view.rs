@@ -6257,6 +6257,28 @@ impl CodeReviewView {
         }
     }
 
+    /// Flush-saves every unsaved file in the review, marking each save as an
+    /// auto-save so it stays silent (no "File saved." toast). Used when
+    /// auto-save is enabled so closing the review doesn't prompt.
+    pub fn auto_save_all_unsaved_files(&mut self, ctx: &mut ViewContext<Self>) {
+        let paths = self.get_unsaved_file_paths(ctx);
+        let editors: Vec<_> = if let CodeReviewViewState::Loaded(state) = self.state() {
+            paths
+                .iter()
+                .filter_map(|path| state.file_states.get(path))
+                .filter_map(|file_state| {
+                    file_state.editor_state.as_ref().map(|s| s.editor().clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for editor in editors {
+            editor.update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
+        }
+        self.save_files(&paths, ctx);
+    }
+
     fn save_file(&mut self, repo_relative_path: &str, ctx: &mut ViewContext<CodeReviewView>) {
         if let CodeReviewViewState::Loaded(state) = self.state() {
             if let Some(file_state) = state.file_states.get(repo_relative_path) {
@@ -7568,6 +7590,12 @@ impl BackingView for CodeReviewView {
         let unsaved_file_paths = self.get_unsaved_file_paths(ctx);
 
         if !unsaved_file_paths.is_empty() && ChannelState::channel() != Channel::Integration {
+            // With auto-save on, flush the edits silently and close without prompting.
+            if *CodeSettings::as_ref(ctx).auto_save {
+                self.auto_save_all_unsaved_files(ctx);
+                ctx.emit(CodeReviewViewEvent::Pane(PaneEvent::Close));
+                return;
+            }
             let file_names = unsaved_file_paths
                 .iter()
                 .filter_map(|path| {

@@ -999,6 +999,29 @@ impl CodeView {
         !*CodeSettings::as_ref(app).auto_save && Self::has_unsaved_changes(tab, app)
     }
 
+    /// Flush-saves every unsaved tab that has a backing file, marking each save
+    /// as an auto-save so it stays silent (no "File saved." toast). Returns
+    /// `true` if any unsaved tab could NOT be auto-saved (e.g. an untitled
+    /// buffer with no path), so callers can still warn before discarding those.
+    pub fn auto_save_all_unsaved_tabs(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let mut unsaveable_changes_remain = false;
+        for index in self.unsaved_indices(ctx) {
+            let has_backing_file = self
+                .tab_at(index)
+                .is_some_and(|tab| tab.editor_view.as_ref(ctx).file_id().is_some());
+            if has_backing_file {
+                if let Some(tab) = self.tab_at(index) {
+                    tab.editor_view
+                        .update(ctx, |editor, _| editor.mark_next_save_as_auto_save());
+                }
+                self.save_local(index, None, ctx);
+            } else {
+                unsaveable_changes_remain = true;
+            }
+        }
+        unsaveable_changes_remain
+    }
+
     /// Check whether there are unsaved changes and reset the pane title accordingly.
     fn set_title_after_content_update(&self, ctx: &mut ViewContext<Self>) {
         self.set_title(self.contains_unsaved_changes(ctx), ctx);
