@@ -16081,6 +16081,14 @@ impl Workspace {
                 self.open_code(source.clone(), *layout, *line_col, false, &[], ctx);
             }
             #[cfg(feature = "local_fs")]
+            pane_group::Event::OpenFilesInPane {
+                source,
+                additional_paths,
+                layout,
+            } => {
+                self.open_code(source.clone(), *layout, None, false, additional_paths, ctx);
+            }
+            #[cfg(feature = "local_fs")]
             pane_group::Event::PreviewCodeInWarp { source } => {
                 self.open_code(
                     source.clone(),
