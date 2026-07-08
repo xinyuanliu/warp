@@ -1006,10 +1006,16 @@ impl CodeView {
     pub fn auto_save_all_unsaved_tabs(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let mut unsaveable_changes_remain = false;
         for index in self.unsaved_indices(ctx) {
-            let has_backing_file = self
-                .tab_at(index)
-                .is_some_and(|tab| tab.editor_view.as_ref(ctx).file_id().is_some());
-            if has_backing_file {
+            // A tab can only be auto-saved if it has a backing file *and*, for
+            // remote files, its host is still connected. A disconnected remote
+            // buffer has a `file_id` but `save_local` would fail silently, so
+            // treat it as unsaveable and let the caller warn before discarding
+            // the edits.
+            let can_auto_save = self.tab_at(index).is_some_and(|tab| {
+                let editor = tab.editor_view.as_ref(ctx);
+                editor.file_id().is_some() && !editor.is_remote_disconnected(ctx)
+            });
+            if can_auto_save {
                 if let Some(tab) = self.tab_at(index) {
                     tab.editor_view
                         .update(ctx, |editor, _| editor.mark_next_save_as_auto_save());

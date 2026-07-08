@@ -1239,8 +1239,13 @@ impl LocalCodeEditorView {
         }
 
         // Mark this as an auto-save so the "File saved." toast is suppressed.
+        // If the save never starts (untitled file with no `file_id`, or a
+        // disconnected remote), clear the marker so the next manual save still
+        // shows its "File saved." toast.
         self.auto_save_in_flight = true;
-        let _ = self.save_local(ctx);
+        if self.save_local(ctx).is_err() {
+            self.auto_save_in_flight = false;
+        }
     }
 
     /// Handles application window focus changes. When the window containing this
