@@ -22,7 +22,6 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use anyhow::anyhow;
 use parking_lot::FairMutex;
 use pathfinder_color::ColorU;
 use warp_core::features::FeatureFlag;
@@ -47,7 +46,6 @@ use warpui::{
 };
 
 use super::{RichContentInsertionPosition, TerminalAction, TerminalView};
-use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::block::cli_controller::CLISubagentEvent;
 use crate::cmd_or_ctrl_shift;
 use crate::code_review::diff_state::GitDeltaPreference;
@@ -766,9 +764,9 @@ impl TerminalView {
                         match base64::engine::general_purpose::STANDARD.decode(&image.data) {
                             Ok(bytes) => bytes,
                             Err(_) => {
-                                log::error!(
-                                    "Failed to decode base64 image data for {}",
-                                    image.file_name
+                                report_error!(
+                                    "Failed to decode base64 image data",
+                                    extra: { "file_name" => %image.file_name }
                                 );
                                 continue;
                             }
@@ -854,7 +852,10 @@ impl TerminalView {
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            log::error!("Failed to stat dropped image {path_str}: {e}");
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to stat dropped image"),
+                                extra: { "path" => %path_str }
+                            );
                             continue;
                         }
                     }
@@ -862,7 +863,10 @@ impl TerminalView {
                     let bytes = match async_fs::read(&path_str).await {
                         Ok(b) => b,
                         Err(e) => {
-                            log::error!("Failed to read dropped image {path_str}: {e}");
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to read dropped image"),
+                                extra: { "path" => %path_str }
+                            );
                             continue;
                         }
                     };
@@ -1374,8 +1378,6 @@ impl View for UseAgentToolbar {
             if let Some(bg_color) = terminal_model.alt_screen().inferred_bg_color() {
                 container = container.with_background(bg_color);
             }
-        } else if terminal_model.block_list().agent_view_state().is_inline() {
-            container = container.with_background(agent_view_bg_fill(app));
         }
 
         container.finish()
@@ -1401,8 +1403,9 @@ impl TypedActionView for UseAgentToolbar {
                     .should_render_use_agent_footer_for_user_commands
                     .set_value(false, ctx)
                 {
-                    report_error!(anyhow!("{e:?}")
-                        .context("Failed to set `ShouldRenderUseAgentToolbarForUserCommands`"));
+                    report_error!(
+                        e.context("Failed to set `ShouldRenderUseAgentToolbarForUserCommands`")
+                    );
                 }
             });
         }

@@ -221,11 +221,11 @@ use crate::ai::ambient_agents::{
 };
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, fork_from_last_known_good_state_exchange_id,
-    get_agent_view_entry_block_position_id, is_in_cloud_context, AgentViewController,
-    AgentViewControllerEvent, AgentViewConversationSelection, AgentViewDisplayMode,
-    AgentViewEntryBlockParams, AgentViewEntryOrigin, AgentViewHeaderDisabledTheme,
-    AgentViewHeaderTheme, AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel,
+    fork_from_last_known_good_state_exchange_id, get_agent_view_entry_block_position_id,
+    is_in_cloud_context, AgentViewController, AgentViewControllerEvent,
+    AgentViewConversationSelection, AgentViewDisplayMode, AgentViewEntryBlockParams,
+    AgentViewEntryOrigin, AgentViewHeaderDisabledTheme, AgentViewHeaderTheme,
+    AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel,
     ExitConfirmationTrigger, GuiInputModePolicy, InlineAgentViewHeader, OrchestrationPillBar,
     ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
@@ -540,9 +540,9 @@ use crate::workspace::{
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::CustomerType;
 use crate::{
-    report_if_error, safe_error, safe_warn, send_telemetry_from_ctx, send_telemetry_on_executor,
-    send_telemetry_sync_from_ctx, AIAgentActionResultType, AIRequestUsageModel,
-    ActiveSession as WindowActiveSession,
+    report_error, report_if_error, safe_error, safe_warn, send_telemetry_from_ctx,
+    send_telemetry_on_executor, send_telemetry_sync_from_ctx, AIAgentActionResultType,
+    AIRequestUsageModel, ActiveSession as WindowActiveSession,
 };
 
 lazy_static! {
@@ -1986,7 +1986,6 @@ pub enum Event {
     ShowCloudAgentCapacityModal {
         variant: CloudAgentCapacityModalVariant,
     },
-    FreeTierLimitCheckTriggered,
     /// Emitted when the StartAgent executor needs the workspace to create
     /// a new child agent conversation in a split pane. The freshly-created
     /// child conversation id is echoed back to the executor via
@@ -5304,12 +5303,6 @@ impl TerminalView {
         event: &BlocklistAIControllerEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        if matches!(
-            event,
-            BlocklistAIControllerEvent::FreeTierLimitCheckTriggered
-        ) {
-            ctx.emit(Event::FreeTierLimitCheckTriggered);
-        }
         if let BlocklistAIControllerEvent::SentRequest { model_id, .. } = event {
             self.maybe_insert_aws_bedrock_login_banner(model_id, ctx);
         }
@@ -5897,9 +5890,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    log::error!(
-                                        "Error sending UpdateBlockAgentViewVisibility event: {e:?}"
-                                    );
+                                    report_error!(anyhow::Error::new(e).context(
+                                        "Error sending UpdateBlockAgentViewVisibility event"
+                                    ));
                                 }
                             }
                         }
@@ -5932,9 +5925,9 @@ impl TerminalView {
                                         agent_view_visibility: agent_view_visibility.into(),
                                     },
                                 ) {
-                                    log::error!(
-                                        "Error sending UpdateBlockAgentViewVisibility event: {e:?}"
-                                    );
+                                    report_error!(anyhow::Error::new(e).context(
+                                        "Error sending UpdateBlockAgentViewVisibility event"
+                                    ));
                                 }
                             }
                         }
@@ -6917,7 +6910,7 @@ impl TerminalView {
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
-            log::error!("Could not find conversation for usage footer");
+            report_error!("Could not find conversation for usage footer");
             return;
         };
 
@@ -7417,7 +7410,7 @@ impl TerminalView {
 
         // Determine DiffMode from the base branch.
         if self.current_repo_path.is_none() {
-            log::error!("Cannot insert PR comments: not in a git repository");
+            report_error!("Cannot insert PR comments: not in a git repository");
             return;
         }
 
@@ -9970,7 +9963,9 @@ impl TerminalView {
                 AliasExpansionSettings::handle(ctx).update(ctx, |settings, ctx| {
                     if let Err(e) = settings.alias_expansion_enabled.set_value(true, ctx) {
                         should_dismiss_banner = false;
-                        log::error!("Failed to enable alias expansion setting from banner: {e}");
+                        report_error!(
+                            e.context("Failed to enable alias expansion setting from banner")
+                        );
                     }
                 });
                 if should_dismiss_banner {
@@ -10187,7 +10182,8 @@ impl TerminalView {
                         conversation_id
                     }
                     Err(e) => {
-                        log::error!("Failed to enter agent view for passive code diff: {e:?}");
+                        report_error!(anyhow::Error::new(e)
+                            .context("Failed to enter agent view for passive code diff"));
                         return false;
                     }
                 }
@@ -10306,7 +10302,8 @@ impl TerminalView {
                         agent_view_visibility: agent_view_visibility.into(),
                     })
                 {
-                    log::error!("Error sending UpdateBlockAgentViewVisibility event: {e:?}");
+                    report_error!(anyhow::Error::new(e)
+                        .context("Error sending UpdateBlockAgentViewVisibility event"));
                 }
             }
         }
@@ -10483,9 +10480,9 @@ impl TerminalView {
                             if let Err(e) = ai_settings
                                 .codebase_index_speedbump_banner_dismissed_for_repo_paths
                                 .set_value(dismissed_repo_paths, ctx) {
-                                    log::error!(
-                                        "Failed to persist 'Codebase indexing speedbump banner dismissed' setting: {e}"
-                                    );
+                                    report_error!(e.context(
+                                        "Failed to persist 'Codebase indexing speedbump banner dismissed' setting"
+                                    ));
                                 }
                         });
                     }
@@ -10507,9 +10504,9 @@ impl TerminalView {
                         .codebase_index_speedbump_banner_globally_dismissed
                         .set_value(true, ctx)
                     {
-                        log::error!(
-                            "Failed to persist 'Codebase indexing speedbump banner globally dismissed' setting: {e}"
-                        );
+                        report_error!(e.context(
+                            "Failed to persist 'Codebase indexing speedbump banner globally dismissed' setting"
+                        ));
                     }
                 });
                 if let Some(banner_state) = self
@@ -11337,7 +11334,7 @@ impl TerminalView {
                 }
             });
         if has_other_blocks_in_same_conversation {
-            log::error!(
+            report_error!(
                 "Attempted to clean up and delete conversation for block with other blocks in the same conversation"
             );
             return;
@@ -12511,9 +12508,8 @@ impl TerminalView {
                             },
                             move |_, res, _| {
                                 if let Err(err) = res {
-                                    log::error!(
-                                        "Error sending UpdateFinishedCommand event: {err:?}"
-                                    );
+                                    report_error!(anyhow::Error::new(err)
+                                        .context("Error sending UpdateFinishedCommand event"));
                                 }
                             },
                         );
@@ -13555,9 +13551,9 @@ impl TerminalView {
     ) {
         let session_id = bootstrap_event.session_id;
         let Some(session) = self.sessions.as_ref(ctx).get(session_id) else {
-            log::error!(
-                "Could not find session {session_id:?} in sessions model after \
-                         being notified that the session had bootstrapped!"
+            report_error!(
+                "Could not find session in sessions model after being notified that the session had bootstrapped!",
+                extra: { "session_id" => ?session_id }
             );
             return;
         };
@@ -14582,7 +14578,9 @@ impl TerminalView {
                 .agent_mode_setup_banner_shown_for_repo_paths
                 .set_value(shown_repo_paths, ctx)
             {
-                log::error!("Failed to persist 'Agent Mode setup banner shown' setting: {e}");
+                report_error!(
+                    e.context("Failed to persist 'Agent Mode setup banner shown' setting")
+                );
             }
         });
     }
@@ -15529,9 +15527,8 @@ impl TerminalView {
                                 conversation_id
                             }
                             Err(e) => {
-                                log::error!(
-                                    "Failed to enter agent view for passive code diff: {e:?}"
-                                );
+                                report_error!(anyhow::Error::new(e)
+                                    .context("Failed to enter agent view for passive code diff"));
                                 return;
                             }
                         }
@@ -17949,7 +17946,7 @@ impl TerminalView {
             self.maybe_copy_selection_to_clipboard(ctx);
             ctx.notify();
         } else {
-            log::error!("end_selection dispatched with no pending selection");
+            report_error!("end_selection dispatched with no pending selection");
         }
     }
 
@@ -17985,7 +17982,7 @@ impl TerminalView {
 
             ctx.notify();
         } else {
-            log::error!("end_selection dispatched with no pending selection");
+            report_error!("end_selection dispatched with no pending selection");
         }
     }
 
@@ -25124,7 +25121,7 @@ impl TerminalView {
                 };
                 SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
                     if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
+                        report_error!(e.context("Error persisting notifications setting"));
                     }
                 });
 
@@ -25149,8 +25146,9 @@ impl TerminalView {
                     }
                     // Log to sentry if unknown error
                     if let RequestPermissionsOutcome::OtherError { error_message } = &outcome {
-                        log::error!(
-                            "Unknown error when requesting notification permissions. error_msg: {error_message}"
+                        report_error!(
+                            "Unknown error when requesting notification permissions",
+                            extra: { "error_message" => %error_message }
                         );
                     }
 
@@ -25181,7 +25179,7 @@ impl TerminalView {
                 };
                 SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
                     if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
+                        report_error!(e.context("Error persisting notifications setting"));
                     }
                 });
 
@@ -25887,7 +25885,7 @@ impl TerminalView {
         #[cfg(feature = "local_fs")]
         {
             let Some(working_directory_str) = self.pwd() else {
-                log::error!("No working directory found for terminal session");
+                report_error!("No working directory found for terminal session");
                 return;
             };
 
@@ -26900,9 +26898,8 @@ impl TypedActionView for TerminalView {
                                     AgentViewEntryOrigin::LongRunningCommand,
                                     ctx,
                                 ) {
-                                    log::error!(
-                                        "Failed to enter inline agent view for tag-in: {e}"
-                                    );
+                                    report_error!(anyhow::Error::new(e)
+                                        .context("Failed to enter inline agent view for tag-in"));
                                 }
                             }
                         });
@@ -28094,12 +28091,6 @@ impl View for TerminalView {
             Container::new(element)
                 .with_foreground_overlay(appearance.theme().accent_overlay())
                 .finish()
-        } else if FeatureFlag::AgentView.is_enabled()
-            && self.agent_view_controller.as_ref(app).is_fullscreen()
-        {
-            Container::new(element)
-                .with_foreground_overlay(agent_view_bg_fill(app))
-                .finish()
         } else {
             element
         };
@@ -28114,18 +28105,12 @@ impl View for TerminalView {
             && self.can_show_conversation_details_ui_from_model(&model, app);
 
         if should_show_panel {
-            // Wrap panel with agent view background for visual consistency
-            let panel_with_background =
-                Container::new(ChildView::new(&self.conversation_details_panel).finish())
-                    .with_background(agent_view_bg_fill(app))
-                    .finish();
-
             Container::new(
                 Flex::row()
                     .with_main_axis_size(warpui::elements::MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                     .with_child(Shrinkable::new(1., final_element).finish())
-                    .with_child(panel_with_background)
+                    .with_child(ChildView::new(&self.conversation_details_panel).finish())
                     .finish(),
             )
             .with_border(Border::top(1.0).with_border_fill(appearance.theme().outline()))

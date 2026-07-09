@@ -8,14 +8,16 @@ use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent, AgentInteractionMetadata,
-    AgentViewEntryOrigin, BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason,
-    CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
-    ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent,
-    ModelEvent, PtyIntent, PtyIntentEvent, ShellCommandExecutorEvent, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit,
+    detect_possible_git_repo, throttle, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
+    AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
+    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
+    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
+    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
+    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, WAKEUP_THROTTLE_PERIOD,
 };
+use warp_core::report_error;
 use warp_editor::model::CoreEditorModel;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -261,12 +263,56 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
-        ctx.subscribe_to_model(&active_session, |_, _, event, ctx| match event {
-            ActiveSessionEvent::UpdatedPwd => ctx.notify(),
+        ctx.subscribe_to_model(&active_session, |view, _, event, ctx| match event {
+            ActiveSessionEvent::UpdatedPwd => {
+                // Run repo detection so project rules and skills follow the
+                // session's working directory (the GUI's equivalent lives in
+                // `TerminalView::apply_block_metadata_update`). The first
+                // post-bootstrap precmd metadata transitions the cwd from
+                // `None` to `Some`, so this also covers the launch directory.
+                // Only the `DetectedGitRepo` event side effect is needed
+                // here, so the detection-result future is dropped.
+                if let Some(cwd) = view
+                    .active_session
+                    .as_ref(ctx)
+                    .current_working_directory()
+                    .cloned()
+                {
+                    std::mem::drop(detect_possible_git_repo(
+                        RepoDetectionSessionType::Local,
+                        &cwd,
+                        RepoDetectionSource::TerminalNavigation,
+                        ctx,
+                    ));
+                }
+                ctx.notify();
+            }
             ActiveSessionEvent::Bootstrapped => {}
         });
 
-        ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
+        // A wakeup is also how a running block becomes visible: its height is 0
+        // until the long-running render-delay timer fires and sends a wakeup
+        // (see `Block::wakeup_after_delay`). Heights are otherwise only
+        // recomputed when PTY bytes arrive, so a silent command (e.g. `sleep`)
+        // would stay invisible until it finishes. Mirror the GUI's
+        // `handle_terminal_wakeup` by throttling the stream and refreshing
+        // live block heights here.
+        ctx.spawn_stream_local(
+            throttle(WAKEUP_THROTTLE_PERIOD, wakeups_rx),
+            |view, _, ctx| {
+                {
+                    let mut model = view.terminal_model.lock();
+                    if !model.is_alt_screen_active() {
+                        model.block_list_mut().update_background_block_height();
+                        model.block_list_mut().update_active_block_height();
+                    }
+                }
+
+                ctx.notify();
+            },
+            |_, _| {},
+        );
+
         // Focus the input view so the keymap responder chain is
         // [root, session, input]: input bindings win for keys they define,
         // and unbound keys (ctrl-c) fall through to the session/root bindings.
@@ -535,7 +581,9 @@ impl TuiTerminalSessionView {
             }) {
                 Ok(conversation_id) => conversation_id,
                 Err(error) => {
-                    log::error!("Failed to create TUI conversation: {error:#}");
+                    report_error!(
+                        anyhow::Error::new(error).context("Failed to create TUI conversation")
+                    );
                     return;
                 }
             },
@@ -687,7 +735,7 @@ impl TerminalSurface for TuiTerminalSessionView {
     }
 
     fn on_pty_spawn_failed(&mut self, error: anyhow::Error, ctx: &mut ViewContext<Self>) {
-        log::error!("TUI PTY spawn failed: {error:#}");
+        report_error!(error.context("TUI PTY spawn failed"));
         ctx.notify();
     }
 }

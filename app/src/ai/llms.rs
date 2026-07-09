@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock};
 
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
 pub use ai::LLMId;
+use anyhow::Context as _;
 use parking_lot::FairMutex;
 use serde::{de, Deserialize, Serialize};
 use settings::Setting as _;
@@ -42,6 +43,98 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ByoKeySource {
+    UserProvided,
+    TeamProvided,
+}
+
+impl ByoKeySource {
+    pub fn inference_label(self) -> &'static str {
+        match self {
+            ByoKeySource::UserProvided => "Inference via User-provided API key",
+            ByoKeySource::TeamProvided => "Inference via Team-provided API key",
+        }
+    }
+}
+
+/// Returns the first-party key source that will be used for this provider.
+/// Member-provided keys win when team policy allows them; otherwise a
+/// configured team-managed key is used when available.
+pub fn first_party_key_source_for_provider(
+    provider: &LLMProvider,
+    app: &AppContext,
+) -> Option<ByoKeySource> {
+    let workspaces = UserWorkspaces::as_ref(app);
+    if workspaces.are_member_byo_keys_allowed() && is_using_api_key_for_provider(provider, app) {
+        return Some(ByoKeySource::UserProvided);
+    }
+    if is_using_team_first_party_key_for_provider(provider, app) {
+        return Some(ByoKeySource::TeamProvided);
+    }
+    None
+}
+
+pub fn is_using_first_party_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
+    first_party_key_source_for_provider(provider, app).is_some()
+}
+
+fn is_using_team_first_party_key_for_provider(provider: &LLMProvider, app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_some_and(|workspace| {
+            workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                && workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.first_party_enabled
+                            && team_byo
+                                .first_party_keys
+                                .iter()
+                                .any(|key| key.provider == *provider)
+                    })
+        })
+}
+
+pub fn byo_key_source_for_model(llm: &LLMInfo, app: &AppContext) -> Option<ByoKeySource> {
+    let is_custom_endpoint = LLMPreferences::as_ref(app)
+        .custom_llm_info_for_id(&llm.id)
+        .is_some();
+    if is_custom_endpoint && UserWorkspaces::as_ref(app).are_member_byo_endpoints_allowed() {
+        return Some(ByoKeySource::UserProvided);
+    }
+    if is_using_team_byo_endpoint_for_model(llm, app) {
+        return Some(ByoKeySource::TeamProvided);
+    }
+    first_party_key_source_for_provider(&llm.provider, app)
+}
+
+fn is_using_team_byo_endpoint_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_some_and(|workspace| {
+            workspace.billing_metadata.is_managed_byok_byoe_enabled()
+                && workspace
+                    .settings
+                    .team_byo
+                    .as_ref()
+                    .is_some_and(|team_byo| {
+                        team_byo.endpoints_enabled
+                            && team_byo.endpoints.iter().any(|endpoint| {
+                                endpoint.enabled
+                                    && endpoint.models.iter().any(|model| {
+                                        model.enabled && model.config_key == llm.id.as_str()
+                                    })
+                            })
+                    })
+        })
+}
+
+pub fn should_show_key_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+    byo_key_source_for_model(llm, app).is_some()
+}
 pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
     UserWorkspaces::as_ref(app).is_aws_bedrock_credentials_enabled(app)
         && llm
@@ -108,7 +201,7 @@ impl DisableReason {
 /// or disabled for a reason that doesn't block requests (see
 /// [`DisableReason::should_clear_preference`]).
 fn is_usable_llm(info: &LLMInfo, app: &AppContext) -> bool {
-    let has_byok_key = is_using_api_key_for_provider(&info.provider, app);
+    let has_byok_key = is_using_first_party_key_for_provider(&info.provider, app);
     info.disable_reason
         .as_ref()
         .is_none_or(|reason| !reason.should_clear_preference(has_byok_key))
@@ -391,10 +484,12 @@ impl AvailableLLMs {
             let fallback_default = choices
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("Choices should not be empty"))?;
-            log::error!(
-                "Default LLM ID {} not present in choices, falling back to first choice {}",
-                default_id,
-                fallback_default.display_name
+            report_error!(
+                "Default LLM ID not present in choices, falling back to first choice",
+                extra: {
+                    "default_id" => %default_id,
+                    "fallback_choice" => %fallback_default.display_name
+                }
             );
             default_id = fallback_default.id.clone();
         }
@@ -438,10 +533,12 @@ impl AvailableLLMs {
             .choices
             .first()
             .expect("AvailableLLMs must have at least one choice");
-        log::error!(
-            "Default LLM ID {} not present in choices, falling back to first choice {}",
-            self.default_id,
-            fallback.display_name
+        report_error!(
+            "Default LLM ID not present in choices, falling back to first choice",
+            extra: {
+                "default_id" => %self.default_id,
+                "fallback_choice" => %fallback.display_name
+            }
         );
         fallback
     }
@@ -1048,7 +1145,8 @@ impl LLMPreferences {
     }
 
     fn custom_inference_enabled(app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
+        let workspaces = UserWorkspaces::as_ref(app);
+        workspaces.is_custom_inference_enabled(app) && workspaces.are_member_byo_endpoints_allowed()
     }
 
     /// Resolves a custom model router by its `config_key`/`LLMId`.
@@ -1549,17 +1647,20 @@ impl LLMPreferences {
 
         let old = std::mem::replace(&mut self.models_by_feature, update);
 
-        match serde_json::to_string(&self.models_by_feature) {
+        match serde_json::to_string(&self.models_by_feature)
+            .context("Failed to serialize LLMs for cache")
+        {
             Ok(serialized_update) => {
                 if let Err(e) = ctx
                     .private_user_preferences()
                     .write_value(MODELS_BY_FEATURE_CACHE_KEY, serialized_update)
+                    .context("Failed to cache LLMs")
                 {
-                    log::error!("Failed to cache LLMs: {e}");
+                    report_error!(e);
                 }
             }
             Err(e) => {
-                log::error!("Failed to serialize LLMs for cache: {e}");
+                report_error!(e);
             }
         }
 

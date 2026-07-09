@@ -1,5 +1,7 @@
 //! Public app APIs used by the `warp_tui` frontend.
 
+pub use repo_metadata::repositories::RepoDetectionSource;
+
 pub use crate::ai::agent::api::ServerConversationToken;
 pub use crate::ai::agent::conversation::{
     AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
@@ -65,10 +67,12 @@ pub use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 pub use crate::terminal::shared_session::IsSharedSessionCreator;
 pub use crate::terminal::terminal_manager::BlockSpacing;
 pub use crate::terminal::view::blocklist_filter::should_show_task_in_blocklist;
-pub use crate::terminal::view::ExecuteCommandEvent;
+pub use crate::terminal::view::{ExecuteCommandEvent, WAKEUP_THROTTLE_PERIOD};
 pub use crate::terminal::{
     BlockPadding, PtyIntent, PtyIntentEvent, ShellLaunchData,
     TerminalManager as TerminalManagerTrait, TerminalModel, TerminalSurface,
 };
 pub use crate::themes::default_themes::dark_theme;
+pub use crate::throttle::throttle;
+pub use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 pub use crate::util::time_format::format_elapsed_seconds;

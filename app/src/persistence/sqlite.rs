@@ -323,9 +323,9 @@ unsafe fn init_logging() {
         );
 
         if status != sqlite3::SQLITE_OK {
-            log::error!(
-                "Error setting up SQLite logging: {}",
-                sqlite3::code_to_str(status)
+            report_error!(
+                "Error setting up SQLite logging",
+                extra: { "status" => %sqlite3::code_to_str(status) }
             );
         }
     });
@@ -430,16 +430,31 @@ fn setup_database(database_path: &Path) -> Result<SqliteConnection> {
 pub fn database_file_path_for_scope(scope: &PersistenceScope) -> PathBuf {
     match scope {
         PersistenceScope::App => app_database_file_path(),
+        PersistenceScope::Tui => tui_database_file_path(),
         PersistenceScope::RemoteServerDaemon { identity_key } => {
             remote_server_daemon_database_file_path(identity_key)
         }
     }
 }
 
+/// The database file path for the scope this process's persistence was
+/// initialized with (see [`super::current_scope`]).
+///
+/// Ad-hoc read-only connections should use this instead of hardcoding
+/// [`PersistenceScope::App`], so that a TUI process never reads the GUI's
+/// database.
+pub fn database_file_path_for_current_scope() -> PathBuf {
+    database_file_path_for_scope(&super::current_scope())
+}
+
 fn app_database_file_path() -> PathBuf {
     warp_core::paths::secure_state_dir()
         .unwrap_or_else(warp_core::paths::state_dir)
         .join(WARP_SQLITE_FILE_NAME)
+}
+
+fn tui_database_file_path() -> PathBuf {
+    warp_core::paths::tui_state_dir().join(WARP_SQLITE_FILE_NAME)
 }
 
 fn remote_server_daemon_database_file_path(identity_key: &str) -> PathBuf {

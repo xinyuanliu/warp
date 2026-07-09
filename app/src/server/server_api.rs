@@ -60,7 +60,7 @@ use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
-use crate::{settings_view, ChannelState};
+use crate::{report_error, settings_view, ChannelState};
 
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
@@ -179,6 +179,15 @@ pub enum AIApiError {
     /// between chunks, surfacing as a clean EOF.
     #[error("Response stream ended unexpectedly before completion.")]
     UnexpectedEof,
+
+    /// Synthesized client-side when a request that uses the connected Grok
+    /// subscription can't be sent because its expired OAuth token failed to
+    /// refresh. Surfaced as a terminal, user-visible error asking the user to
+    /// reconnect, rather than sending a request that would fail authentication.
+    #[error(
+        "Grok subscription token could not be refreshed. Please try reconnecting your subscription."
+    )]
+    GrokSubscriptionTokenRefreshFailed,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -320,6 +329,9 @@ impl AIApiError {
                 }
                 true
             }
+            // A failed Grok token refresh is a credential problem the user must
+            // fix by reconnecting, so retrying or resuming won't help.
+            AIApiError::GrokSubscriptionTokenRefreshFailed => false,
             // By default, attempt recovery on error.
             _ => true,
         }
@@ -337,7 +349,8 @@ impl ErrorExt for AIApiError {
             AIApiError::UnexpectedEof => true,
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
-            | AIApiError::NoContextFound => false,
+            | AIApiError::NoContextFound
+            | AIApiError::GrokSubscriptionTokenRefreshFailed => false,
         }
     }
 }
@@ -853,11 +866,14 @@ impl ServerApi {
 
                 let response = request.send().await;
                 if let Err(err) = response {
-                    log::error!("Failed to send POST request to /client/login: {err:?}");
+                    report_error!(anyhow::Error::new(err)
+                        .context("Failed to send POST request to /client/login"));
                 }
             }
             Err(err) => {
-                log::error!("Could not retrieve access token for notifying user login: {err:?}");
+                report_error!(
+                    err.context("Could not retrieve access token for notifying user login")
+                );
             }
         }
     }
