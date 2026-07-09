@@ -407,20 +407,27 @@ impl SkillManager {
                     .or_else(|| {
                         // The model sometimes calls `read_skill` with `bundled_skill_id`
                         // set to the NAME of a file-based (`.agents/skills`) skill instead
-                        // of a real bundled catalog id. Fall back to a same-named file/user
+                        // of a real bundled catalog id. Fall back to a same-named home
                         // skill for the active execution host so the read succeeds instead
                         // of surfacing a spurious `@warp-skill:<id>` error.
-                        self.file_skill_by_name_for_origin(id, path_origin)
+                        self.home_skill_by_name_for_origin(id, path_origin)
                     })
             }
         };
         skill.ok_or_else(|| ActiveSkillLookupError::for_reference(reference, path_origin))
     }
 
-    /// Finds a file-based skill by its `name` that belongs to the active
-    /// execution host. When multiple file skills share a name, selection is
+    /// Finds a **home**-scoped skill by its `name` that belongs to the active
+    /// execution host. When multiple such skills share a name, selection is
     /// deterministic: best (lowest) provider rank first, then path order.
-    fn file_skill_by_name_for_origin(
+    ///
+    /// This fallback is deliberately restricted to home skills. Project skills
+    /// are scoped to a working directory, and resolving one by name alone (across
+    /// every cached repo for the host) could read a same-named project skill from
+    /// an unrelated repository that was never advertised for the active working
+    /// directory. Home skills are working-directory-independent, so resolving them
+    /// by name cannot leak an out-of-scope skill.
+    fn home_skill_by_name_for_origin(
         &self,
         name: &str,
         path_origin: &SkillPathOrigin,
@@ -430,6 +437,7 @@ impl SkillManager {
             .iter()
             .filter(|path| path_matches_origin(path, path_origin))
             .filter_map(|path| self.skills_by_path.get(path))
+            .filter(|skill| skill.scope == SkillScope::Home)
             .min_by(|a, b| {
                 provider_rank(a.provider)
                     .cmp(&provider_rank(b.provider))
