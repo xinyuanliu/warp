@@ -11,7 +11,9 @@ use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
-use crate::terminal::input::slash_commands::SlashCommandDataSource;
+use crate::terminal::input::slash_commands::{
+    GuiSlashCommandDataSource, SlashCommandDataSource as _,
+};
 use crate::terminal::model::session::active_session::ActiveSession;
 
 /// Event emitted by the slash command model when its entry state is updated.
@@ -117,12 +119,23 @@ impl SlashCommandEntryState {
     }
 }
 
+pub fn slash_command_composition_filter(input: &str) -> Option<&str> {
+    let pending_command = input.strip_prefix('/')?;
+    let command_token = pending_command
+        .split_once(' ')
+        .map_or(pending_command, |(command, _)| command);
+    if command_token.contains('/') {
+        None
+    } else {
+        Some(pending_command)
+    }
+}
 pub struct SlashCommandModel {
     input_buffer_model: ModelHandle<InputBufferModel>,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     active_session: ModelHandle<ActiveSession>,
     state: SlashCommandEntryState,
-    data_source: ModelHandle<SlashCommandDataSource>,
+    data_source: ModelHandle<GuiSlashCommandDataSource>,
 }
 
 impl SlashCommandModel {
@@ -130,7 +143,7 @@ impl SlashCommandModel {
         buffer_model: &ModelHandle<InputBufferModel>,
         ai_input_model: &ModelHandle<BlocklistAIInputModel>,
         active_session: ModelHandle<ActiveSession>,
-        data_source: ModelHandle<SlashCommandDataSource>,
+        data_source: ModelHandle<GuiSlashCommandDataSource>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(buffer_model, |me, _, event, ctx| {
@@ -365,48 +378,43 @@ impl SlashCommandModel {
                 self.state = SlashCommandEntryState::SkillCommand(detected_skill);
             }
             _ if new.starts_with('/') => {
-                let pending_command = &new[1..];
-                if self
-                    .state
-                    .pending_command()
-                    .is_some_and(|command| command == pending_command)
-                {
-                    return;
-                }
+                let pending_command = slash_command_composition_filter(new);
+                if let Some(pending_command) = pending_command {
+                    if self
+                        .state
+                        .pending_command()
+                        .is_some_and(|command| command == pending_command)
+                    {
+                        return;
+                    }
 
-                if !FeatureFlag::AgentView.is_enabled() {
-                    // In the old modality, when composing a slash command, the input _must_ be in
-                    // AI mode; we don't respect `StaticCommand::auto_enter_ai_mode = false`. That
-                    // field is only used in the new modality.
-                    //
-                    // We don't even rely on the fact that the input is in AI mode while a slash
-                    // command is being composed, its solely used to disable error underlining.
-                    //
-                    // In the new modality, slash commands declare whether or not they are
-                    // available in terminal mode, and syntax highlighting/error underlining is
-                    // handled appropriately. I am just making this change to preserve the existing
-                    // product behavior (agent icon in NLD toggle becomes yellow).
-                    self.ai_input_model.update(ctx, |input_model, ctx| {
-                        input_model.set_input_type(
-                            InputType::AI,
-                            Some(InputTypeAutoDetectionSource::SlashCommand),
-                            ctx,
-                        );
-                    });
-                }
-
-                if pending_command
-                    .split_once(' ')
-                    .map_or(pending_command, |(command, _)| command)
-                    .contains('/')
-                {
-                    // If the user typed a second '/' in the command token (e.g., /foo/bar),
-                    // the user is likely not trying to enter or find a slash command.
-                    self.state = SlashCommandEntryState::None;
-                } else {
+                    if !FeatureFlag::AgentView.is_enabled() {
+                        // In the old modality, when composing a slash command, the input _must_ be in
+                        // AI mode; we don't respect `StaticCommand::auto_enter_ai_mode = false`. That
+                        // field is only used in the new modality.
+                        //
+                        // We don't even rely on the fact that the input is in AI mode while a slash
+                        // command is being composed, its solely used to disable error underlining.
+                        //
+                        // In the new modality, slash commands declare whether or not they are
+                        // available in terminal mode, and syntax highlighting/error underlining is
+                        // handled appropriately. I am just making this change to preserve the existing
+                        // product behavior (agent icon in NLD toggle becomes yellow).
+                        self.ai_input_model.update(ctx, |input_model, ctx| {
+                            input_model.set_input_type(
+                                InputType::AI,
+                                Some(InputTypeAutoDetectionSource::SlashCommand),
+                                ctx,
+                            );
+                        });
+                    }
                     self.state = SlashCommandEntryState::Composing {
                         filter: pending_command.to_owned(),
                     };
+                } else {
+                    // If the user typed a second '/' in the command token (e.g., /foo/bar),
+                    // the user is likely not trying to enter or find a slash command.
+                    self.state = SlashCommandEntryState::None;
                 }
             }
             _ => {
@@ -422,7 +430,7 @@ impl Entity for SlashCommandModel {
     type Event = UpdatedSlashCommandModel;
 }
 
-impl SlashCommandDataSource {
+impl GuiSlashCommandDataSource {
     // Matches `buffer` against active slash commands, returning the detected command and
     // space-delimited argument (if provided).
     //

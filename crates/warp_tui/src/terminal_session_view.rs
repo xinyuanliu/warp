@@ -2,23 +2,29 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
+use ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::{AISettings, AISettingsChangedEvent};
 use warp::tui_export::{
-    detect_possible_git_repo, AIAgentPtyWriteMode, ActiveSession, ActiveSessionEvent,
-    AgentInteractionMetadata, AgentViewEntryOrigin, BlocklistAIActionModel,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent,
-    BlocklistAIHistoryModel, BlocklistAIInputModel, CancellationReason, CommandExecutionSource,
-    ConversationSelection, ConversationSelectionHandle, ExecuteCommandEvent,
-    GetRelevantFilesController, LLMPreferences, LLMPreferencesEvent, ModelEvent, PtyIntent,
-    PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource, ShellCommandExecutorEvent,
-    TerminalModel, TerminalSurface, TerminalSurfaceInit,
+    build_slash_command_mixer, detect_possible_git_repo, throttle, AIAgentPtyWriteMode,
+    ActiveSession, ActiveSessionEvent, AgentInteractionMetadata, AgentViewEntryOrigin,
+    BlocklistAIActionModel, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIInputModel, CLISubagentController,
+    CancellationReason, ChangelogModel, ChangelogModelEvent, ChangelogRequestType,
+    CommandExecutionSource, ConversationSelection, ConversationSelectionHandle,
+    ConversationUsageTotals, ExecuteCommandEvent, GetRelevantFilesController, LLMPreferences,
+    LLMPreferencesEvent, ModelEvent, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
+    RepoDetectionSource, ShellCommandExecutorEvent, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiZeroStateDataSource, WAKEUP_THROTTLE_PERIOD,
 };
-use warp_core::report_error;
+use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
+use warp_errors::report_error;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     Modifier, TuiChildView, TuiConstrainedBox, TuiContainer, TuiElement, TuiFlex, TuiStyle, TuiText,
@@ -31,16 +37,20 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::conversation_selection::TuiConversationSelection;
 use crate::exit_confirmation::{ExitConfirmation, CTRL_C_EXIT_WINDOW};
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::TuiTranscriptView;
 use crate::transient_hint::TransientHint;
 use crate::tui_builder::TuiUiBuilder;
 use crate::ui::abbreviate_home_prefix;
-use crate::warping_indicator::render_warping_indicator;
+use crate::usage::UsageToggle;
+use crate::warping_indicator::{render_response_summary, render_warping_indicator};
+use crate::zero_state::render_zero_state;
 
 /// Width used before the first layout pass pushes the real terminal width into the editor.
 const INITIAL_INPUT_WIDTH: u16 = 80;
@@ -84,12 +94,16 @@ pub(crate) enum TuiTerminalSessionAction {
     /// conversation, else clear the input; a second press within
     /// [`CTRL_C_EXIT_WINDOW`] exits the TUI.
     Interrupt,
+    /// Click on the footer's usage entry: flips the persisted credits⇄cost
+    /// display-mode setting.
+    ToggleUsageDisplay,
 }
 
 /// The authenticated terminal/session surface rendered inside [`RootTuiView`].
 pub(crate) struct TuiTerminalSessionView {
     transcript: ViewHandle<TuiTranscriptView>,
     input_view: ViewHandle<TuiInputView>,
+    slash_commands: ModelHandle<TuiSlashCommandModel>,
     conversation_selection: ConversationSelectionHandle,
     ai_controller: ModelHandle<BlocklistAIController>,
     /// Read by the footer for the active session's working directory.
@@ -100,6 +114,8 @@ pub(crate) struct TuiTerminalSessionView {
     /// Armed by a ctrl-c press; a second press while armed exits the TUI.
     /// The footer shows [`CTRL_C_EXIT_HINT`] while armed.
     exit_confirmation: ExitConfirmation,
+    /// Credits⇄cost display state for the footer's clickable usage entry.
+    usage_toggle: UsageToggle,
     ai_input_model: ModelHandle<BlocklistAIInputModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     /// Transient notice shown in the footer's hint slot (e.g. a rejected
@@ -180,16 +196,51 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
+        let cli_subagent_controller = ctx.add_model(|ctx| {
+            CLISubagentController::new(
+                &ai_controller,
+                &action_model,
+                None,
+                model.clone(),
+                &model_events,
+                terminal_surface_id,
+                ctx,
+            )
+        });
         let transcript = ctx.add_typed_action_tui_view(|ctx| {
             TuiTranscriptView::new(
                 terminal_surface_id,
                 model.clone(),
                 action_model.clone(),
+                &model_events,
                 ctx,
             )
         });
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
+        let slash_commands_source = ctx.add_model(|ctx| {
+            TuiSlashCommandDataSource::new(
+                TuiSlashCommandDataSourceArgs {
+                    active_session: active_session.clone(),
+                    cli_subagent_controller,
+                    terminal_view_id: terminal_surface_id,
+                },
+                ctx,
+            )
+        });
+        let zero_state_source = TuiZeroStateDataSource::new(&slash_commands_source);
+        let slash_commands_mixer = ctx.add_model(|ctx| {
+            build_slash_command_mixer(slash_commands_source.clone(), zero_state_source, ctx)
+        });
+        let slash_commands = ctx.add_model(|ctx| {
+            TuiSlashCommandModel::new(
+                input_editor_model.clone(),
+                slash_commands_source,
+                slash_commands_mixer,
+                ctx,
+            )
+        });
+        ctx.subscribe_to_model(&slash_commands, |_, _, _, ctx| ctx.notify());
         // Typing after a ctrl-c press disarms the pending exit confirmation.
         // The ctrl-c buffer clear leaves the buffer empty, so the window it
         // arms survives its own clear.
@@ -227,6 +278,35 @@ impl TuiTerminalSessionView {
         );
         ctx.subscribe_to_model(&conversation_selection, |_, _, _, ctx| ctx.notify());
 
+        // The zero state's "What's new" section: fetch the changelog once at
+        // startup and re-render when it arrives. The model no-ops when a
+        // changelog is already cached; the other changelog events (request
+        // failed, image fetched) don't change what the zero state renders.
+        ChangelogModel::handle(ctx).update(ctx, |changelog, ctx| {
+            changelog.check_for_changelog(ChangelogRequestType::WindowLaunch, ctx);
+        });
+        ctx.subscribe_to_model(&ChangelogModel::handle(ctx), |_, _, event, ctx| {
+            if let ChangelogModelEvent::ChangelogRequestComplete { .. } = event {
+                ctx.notify();
+            }
+        });
+        // The zero state's version line shows the background auto-update
+        // status: re-render as the updater progresses.
+        ctx.subscribe_to_model(&TuiAutoupdater::handle(ctx), |_, _, event, ctx| {
+            let TuiAutoupdaterEvent::StatusChanged = event;
+            ctx.notify();
+        });
+        // The zero state's project section: rules/skills discovery is
+        // asynchronous, so re-render as indexed results land. `PathIndexed`
+        // accompanies every project-rules mutation (`KnownRulesChanged` is a
+        // persistence-oriented duplicate), and `GlobalRulesChanged` covers
+        // global rules, which the zero state doesn't show.
+        ctx.subscribe_to_model(&ProjectContextModel::handle(ctx), |_, _, event, ctx| {
+            if let ProjectContextModelEvent::PathIndexed = event {
+                ctx.notify();
+            }
+        });
+
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
         let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
         let model_for_shell_events = model.clone();
@@ -249,12 +329,17 @@ impl TuiTerminalSessionView {
             | ModelEvent::FinishUpdate(_) => ctx.notify(),
             _ => {}
         });
-        // The footer shows the active model and working directory: re-render
-        // when the TUI model setting changes (e.g. settings-file hot reload),
-        // when model display names arrive from the server post-login, or when
-        // the session's working directory changes.
+        // The footer shows the active model, working directory, and usage
+        // entry: re-render when the TUI model or usage-display-mode settings
+        // change (click or settings-file hot reload), when model display
+        // names arrive from the server post-login, or when the session's
+        // working directory changes.
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if let AISettingsChangedEvent::TuiAgentModel { .. } = event {
+            if matches!(
+                event,
+                AISettingsChangedEvent::TuiAgentModel { .. }
+                    | AISettingsChangedEvent::TuiUsageDisplayMode { .. }
+            ) {
                 ctx.notify();
             }
         });
@@ -289,8 +374,49 @@ impl TuiTerminalSessionView {
             }
             ActiveSessionEvent::Bootstrapped => {}
         });
+        // The footer's usage entry shows the selected conversation's token/cost
+        // totals: re-render when that conversation's usage metadata updates.
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |view, _, event, ctx| {
+                if let BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                    conversation_id,
+                } = event
+                {
+                    let selected = view
+                        .conversation_selection
+                        .as_ref(ctx)
+                        .selected_conversation_id(ctx);
+                    if selected == Some(*conversation_id) {
+                        ctx.notify();
+                    }
+                }
+            },
+        );
 
-        ctx.spawn_stream_local(wakeups_rx, |_, _, ctx| ctx.notify(), |_, _| {});
+        // A wakeup is also how a running block becomes visible: its height is 0
+        // until the long-running render-delay timer fires and sends a wakeup
+        // (see `Block::wakeup_after_delay`). Heights are otherwise only
+        // recomputed when PTY bytes arrive, so a silent command (e.g. `sleep`)
+        // would stay invisible until it finishes. Mirror the GUI's
+        // `handle_terminal_wakeup` by throttling the stream and refreshing
+        // live block heights here.
+        ctx.spawn_stream_local(
+            throttle(WAKEUP_THROTTLE_PERIOD, wakeups_rx),
+            |view, _, ctx| {
+                {
+                    let mut model = view.terminal_model.lock();
+                    if !model.is_alt_screen_active() {
+                        model.block_list_mut().update_background_block_height();
+                        model.block_list_mut().update_active_block_height();
+                    }
+                }
+
+                ctx.notify();
+            },
+            |_, _| {},
+        );
+
         // Focus the input view so the keymap responder chain is
         // [root, session, input]: input bindings win for keys they define,
         // and unbound keys (ctrl-c) fall through to the session/root bindings.
@@ -299,11 +425,13 @@ impl TuiTerminalSessionView {
         Self {
             transcript,
             input_view,
+            slash_commands,
             conversation_selection,
             ai_controller,
             active_session,
             terminal_surface_id,
             exit_confirmation: ExitConfirmation::default(),
+            usage_toggle: UsageToggle::default(),
             ai_input_model,
             terminal_model: model,
             transient_hint: TransientHint::default(),
@@ -427,20 +555,7 @@ impl TuiTerminalSessionView {
         footer = footer
             .flex_child(TuiFlex::row().finish())
             .child(TuiText::new(model_name).truncate().finish());
-        // The session's cwd only arrives once shell metadata flows (warpified
-        // sessions); until then fall back to the process cwd the TUI's shell
-        // was spawned with.
-        let cwd = self
-            .active_session
-            .as_ref(ctx)
-            .current_working_directory()
-            .cloned()
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|cwd| cwd.to_string_lossy().into_owned())
-            });
-        if let Some(cwd) = cwd {
+        if let Some(cwd) = self.current_working_directory(ctx) {
             footer = footer.child(
                 TuiText::new(format!(" {}", abbreviate_home_prefix(&cwd)))
                     .with_style(dim)
@@ -448,7 +563,65 @@ impl TuiTerminalSessionView {
                     .finish(),
             );
         }
+        // Usage entry: the selected conversation's credits/cost totals,
+        // hidden until any usage has been reported. The displayed unit is the
+        // persisted `agents.usage_display_mode` setting; a click dispatches
+        // the toggle action (the element pass cannot write settings
+        // directly).
+        if let Some(totals) = self.selected_conversation_usage_totals(ctx) {
+            let mode = AISettings::as_ref(ctx).usage_display_mode;
+            footer = footer
+                .child(TuiText::new(" • ").with_style(dim).truncate().finish())
+                .child(
+                    self.usage_toggle
+                        .render_entry(mode, totals, |event_ctx, _| {
+                            event_ctx.dispatch_typed_action(
+                                TuiTerminalSessionAction::ToggleUsageDisplay,
+                            );
+                        }),
+                );
+        }
         footer
+    }
+
+    /// Flips the footer usage entry's persisted credits⇄cost display mode.
+    /// The settings-changed event re-renders every subscribed surface.
+    fn toggle_usage_display(&mut self, ctx: &mut ViewContext<Self>) {
+        let next = AISettings::as_ref(ctx).usage_display_mode.toggled();
+        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            if let Err(error) = settings.usage_display_mode.set_value(next, ctx) {
+                report_error!("failed to persist the TUI usage display mode: {error:#}");
+            }
+        });
+    }
+
+    /// The selected conversation's accumulated usage totals, or `None` (entry
+    /// hidden) until any usage has been reported.
+    fn selected_conversation_usage_totals(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ConversationUsageTotals> {
+        let totals = self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)?
+            .usage_totals();
+        (totals != ConversationUsageTotals::default()).then_some(totals)
+    }
+
+    /// The session's working directory. The cwd only arrives once shell
+    /// metadata flows (warpified sessions); until then fall back to the
+    /// process cwd the TUI's shell was spawned with.
+    fn current_working_directory(&self, ctx: &AppContext) -> Option<String> {
+        self.active_session
+            .as_ref(ctx)
+            .current_working_directory()
+            .cloned()
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|cwd| cwd.to_string_lossy().into_owned())
+            })
     }
 
     /// Whether the input is in `!` shell mode (locked shell input).
@@ -639,6 +812,7 @@ impl TuiView for TuiTerminalSessionView {
     }
 
     fn render(&self, ctx: &AppContext) -> Box<dyn TuiElement> {
+        let _slash_commands_open = self.slash_commands.as_ref(ctx).is_open();
         // The border takes the shell-mode accent while in shell mode.
         let builder = TuiUiBuilder::from_app(ctx);
         let border_style = if self.is_shell_mode(ctx) {
@@ -656,7 +830,19 @@ impl TuiView for TuiTerminalSessionView {
         // Ctrl-c (cancel/clear/exit) is handled by the keymap pass via the
         // fixed binding registered in [`Self::init`], so no element-level key
         // handling is needed here.
-        let mut column = TuiFlex::column().flex_child(TuiChildView::new(&self.transcript).finish());
+        //
+        // While the transcript has nothing to show, the zero state fills its
+        // slot; the first accepted submission produces a visible block, which
+        // swaps the transcript back in.
+        let mut column = TuiFlex::column();
+        if self.transcript.as_ref(ctx).is_empty() {
+            column = column.flex_child(render_zero_state(
+                self.current_working_directory(ctx).as_deref(),
+                ctx,
+            ));
+        } else {
+            column = column.flex_child(TuiChildView::new(&self.transcript).finish());
+        }
 
         // While the selected conversation is in progress (the GUI warping
         // indicator's core condition), the animated warping indicator sits
@@ -671,18 +857,39 @@ impl TuiView for TuiTerminalSessionView {
             .and_then(|conversation_id| {
                 BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
             });
-        if let Some(in_progress_conversation) =
-            selected_conversation.filter(|conversation| conversation.status().is_in_progress())
-        {
-            let warping_elapsed = in_progress_conversation
-                .latest_exchange()
-                .and_then(|exchange| exchange.time_since_start());
-            if let Some(elapsed) = warping_elapsed {
-                column = column.child(
-                    TuiContainer::new(render_warping_indicator(elapsed, ctx))
+        if let Some(conversation) = selected_conversation {
+            if conversation.status().is_in_progress() {
+                let warping_elapsed = conversation
+                    .latest_exchange()
+                    .and_then(|exchange| exchange.time_since_start());
+                if let Some(elapsed) = warping_elapsed {
+                    column = column.child(
+                        TuiContainer::new(render_warping_indicator(elapsed, ctx))
+                            .with_padding_top(1)
+                            .finish(),
+                    );
+                }
+            } else {
+                // Once the response completes, the indicator's slot rests on
+                // the last response's summary: `∷ {duration} • {credits}`.
+                // Wall-to-wall duration is only available once the block's
+                // final exchange finished, which also keeps the row hidden
+                // for brand-new conversations.
+                let wall_to_wall = conversation
+                    .wall_to_wall_response_time_since_last_query()
+                    .and_then(|ms| u64::try_from(ms).ok())
+                    .map(Duration::from_millis);
+                if let Some(duration) = wall_to_wall {
+                    column = column.child(
+                        TuiContainer::new(render_response_summary(
+                            duration,
+                            conversation.credits_spent_for_last_block(),
+                            ctx,
+                        ))
                         .with_padding_top(1)
                         .finish(),
-                );
+                    );
+                }
             }
         }
 
@@ -703,6 +910,7 @@ impl TypedActionView for TuiTerminalSessionView {
     fn handle_action(&mut self, action: &TuiTerminalSessionAction, ctx: &mut ViewContext<Self>) {
         match action {
             TuiTerminalSessionAction::Interrupt => self.handle_interrupt(ctx),
+            TuiTerminalSessionAction::ToggleUsageDisplay => self.toggle_usage_display(ctx),
         }
     }
 }
