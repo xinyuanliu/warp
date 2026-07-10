@@ -12,10 +12,9 @@ use crate::{IsolationPlatformError, WorkloadToken};
 pub mod spacectl {
     use std::collections::{BTreeMap, BTreeSet};
     use std::ffi::OsString;
-    use std::fmt;
-    use std::io;
     use std::path::{Path, PathBuf};
     use std::process::ExitStatus;
+    use std::{fmt, io};
 
     use command::r#async::Command;
     use serde::Deserialize;

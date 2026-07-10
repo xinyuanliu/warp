@@ -1,5 +1,3 @@
-use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine as _};
-use chrono::{TimeZone, Utc};
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::fs;
@@ -8,6 +6,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
+
+use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine as _};
+use chrono::{TimeZone, Utc};
 
 use super::parse_jwt_expiration;
 use super::spacectl::{
