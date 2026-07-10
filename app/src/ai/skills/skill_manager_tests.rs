@@ -930,6 +930,7 @@ fn get_skills_for_working_directory_respects_location() {
                     &SkillPathOrigin::Remote {
                         host_id: same_host_id.clone(),
                     },
+                    None,
                     ctx,
                 )
                 .map(|skill| skill.content.clone())
@@ -940,6 +941,7 @@ fn get_skills_for_working_directory_respects_location() {
                 .active_skill_by_reference_with_origin(
                     &remote_bundled_descriptor.reference,
                     &SkillPathOrigin::Local,
+                    None,
                     ctx,
                 )
                 .map(|skill| skill.content.clone())
@@ -1205,6 +1207,7 @@ fn active_skill_by_reference_with_origin_returns_typed_lookup_errors() {
                 .active_skill_by_reference_with_origin(
                     &reference,
                     &SkillPathOrigin::Unavailable,
+                    None,
                     ctx,
                 )
                 .unwrap_err()
@@ -1216,7 +1219,12 @@ fn active_skill_by_reference_with_origin_returns_typed_lookup_errors() {
 
         let not_found_error = handle.read(&app, |manager, ctx| {
             manager
-                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Local,
+                    None,
+                    ctx,
+                )
                 .unwrap_err()
         });
         assert_eq!(
@@ -1228,21 +1236,20 @@ fn active_skill_by_reference_with_origin_returns_typed_lookup_errors() {
 
 // Repro for the "@warp-skill:<id>" failed-read bug: the model calls read_skill
 // with `bundled_skill_id` set to the NAME of a file-based (.agents/skills) skill.
-// Today the BundledSkillId reference only consults the bundled catalog, so a
-// same-named file/user skill is not found and the read fails with a red X.
+// The BundledSkillId reference only consults the bundled catalog, so without the
+// fallback a same-named file/user skill is not found and the read fails with a
+// red X. The fallback resolves it against the skills advertised for the working
+// directory. This test FAILS before the fix (Err(NotFound)) and PASSES after.
 //
-// This test FAILS before the fix (returns Err(NotFound)) and PASSES after a
-// graceful fallback to `skills_by_name`.
+// A HOME/global skill is advertised regardless of working directory, so it
+// resolves even with no working directory.
 #[test]
-fn bundled_id_reference_falls_back_to_same_named_file_skill() {
-    let file_skill = ParsedSkill {
+fn bundled_id_reference_falls_back_to_same_named_home_skill() {
+    let home_dir = LocalOrRemotePath::Local(dirs::home_dir().unwrap());
+    let home_skill = ParsedSkill {
         name: "spec-driven-implementation".to_string(),
-        description: "file-based skill".to_string(),
-        path: LocalOrRemotePath::Local(
-            dirs::home_dir()
-                .unwrap()
-                .join(".agents/skills/spec-driven-implementation/SKILL.md"),
-        ),
+        description: "home skill".to_string(),
+        path: home_dir.join(".agents/skills/spec-driven-implementation/SKILL.md"),
         content: "# spec-driven-implementation".to_string(),
         line_range: None,
         provider: SkillProvider::Agents,
@@ -1250,6 +1257,14 @@ fn bundled_id_reference_falls_back_to_same_named_file_skill() {
     };
     let reference = SkillReference::BundledSkillId("spec-driven-implementation".to_string());
 
+    let mut directory_skills = HashMap::new();
+    directory_skills
+        .entry(home_dir)
+        .or_insert_with(HashSet::new)
+        .insert(home_skill.path.clone());
+    let mut skills_by_path = HashMap::new();
+    skills_by_path.insert(home_skill.path.clone(), home_skill);
+
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
         app.add_singleton_model(AISettings::new_with_defaults);
@@ -1260,12 +1275,18 @@ fn bundled_id_reference_falls_back_to_same_named_file_skill() {
         let handle = app.add_singleton_model(SkillManager::new);
 
         handle.update(&mut app, |manager, _| {
-            manager.add_skill_for_testing(file_skill.clone());
+            manager.directory_skills = directory_skills;
+            manager.skills_by_path = skills_by_path;
         });
 
         let resolved = handle.read(&app, |manager, ctx| {
             manager
-                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Local,
+                    None,
+                    ctx,
+                )
                 .map(|skill| skill.content.clone())
         });
 
@@ -1273,26 +1294,35 @@ fn bundled_id_reference_falls_back_to_same_named_file_skill() {
     });
 }
 
-// Security scoping: the bundled-id fallback must NOT resolve a same-named
-// PROJECT skill. Project skills are scoped to a working directory, so resolving
-// one by name alone could read a skill from an unrelated repo that was never
-// advertised for the active working directory. Only home skills, which are
-// working-directory-independent, may back the fallback — so a project-only match
-// must still surface NotFound.
+// Scoping for the bundled-id fallback with PROJECT skills: a project skill is
+// resolvable only when it is advertised for the active working directory (its
+// owning directory is in scope). This enables the fallback for in-scope project
+// skills while preventing a read of a same-named project skill from an unrelated
+// repository that was never advertised.
 #[test]
-fn bundled_id_reference_does_not_fall_back_to_project_skill() {
+fn bundled_id_reference_scopes_project_skill_fallback_to_working_directory() {
+    let project_dir =
+        LocalOrRemotePath::Local(std::env::temp_dir().join("skill-fallback-scope-project"));
+    let unrelated_dir =
+        LocalOrRemotePath::Local(std::env::temp_dir().join("skill-fallback-scope-unrelated"));
     let project_skill = ParsedSkill {
         name: "spec-driven-implementation".to_string(),
-        description: "project-scoped skill".to_string(),
-        path: LocalOrRemotePath::Local(std::path::PathBuf::from(
-            "/some/repo/.agents/skills/spec-driven-implementation/SKILL.md",
-        )),
+        description: "project skill".to_string(),
+        path: project_dir.join(".agents/skills/spec-driven-implementation/SKILL.md"),
         content: "# project spec-driven-implementation".to_string(),
         line_range: None,
         provider: SkillProvider::Agents,
         scope: SkillScope::Project,
     };
     let reference = SkillReference::BundledSkillId("spec-driven-implementation".to_string());
+
+    let mut directory_skills = HashMap::new();
+    directory_skills
+        .entry(project_dir.clone())
+        .or_insert_with(HashSet::new)
+        .insert(project_skill.path.clone());
+    let mut skills_by_path = HashMap::new();
+    skills_by_path.insert(project_skill.path.clone(), project_skill);
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
@@ -1304,17 +1334,57 @@ fn bundled_id_reference_does_not_fall_back_to_project_skill() {
         let handle = app.add_singleton_model(SkillManager::new);
 
         handle.update(&mut app, |manager, _| {
-            manager.add_skill_for_testing(project_skill.clone());
+            manager.directory_skills = directory_skills;
+            manager.skills_by_path = skills_by_path;
         });
 
-        let resolved = handle.read(&app, |manager, ctx| {
+        // In scope: the working directory is the project directory → resolves.
+        let in_scope = handle.read(&app, |manager, ctx| {
             manager
-                .active_skill_by_reference_with_origin(&reference, &SkillPathOrigin::Local, ctx)
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Local,
+                    Some(&project_dir),
+                    ctx,
+                )
                 .map(|skill| skill.content.clone())
         });
-
         assert_eq!(
-            resolved,
+            in_scope,
+            Ok("# project spec-driven-implementation".to_string())
+        );
+
+        // No working directory: a project skill is not advertised → NotFound.
+        let no_cwd = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Local,
+                    None,
+                    ctx,
+                )
+                .map(|skill| skill.content.clone())
+        });
+        assert_eq!(
+            no_cwd,
+            Err(ActiveSkillLookupError::NotFound {
+                reference: reference.clone()
+            })
+        );
+
+        // Unrelated working directory: the project skill is out of scope → NotFound.
+        let out_of_scope = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference_with_origin(
+                    &reference,
+                    &SkillPathOrigin::Local,
+                    Some(&unrelated_dir),
+                    ctx,
+                )
+                .map(|skill| skill.content.clone())
+        });
+        assert_eq!(
+            out_of_scope,
             Err(ActiveSkillLookupError::NotFound {
                 reference: reference.clone()
             })
@@ -1397,6 +1467,7 @@ fn remote_home_skills_are_host_scoped_replaceable_and_path_invokable() {
                             &SkillPathOrigin::Remote {
                                 host_id: host_id.clone(),
                             },
+                            None,
                             ctx,
                         )
                         .ok()
@@ -1448,6 +1519,7 @@ fn remote_home_skills_are_host_scoped_replaceable_and_path_invokable() {
                 &SkillPathOrigin::Remote {
                     host_id: first_host.clone(),
                 },
+                None,
                 ctx,
             )
             .is_err()));
@@ -1457,6 +1529,7 @@ fn remote_home_skills_are_host_scoped_replaceable_and_path_invokable() {
                 &SkillPathOrigin::Remote {
                     host_id: second_host.clone(),
                 },
+                None,
                 ctx,
             )
             .is_ok()));
