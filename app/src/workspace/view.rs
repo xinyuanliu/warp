@@ -435,6 +435,7 @@ use crate::ui_components::red_notification_dot::RedNotificationDot;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 use crate::ui_components::{blended_colors, icons};
 use crate::undo_close::UndoCloseStack;
+use crate::workspace::{PocTeam, PocTeamRegistry};
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 #[cfg(feature = "local_fs")]
@@ -1102,6 +1103,9 @@ pub struct Workspace {
     is_user_menu_open: bool,
     tab_bar_pinned_by_popup: bool,
     user_menu: ViewHandle<Menu<WorkspaceAction>>,
+    /// POC: per-window team switcher menu + open state.
+    team_switcher_menu: ViewHandle<Menu<WorkspaceAction>>,
+    is_team_switcher_menu_open: bool,
     native_modal: ViewHandle<NativeModal>,
     shared_objects_creation_denied_modal: ViewHandle<SharedObjectsCreationDeniedModal>,
     shown_staging_banner_count: u32,
@@ -3249,6 +3253,19 @@ impl Workspace {
             }
         });
 
+        // POC: per-window team switcher menu, mirroring the user menu.
+        let team_switcher_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&team_switcher_menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.is_team_switcher_menu_open = false;
+                ctx.notify();
+            }
+        });
+
         let native_modal = Self::build_native_modal_view(ctx);
 
         let shared_objects_creation_denied_modal =
@@ -3415,6 +3432,8 @@ impl Workspace {
             is_user_menu_open: false,
             tab_bar_pinned_by_popup: false,
             user_menu,
+            team_switcher_menu,
+            is_team_switcher_menu_open: false,
             native_modal,
             shared_objects_creation_denied_modal,
             file_upload_sessions: Default::default(),
@@ -9664,6 +9683,93 @@ impl Workspace {
                 self.open_worktree_in_repo(repo_path, ctx);
             }
         }
+    }
+
+    /// POC: menu items for the team switcher — one entry per hardcoded team.
+    fn team_switcher_menu_items(&self) -> Vec<MenuItem<WorkspaceAction>> {
+        PocTeam::ALL
+            .iter()
+            .map(|team| {
+                MenuItemFields::new(team.display_name())
+                    .with_on_select_action(WorkspaceAction::SwitchToTeam(*team))
+                    .into_item()
+            })
+            .collect()
+    }
+
+    /// POC: opens/closes the team switcher dropdown.
+    fn toggle_team_switcher_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        self.is_team_switcher_menu_open = !self.is_team_switcher_menu_open;
+        if self.is_team_switcher_menu_open {
+            let items = self.team_switcher_menu_items();
+            self.team_switcher_menu.update(ctx, |menu, ctx| {
+                menu.set_items(items, ctx);
+            });
+            ctx.focus(&self.team_switcher_menu);
+        }
+        ctx.notify();
+    }
+
+    /// POC: opens a new window scoped to `team` (Chrome-profile-style).
+    fn switch_to_team(&mut self, team: PocTeam, ctx: &mut ViewContext<Self>) {
+        self.is_team_switcher_menu_open = false;
+        ctx.dispatch_global_action("root_view:switch_to_team", team);
+        ctx.notify();
+    }
+
+    /// POC: save-position id for the team switcher chip so the dropdown can
+    /// anchor beneath it.
+    const TEAM_SWITCHER_POSITION_ID: &'static str = "team_switcher_chip";
+
+    /// POC: the team switcher chip, rendered as a trailing item in the header
+    /// toolbar (via `add_configurable_right_side_tab_bar_controls`) so the
+    /// surrounding controls reflow around it instead of being covered. Colored
+    /// by the window's team, like a Chrome profile window.
+    fn render_team_switcher_chip(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        let font_family = appearance.ui_font_family();
+        let team = PocTeamRegistry::as_ref(ctx).team_for_window(self.window_id);
+
+        let label = Text::new_inline(format!("{}  \u{25BE}", team.display_name()), font_family, 12.)
+            .with_color(ColorU::new(255, 255, 255, 255).into())
+            .finish();
+        let chip = Container::new(label)
+            .with_vertical_padding(4.)
+            .with_padding_left(10.)
+            .with_padding_right(10.)
+            .with_background(coloru_with_opacity(team.accent_color(), 100))
+            .finish();
+
+        SavePosition::new(
+            EventHandler::new(chip)
+                .on_left_mouse_down(|ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ToggleTeamSwitcherMenu);
+                    DispatchEventResult::StopPropagation
+                })
+                .finish(),
+            Self::TEAM_SWITCHER_POSITION_ID,
+        )
+        .finish()
+    }
+
+    /// POC: renders the open team switcher dropdown, anchored beneath the chip.
+    fn render_team_switcher_menu(&self, stack: &mut Stack) {
+        if !self.is_team_switcher_menu_open {
+            return;
+        }
+        stack.add_positioned_child(
+            ChildView::new(&self.team_switcher_menu).finish(),
+            OffsetPositioning::offset_from_save_position_element(
+                Self::TEAM_SWITCHER_POSITION_ID,
+                vec2f(0., 4.),
+                PositionedElementOffsetBounds::WindowByPosition,
+                PositionedElementAnchor::BottomRight,
+                ChildAnchor::TopRight,
+            ),
+        );
     }
 
     fn toggle_user_menu(&mut self, ctx: &mut ViewContext<Self>) {
@@ -21018,6 +21124,13 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) {
+        // POC: team switcher chip, leftmost in the right-side toolbar cluster.
+        target.add_child(
+            Container::new(self.render_team_switcher_chip(appearance, ctx))
+                .with_margin_left(TAB_BAR_PADDING_LEFT)
+                .finish(),
+        );
+
         if let Some(update_pill) = self.render_tab_overflow_menu(ctx, appearance) {
             target.add_child(
                 Container::new(update_pill)
@@ -21177,6 +21290,10 @@ impl Workspace {
             tab_bar_container = tab_bar_container
                 .with_background(internal_colors::fg_overlay_1(appearance.theme()));
         }
+        // POC: tint the tab bar with the window's team color (Chrome-profile-style).
+        let team = PocTeamRegistry::as_ref(ctx).team_for_window(self.window_id);
+        tab_bar_container =
+            tab_bar_container.with_background(coloru_with_opacity(team.accent_color(), 22));
         let tab_bar_element = tab_bar_container.finish();
 
         let dimming_color = appearance.theme().background().into();
@@ -24151,6 +24268,8 @@ impl TypedActionView for Workspace {
             ToggleShowMemoryStats => self.toggle_show_memory_stats(ctx),
             ToggleResourceCenter => self.toggle_resource_center(ctx),
             ToggleUserMenu => self.toggle_user_menu(ctx),
+            ToggleTeamSwitcherMenu => self.toggle_team_switcher_menu(ctx),
+            SwitchToTeam(team) => self.switch_to_team(*team, ctx),
             ToggleKeybindingsPage => self.toggle_keybindings_page(ctx),
             ShowCommandSearch(CommandSearchOptions {
                 filter,
@@ -26428,6 +26547,9 @@ impl View for Workspace {
         if tab_bar_mode == ShowTabBar::Stacked {
             self.maybe_render_traffic_lights(&mut stack, app);
         }
+
+        // POC: per-window team switcher dropdown (chip lives in the header toolbar).
+        self.render_team_switcher_menu(&mut stack);
 
         // Conditionally render tab bar menus. These must be added after the tab bar itself
         // (whether stacked inside panels or as an overlay) so that tab bar button save

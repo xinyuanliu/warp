@@ -89,7 +89,7 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 /// View transfers between windows are handled by `transfer_view_tree_to_window`.
 use crate::tab::tab_position_id;
 use crate::workspace::view::{tab_bar_rects_for_window, TransferredTab, TAB_BAR_POSITION_ID};
-use crate::workspace::WorkspaceRegistry;
+use crate::workspace::{PocTeamRegistry, WorkspaceRegistry};
 
 /// Identifies a window and tab-bar index where a dragged tab can be attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1851,11 +1851,18 @@ fn cross_window_attach_target(
 ) -> Option<AttachTarget> {
     let ordered_windows = WindowManager::as_ref(ctx).ordered_window_ids();
 
+    // POC: tabs can only be dropped into windows scoped to the same team
+    // (like Chrome, which won't let you drag a tab across profile windows).
+    let source_team = PocTeamRegistry::as_ref(ctx).team_for_window(source_window_id);
+
     if let Some(preview_idx) = ordered_windows
         .iter()
         .position(|id| *id == preview_window_id)
     {
         for &window_id in &ordered_windows[preview_idx + 1..] {
+            if PocTeamRegistry::as_ref(ctx).team_for_window(window_id) != source_team {
+                continue;
+            }
             let Some(window_bounds) = ctx.window_bounds(&window_id) else {
                 continue;
             };
@@ -1947,6 +1954,11 @@ fn cross_window_attach_target(
 
     for (window_id, workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
         if window_id == preview_window_id || window_id == source_window_id {
+            continue;
+        }
+
+        // POC: same-team-only cross-window drops (see note above).
+        if PocTeamRegistry::as_ref(ctx).team_for_window(window_id) != source_team {
             continue;
         }
 

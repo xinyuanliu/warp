@@ -15,6 +15,7 @@ mod home;
 mod lightbox_view;
 mod native_modal;
 mod one_time_modal_model;
+pub mod poc_team;
 mod registry;
 pub mod rewind_confirmation_dialog;
 pub mod sync_inputs;
@@ -60,6 +61,7 @@ pub fn panel_header_corner_radius() -> warpui::elements::CornerRadius {
 }
 
 pub use one_time_modal_model::OneTimeModalModel;
+pub use poc_team::{PocTeam, PocTeamRegistry};
 pub use registry::WorkspaceRegistry;
 pub use toast_stack::ToastStack;
 
@@ -76,6 +78,7 @@ use crate::workspace::view::{
 
 pub fn init(app: &mut AppContext) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());
+    app.add_singleton_model(|_| poc_team::PocTeamRegistry::new());
     app.add_singleton_model(|_| cross_window_tab_drag::CrossWindowTabDrag::new());
     use warpui::keymap::macros::*;
     app.register_binding_validator::<Workspace>(is_binding_pty_compliant);

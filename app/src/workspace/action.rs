@@ -44,6 +44,7 @@ use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
+use crate::workspace::poc_team::PocTeam;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::PaneViewLocator;
 
@@ -173,6 +174,10 @@ pub enum WorkspaceAction {
     },
     TabHoverWidthEnd,
     ToggleTabBarOverflowMenu,
+    /// POC: toggle the per-window team switcher menu (Chrome-profile-style).
+    ToggleTeamSwitcherMenu,
+    /// POC: open a new window scoped to the given team.
+    SwitchToTeam(PocTeam),
     ToggleWelcomeTips,
     CloseTab(usize),
     CloseActiveTab,
@@ -1222,6 +1227,7 @@ impl WorkspaceAction {
             #[cfg(feature = "local_fs")]
             FileDeleted { .. } => false, // File deletion doesn't change workspace state
             OpenEnvironmentManagementPane => false,
+            ToggleTeamSwitcherMenu | SwitchToTeam(_) => false,
             #[cfg(target_os = "linux")]
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
             #[cfg(target_family = "wasm")]

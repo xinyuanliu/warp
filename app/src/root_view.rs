@@ -94,7 +94,9 @@ use crate::window_settings::WindowSettings;
 use crate::workspace::hoa_onboarding::mark_hoa_onboarding_completed;
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::view::OnboardingTutorial;
-use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction, WorkspaceRegistry};
+use crate::workspace::{
+    PaneViewLocator, PocTeam, PocTeamRegistry, Workspace, WorkspaceAction, WorkspaceRegistry,
+};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
@@ -260,6 +262,7 @@ pub fn init(app: &mut AppContext) {
 
     app.add_global_action("root_view:open_from_restored", open_from_restored);
     app.add_global_action("root_view:open_new", open_new);
+    app.add_global_action("root_view:switch_to_team", switch_to_team);
     app.add_global_action("root_view:open_new_with_shell", open_new_with_shell);
     app.add_global_action("root_view:open_new_from_path", |arg, ctx| {
         let _ = open_new_from_path(arg, ctx);
@@ -1151,6 +1154,16 @@ pub(crate) fn open_new_window_get_handles(
 /// Opens a new window.
 fn open_new(_: &(), ctx: &mut AppContext) {
     open_new_window_get_handles(None, ctx);
+}
+
+/// POC: opens a new window scoped to `team`, Chrome-profile-style (each team
+/// gets its own window). Stamps the new window's [`PocTeamRegistry`] entry so
+/// its header color and tab-drag isolation reflect the chosen team.
+fn switch_to_team(team: &PocTeam, ctx: &mut AppContext) {
+    let (window_id, _) = open_new_window_get_handles(None, ctx);
+    PocTeamRegistry::handle(ctx).update(ctx, |registry, _| {
+        registry.set_team(window_id, *team);
+    });
 }
 
 /// Opens a new window with a specific shell
