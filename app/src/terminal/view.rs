@@ -16553,6 +16553,21 @@ impl TerminalView {
             return;
         }
 
+        // Then the queued-prompts panel. Checked after the grid/input selections above so an
+        // active terminal or input selection always wins and existing copy behavior is unchanged;
+        // the panel selection is copied only when nothing else is selected.
+        if let Some(panel_text) = self
+            .input
+            .as_ref(ctx)
+            .queued_prompts_panel()
+            .and_then(|panel| panel.as_ref(ctx).selected_text(ctx))
+            .filter(|text| !text.is_empty())
+        {
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text(panel_text));
+            return;
+        }
+
         if !self.selected_blocks.is_empty() {
             self.copy_blocks(BlockEntity::CommandAndOutput, ctx);
         }
@@ -20048,6 +20063,12 @@ impl TerminalView {
                 }
                 _ => {}
             }
+        }
+
+        // Clear any queued-prompts panel text selection too, so its highlight doesn't linger when
+        // a text selection is made elsewhere in the terminal.
+        if let Some(panel) = self.input.as_ref(ctx).queued_prompts_panel().cloned() {
+            panel.update(ctx, |panel, ctx| panel.clear_text_selection(ctx));
         }
 
         // When this function is invoked because of an ongoing text selection within a nested

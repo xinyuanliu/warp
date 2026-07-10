@@ -7,19 +7,22 @@
 //! hover, drag) locally. Emits high-level events for immediate submission, deletion, and edit
 //! completion, which the host uses to submit or update the input editor.
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use parking_lot::RwLock;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_core::semantic_selection::SemanticSelection;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DragAxis, Draggable, DraggableState, Empty, Expanded, Fill,
     Flex, Hoverable, MinSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
-    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
-    DEFAULT_UI_LINE_HEIGHT_RATIO,
+    ParentOffsetBounds, Radius, SavePosition, ScrollbarWidth, SelectableArea, SelectionHandle,
+    Shrinkable, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::Keystroke;
@@ -136,6 +139,8 @@ fn build_row_state(
         edit_button,
         delete_button,
         draggable_state: DraggableState::default(),
+        selection_handle: SelectionHandle::default(),
+        selected_text: Arc::new(RwLock::new(None)),
     }
 }
 
@@ -149,6 +154,11 @@ struct QueuedPromptRowState {
     edit_button: ViewHandle<ActionButton>,
     delete_button: ViewHandle<ActionButton>,
     draggable_state: DraggableState,
+    /// Handle backing this row's text selection (shared with the rendered `SelectableArea`).
+    selection_handle: SelectionHandle,
+    /// The row's currently selected text, updated by the `SelectableArea` on selection and read
+    /// by [`crate::terminal::view::TerminalView`]'s copy handler for Cmd/Ctrl-C.
+    selected_text: Arc<RwLock<Option<String>>>,
 }
 
 /// View for the multi-prompt queue panel.
@@ -196,8 +206,12 @@ pub enum QueuedPromptsPanelAction {
     StartEditingRow(QueuedQueryId),
     DeleteRow(QueuedQueryId),
     StartDrag(QueuedQueryId),
-    DragMoved { rect: RectF },
+    DragMoved {
+        rect: RectF,
+    },
     DropEnd,
+    /// A row's text selection changed; clears the other rows so only one is selected at a time.
+    TextSelected(QueuedQueryId),
 }
 
 /// Events emitted to the host input view.
@@ -345,6 +359,9 @@ impl QueuedPromptsPanelView {
         if !matches!(event, EditorEvent::Edited(_) | EditorEvent::BufferReplaced) {
             return;
         }
+        // Editing the host input dismisses any queued-prompt text selection so its highlight
+        // doesn't linger while the user types.
+        self.clear_text_selection(ctx);
         let is_empty = self.host_editor.as_ref(ctx).is_empty(ctx);
         if is_empty != self.host_editor_was_empty {
             self.host_editor_was_empty = is_empty;
@@ -683,6 +700,31 @@ impl QueuedPromptsPanelView {
         };
         QueuedQueryModel::as_ref(ctx).has_queue(conv_id)
     }
+
+    /// Returns the currently selected queued-prompt text, if any row has a non-empty selection.
+    /// Read by [`crate::terminal::view::TerminalView`]'s copy handler so Cmd/Ctrl-C copies the
+    /// highlighted queued prompt.
+    pub fn selected_text(&self, _ctx: &AppContext) -> Option<String> {
+        self.row_states
+            .values()
+            .find_map(|state| state.selected_text.read().clone().filter(|t| !t.is_empty()))
+    }
+
+    /// Clears any active text selection across all rows. Called when a selection is made elsewhere
+    /// or when the host input is edited, so the highlight does not linger.
+    pub fn clear_text_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        let had_selection = self
+            .row_states
+            .values()
+            .any(|state| state.selected_text.read().is_some());
+        for state in self.row_states.values() {
+            state.selection_handle.clear();
+            *state.selected_text.write() = None;
+        }
+        if had_selection {
+            ctx.notify();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -731,6 +773,16 @@ impl TypedActionView for QueuedPromptsPanelView {
                     },
                     ctx
                 );
+                ctx.notify();
+            }
+            QueuedPromptsPanelAction::TextSelected(query_id) => {
+                // Keep at most one row's text selected at a time: clear the other rows.
+                for (id, state) in self.row_states.iter() {
+                    if id != query_id {
+                        state.selection_handle.clear();
+                        *state.selected_text.write() = None;
+                    }
+                }
                 ctx.notify();
             }
             QueuedPromptsPanelAction::SendNow(query_id) => {
@@ -1126,6 +1178,8 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
         edit_button,
         delete_button,
         draggable_state,
+        selection_handle,
+        selected_text,
     } = row_state;
 
     let row_inner = Hoverable::new(mouse_state, move |state| {
@@ -1161,16 +1215,34 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             )
             .finish()
         } else {
-            // Single-line preview that truncates by width with a trailing ellipsis.
-            let preview = Text::new(
+            // Single-line preview that truncates by width with a trailing ellipsis. Wrapped in a
+            // `SelectableArea` so the queued prompt text can be highlighted and copied (e.g. to
+            // recover a queued prompt if cloud-mode environment setup fails); the terminal view's
+            // copy handler reads the selection back via `selected_text`.
+            let preview_label = Text::new(
                 preview_text.clone(),
                 appearance.ui_font_family(),
                 queued_input_font_size,
             )
             .with_color(theme.foreground().into())
-            .with_selectable(false)
+            .with_selectable(true)
             .soft_wrap(false)
             .with_clip(ClipConfig::ellipsis())
+            .finish();
+            let semantic_selection = SemanticSelection::as_ref(app);
+            let selected_text_for_handler = selected_text.clone();
+            let preview = SelectableArea::new(
+                selection_handle.clone(),
+                move |args, _, _| {
+                    *selected_text_for_handler.write() = args.selection;
+                },
+                preview_label,
+            )
+            .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+            .with_smart_select_fn(semantic_selection.smart_select_fn())
+            .on_selection_updated(move |ctx, _| {
+                ctx.dispatch_typed_action(QueuedPromptsPanelAction::TextSelected(query_id));
+            })
             .finish();
             // Command rows are prefaced with a blue `!` so they read as shell commands; prompt
             // rows render their text directly. Rows auto-queued during an agent-requested
