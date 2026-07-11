@@ -924,6 +924,60 @@ impl CodeDiffView {
         self.is_passive
     }
 
+    /// Test-only constructor: builds a standalone, non-passive edit-file card in
+    /// the expanded `WaitingForUser` state so the Rendered/Raw toggle and Open
+    /// button can be rendered and captured without a live agent session.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn new_for_test(ctx: &mut ViewContext<Self>) -> Self {
+        Self::build(
+            &AIAgentActionId::from("edit-file-card-demo".to_string()),
+            false,
+            CodeDiffState::WaitingForUser,
+            Some("Created DEMO_FEATURE.md".to_string()),
+            AIIdentifiers::default(),
+            RequestFileEditsFormatKind::Unknown,
+            false,
+            None,
+            ctx,
+        )
+    }
+
+    /// Test-only diagnostic describing which feature gates are active, so
+    /// integration tests can assert the enhancements are rendering.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn debug_gate_state_for_test(&self, app: &AppContext) -> String {
+        let is_create = self
+            .pending_diffs
+            .first()
+            .map(|d| {
+                matches!(
+                    d.diff_view.as_ref(app).diff(),
+                    Some(DiffType::Create { .. })
+                )
+            })
+            .unwrap_or(false);
+        format!(
+            "flag={} pending_diffs={} is_create={} single_md={} toggle={} open={}",
+            FeatureFlag::EditFileCardEnhancements.is_enabled(),
+            self.pending_diffs.len(),
+            is_create,
+            self.is_single_markdown_creation(app),
+            self.show_markdown_toggle(app),
+            self.should_show_open_button(app),
+        )
+    }
+
+    /// Test-only helper to flip the markdown rendered/raw display mode.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn set_rendered_for_test(&mut self, rendered: bool, ctx: &mut ViewContext<Self>) {
+        let mode = if rendered {
+            MarkdownDisplayMode::Rendered
+        } else {
+            MarkdownDisplayMode::Raw
+        };
+        self.set_markdown_render_mode(mode, ctx);
+    }
+
     /// Returns the created markdown `(path, content)` if this card represents a
     /// single markdown file creation with real content and the feature is
     /// enabled. Used to gate the rendered/raw toggle.
