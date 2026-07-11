@@ -12,12 +12,13 @@ use session_sharing_protocol::sharer::{
     DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
 };
 use warp_server_client::iap::IapManager;
+use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
 use super::{
     startup_max_attempts, Network, PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState,
-    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, TEST_PTY_READS_BATCH_THRESHOLD,
 };
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
@@ -393,9 +394,15 @@ fn test_handle_pty_read_event_while_not_batching() {
         );
 
         // When the batch timer fires, the accumulated event is flushed to the server.
-        // Await the flush directly rather than polling a timeout, so there is no timing
-        // budget to tune and no flush-side flake.
-        let item = ws_proxy_rx.recv().await;
+        // Await the flush directly rather than polling a fixed tick budget, but bound the
+        // wait (generously, relative to the injected batch threshold) so a regression in
+        // the timer/flush path fails this test promptly instead of hanging until the CI
+        // timeout.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(TEST_PTY_READS_BATCH_THRESHOLD * 20)
+            .await
+            .expect("Accumulated event should be flushed before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
