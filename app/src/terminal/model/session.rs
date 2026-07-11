@@ -1440,30 +1440,15 @@ impl Session {
             Ok(contents) => {
                 // Report this error so we have some data on whether this method of running
                 // PowerShell commands is reliable. If this turns out to be noisy, we can remove
-                // this log line.
-                log::warn!(
+                // these reporting lines. The detailed PowerShell error is logged locally (and
+                // uploaded to Sentry as a breadcrumb on crash-reporting builds); the matched
+                // `report_error!` carries a static grouping message so the Sentry event keeps a
+                // stable fingerprint and PowerShell reliability stays in a single issue group —
+                // mirroring the breadcrumb + error-event style in `crates/remote_server/src/manager.rs`.
+                log::error!(
                     "Failed to read history using PowerShell commands: {powershell_error:?}"
                 );
-                #[cfg(feature = "crash_reporting")]
-                sentry::with_scope(
-                    |scope| {
-                        let mut context = std::collections::BTreeMap::new();
-                        context.insert(
-                            "powershell_error".to_string(),
-                            format!("{powershell_error:?}").into(),
-                        );
-                        scope.set_context(
-                            "powershell_history",
-                            sentry::protocol::Context::Other(context),
-                        );
-                    },
-                    || {
-                        sentry::capture_message(
-                            "Failed to read history using PowerShell commands",
-                            sentry::Level::Error,
-                        )
-                    },
-                );
+                report_error!("Failed to read history using PowerShell commands");
                 Ok(contents)
             }
             Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
