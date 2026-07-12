@@ -7295,7 +7295,7 @@ impl SettingsWidget for OtherAIWidget {
                     app,
                 ));
 
-            if is_toggleable && FeatureFlag::AgentToolbarEditor.is_enabled() {
+            if is_toggleable {
                 agent_view_column.add_child(render_toolbar_layout_editor(
                     &view.agent_toolbar_inline_editor,
                     appearance,
@@ -7650,12 +7650,10 @@ impl SettingsWidget for CLIAgentWidget {
             column.add_child(command_list);
             column.add_child(command_list_description);
 
-            if FeatureFlag::AgentToolbarEditor.is_enabled() {
-                column.add_child(render_toolbar_layout_editor(
-                    &view.cli_agent_toolbar_inline_editor,
-                    appearance,
-                ));
-            }
+            column.add_child(render_toolbar_layout_editor(
+                &view.cli_agent_toolbar_inline_editor,
+                appearance,
+            ));
         }
 
         column.finish()
