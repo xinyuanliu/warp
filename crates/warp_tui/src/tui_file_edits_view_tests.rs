@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use ai::diff_validation::{DiffDelta, DiffType};
-use futures::channel::oneshot;
+use futures::{channel::mpsc, StreamExt};
 use warp::appearance::Appearance;
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::tui_export::FileDiff;
@@ -76,38 +76,55 @@ fn diff_pipeline_computes_added_lines_and_ghost_blocks() {
         app.add_singleton_model(|_| Appearance::mock());
         let editor = app.add_model(|ctx| CodeEditorModel::new_tui(80, ctx));
 
-        let (tx, rx) = oneshot::channel();
+        let (diff_tx, mut diff_rx) = mpsc::unbounded();
         app.update(|ctx| {
-            let mut tx = Some(tx);
             ctx.subscribe_to_model(&editor, move |_, event, _| {
                 if matches!(event, CodeEditorModelEvent::DiffUpdated) {
-                    if let Some(tx) = tx.take() {
-                        let _ = tx.send(());
-                    }
+                    let _ = diff_tx.unbounded_send(());
                 }
             });
             editor.update(ctx, |editor, ctx| {
                 editor.reset_content(InitialBufferState::plain_text("a\nold\nc\n"), ctx);
-                // Replace line 2 ("old") with "new"; delta line ranges are
-                // 1-indexed like the executor's resolved deltas.
-                editor.apply_diffs(
-                    vec![DiffDelta {
-                        replacement_line_range: 2..3,
-                        insertion: "new\n".to_owned(),
-                    }],
-                    ctx,
-                );
             });
         });
-        rx.await.expect("diff computation should complete");
+        // Resetting the content computes an empty diff against the new base.
+        // Let that computation finish before starting the edited diff so the
+        // two asynchronous results cannot land out of order.
+        diff_rx
+            .next()
+            .await
+            .expect("base diff computation should complete");
+
+        editor.update(&mut app, |editor, ctx| {
+            // Replace line 2 ("old") with "new"; delta line ranges are
+            // 1-indexed like the executor's resolved deltas.
+            editor.apply_diffs(
+                vec![DiffDelta {
+                    replacement_line_range: 2..3,
+                    insertion: "new\n".to_owned(),
+                }],
+                ctx,
+            );
+        });
+        diff_rx
+            .next()
+            .await
+            .expect("edited diff computation should complete");
+        let (layout_tx, mut layout_rx) = mpsc::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&editor, move |_, event, _| {
+                if matches!(event, CodeEditorModelEvent::LayoutInvalidated) {
+                    let _ = layout_tx.unbounded_send(());
+                }
+            });
+        });
 
         editor.update(&mut app, |editor, ctx| editor.expand_diffs(ctx));
-
-        // Ghost blocks land via the render state's async layout channel; poll
-        // until the spawned handler has stored them.
-        let mut ghosts = Vec::new();
-        for _ in 0..100 {
-            ghosts = app.read(|app| {
+        // Ghost blocks land via the render state's async layout channel. Wait
+        // for layout notifications and check the observable state instead of
+        // relying on a fixed number of scheduler yields.
+        let ghosts = loop {
+            let ghosts = app.read(|app| {
                 editor
                     .as_ref(app)
                     .render_state()
@@ -119,10 +136,13 @@ fn diff_pipeline_computes_added_lines_and_ghost_blocks() {
                     .to_vec()
             });
             if !ghosts.is_empty() {
-                break;
+                break ghosts;
             }
-            futures_lite::future::yield_now().await;
-        }
+            layout_rx
+                .next()
+                .await
+                .expect("layout notifications should arrive until ghosts are stored");
+        };
 
         assert_eq!(ghosts.len(), 1);
         assert_eq!(ghosts[0].content, "old\n");
