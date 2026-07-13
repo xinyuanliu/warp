@@ -195,18 +195,8 @@ pub(super) fn render_grid_handler(
     let rows = grid.visible_rows().min(usize::from(area.height));
     let cols = grid.columns().min(usize::from(area.width));
     for screen_row in 0..rows {
-        let Some(row) = grid.row(history + screen_row) else {
-            continue;
-        };
         let y = area.y.saturating_add(screen_row as u16);
-        for column in 0..cols {
-            let cell = &row[column];
-            if let Some(buffer_cell) = buffer.cell_mut((area.x.saturating_add(column as u16), y)) {
-                buffer_cell
-                    .set_symbol(&sanitized_symbol(cell))
-                    .set_style(cell_to_style(cell, colors));
-            }
-        }
+        render_grid_row(grid, history + screen_row, cols, area.x, y, buffer, colors);
     }
 }
 
@@ -242,18 +232,39 @@ fn render_displayed_rows(
             break;
         }
         let original_row = grid.maybe_translate_row_from_displayed_to_original(displayed_row);
-        let Some(row) = grid.row(original_row) else {
-            continue;
-        };
-        for column in 0..grid.columns().min(usize::from(max_width)) {
-            let cell = &row[column];
-            if let Some(buffer_cell) = buffer.cell_mut((area.x.saturating_add(column as u16), *y)) {
-                buffer_cell
-                    .set_symbol(&sanitized_symbol(cell))
-                    .set_style(cell_to_style(cell, colors));
-            }
-        }
+        render_grid_row(
+            grid,
+            original_row,
+            grid.columns().min(usize::from(max_width)),
+            area.x,
+            *y,
+            buffer,
+            colors,
+        );
         *y = (*y).saturating_add(1);
+    }
+}
+
+/// Paints one grid row with terminal cell styling.
+fn render_grid_row(
+    grid: &GridHandler,
+    row: usize,
+    columns: usize,
+    x: u16,
+    y: u16,
+    buffer: &mut TuiBuffer,
+    colors: &TerminalColorList,
+) {
+    let Some(row) = grid.row(row) else {
+        return;
+    };
+    for column in 0..columns {
+        let cell = &row[column];
+        if let Some(buffer_cell) = buffer.cell_mut((x.saturating_add(column as u16), y)) {
+            buffer_cell
+                .set_symbol(&sanitized_symbol(cell))
+                .set_style(cell_to_style(cell, colors));
+        }
     }
 }
 
