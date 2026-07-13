@@ -13,8 +13,8 @@ mod seat;
 pub(crate) mod windows;
 
 // Re-exported for the window-capture recording path, which reuses the same X11 image-to-RGB
-// conversion as window screenshots rather than duplicating it.
-pub(crate) use screenshot::convert_x11_image_to_rgb;
+// conversion and native-capture pixel cap as window screenshots rather than duplicating them.
+pub(crate) use screenshot::{MAX_WINDOW_CAPTURE_PIXELS, convert_x11_image_to_rgb};
 
 use std::time::Duration;
 

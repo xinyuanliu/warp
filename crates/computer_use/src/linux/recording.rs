@@ -26,8 +26,8 @@ use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
 use x11rb::protocol::xproto::{self, ConnectionExt as _, ImageFormat};
 use x11rb::rust_connection::RustConnection;
 
-use super::x11::convert_x11_image_to_rgb;
 use super::x11::windows;
+use super::x11::{MAX_WINDOW_CAPTURE_PIXELS, convert_x11_image_to_rgb};
 use crate::{
     RecordingCompletionStatus, RecordingConfig, RecordingError, RecordingHandle, RecordingOutput,
     Target,
@@ -207,6 +207,19 @@ async fn start_window(
     if width == 0 || height == 0 {
         return Err(RecordingError::Environment {
             reason: format!("invalid window dimensions {width}x{height}"),
+        });
+    }
+    // The capture loop allocates a `width * height * 3` RGB frame every tick, so bound the
+    // capture size up front (mirroring the window-screenshot cap). ffmpeg's `-t`/`-fs` limits
+    // bound the output but not our per-frame memory, so a huge target window could otherwise OOM
+    // the recorder before those limits apply.
+    if exceeds_capture_cap(width, height) {
+        return Err(RecordingError::Environment {
+            reason: format!(
+                "window {window} is {width}x{height} ({} px), exceeding the \
+                 {MAX_WINDOW_CAPTURE_PIXELS}-pixel recording capture limit",
+                (width as usize).saturating_mul(height as usize),
+            ),
         });
     }
 
@@ -487,6 +500,12 @@ async fn wait_for_finalization(
             })
         }
     }
+}
+
+/// Whether a `width`x`height` window exceeds the per-frame capture cap. Kept as a small pure
+/// helper so the bound is unit-testable without a live display.
+fn exceeds_capture_cap(width: u32, height: u32) -> bool {
+    (width as usize).saturating_mul(height as usize) > MAX_WINDOW_CAPTURE_PIXELS
 }
 
 /// Queries the X11 root window's dimensions in physical pixels via `$DISPLAY`.

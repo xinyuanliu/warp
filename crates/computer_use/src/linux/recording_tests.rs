@@ -216,11 +216,29 @@ async fn records_covered_window_via_composite() {
          (blue cover would give a dominant blue channel)"
     );
 
+    // Optionally preserve the recording as a visual-evidence artifact (a screen recording of
+    // the covered target being captured correctly) when a destination dir is provided.
+    if let Ok(dir) = std::env::var("WARP_RECORDING_TEST_OUTPUT_DIR") {
+        let dest = Path::new(&dir).join("covered_window_recording.mp4");
+        let _ = std::fs::copy(&output.path, &dest);
+    }
+
     // Cleanup.
     let _ = std::fs::remove_file(&output.path);
     let _ = conn.destroy_window(cover);
     let _ = conn.destroy_window(target);
     let _ = conn.flush();
+}
+
+/// The per-frame capture cap rejects windows large enough to risk an OOM before ffmpeg's
+/// duration/size limits apply, while still allowing real displays (up to 8K).
+#[test]
+fn rejects_windows_over_capture_cap() {
+    // A normal 1080p window and a full 8K window are within the cap.
+    assert!(!super::exceeds_capture_cap(1920, 1080));
+    assert!(!super::exceeds_capture_cap(7680, 4320));
+    // A window beyond the cap is rejected.
+    assert!(super::exceeds_capture_cap(8000, 5000));
 }
 
 /// Records with a `Screen` target and asserts the encoded video is the full (even-rounded)

@@ -15,7 +15,7 @@ use crate::{CapturedWindow, Screenshot, ScreenshotParams};
 /// make a capture allocate gigabytes. X11 window dimensions go up to `u16::MAX`, far beyond any
 /// real display; this cap (32 * 1024 * 1024 ≈ 33.5M pixels) still comfortably covers a full 8K
 /// display (7680 x 4320 ≈ 33.2M pixels).
-const MAX_WINDOW_CAPTURE_PIXELS: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_WINDOW_CAPTURE_PIXELS: usize = 32 * 1024 * 1024;
 
 /// Takes a screenshot of the root window or a region of it.
 pub fn take(
