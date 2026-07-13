@@ -2162,7 +2162,21 @@ pub(crate) fn initialize_app(
         ctx.add_singleton_model(system::SystemInfo::new);
     }
 
-    // `IapManager` drives gcloud-based IAP token refresh for staging builds.
+    // In a sandboxed Oz runner, mint IAP tokens by self-minting via Workload
+    // Identity Federation (impersonating the IAP access service account). Gated
+    // on runner context (ambient-agent run id) so local staging clients keep
+    // using the gcloud path.
+    #[cfg(not(target_family = "wasm"))]
+    let managed_iap_mint = std::env::var(warp_cli::OZ_RUN_ID_ENV).is_ok().then(|| {
+        let client = server_api_provider.as_ref(ctx).get_managed_secrets_client();
+        warp_server_client::iap::ManagedIapMint::new(Arc::new(
+            crate::server::iap_identity_minter::ManagedSecretsIapMinter::new(client),
+        ))
+    });
+    #[cfg(target_family = "wasm")]
+    let managed_iap_mint: Option<warp_server_client::iap::ManagedIapMint> = None;
+
+    // `IapManager` drives IAP token refresh for staging builds.
     // Register it after `LocalShellState`: the Manager needs to know where the gcloud
     // cli lives & thus needs PATH config set by ~/.zshrc et al.
     //
@@ -2184,7 +2198,7 @@ pub(crate) fn initialize_app(
 
             path_future
         });
-        IapManager::new(iap_state, path_resolver, ctx)
+        IapManager::new(iap_state, path_resolver, managed_iap_mint, ctx)
     });
     // Subscribe to IAP manager events to show toasts when refresh fails.
     ctx.subscribe_to_model(&IapManager::handle(ctx), |_, e, ctx| {

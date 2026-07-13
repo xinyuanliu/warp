@@ -661,6 +661,7 @@ fn test_messages_are_buffered_while_reconnecting() {
             IapManager::new(
                 None,
                 Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+                None,
                 ctx,
             )
         });

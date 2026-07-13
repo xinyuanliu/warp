@@ -5,6 +5,7 @@ use anyhow::Result;
 use base64::Engine;
 use blocking::unblock;
 use instant::Instant;
+use serde::{Deserialize, Serialize};
 use warp_core::channel::IapConfig;
 use warpui_core::r#async::{BoxFuture, FutureExt as _, Timer};
 use warpui_core::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -12,7 +13,6 @@ use warpui_core::{AppContext, Entity, ModelContext, SingletonEntity};
 use websocket::connect_error_http_response;
 
 const PROACTIVE_REFRESH_BUFFER: Duration = Duration::from_secs(5 * 60);
-const INJECTED_TOKEN_ENV_VAR: &str = "WARP_IAP_TOKEN";
 
 const BASE_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
@@ -22,7 +22,49 @@ const MAX_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
 /// bad credentials) doesn't loop forever.
 const MAX_FAILURE_RETRIES: u32 = 5;
 
+// Endpoints and constants for the runner-context Workload Identity Federation
+// mint (GCP STS token exchange + IAM Credentials `generateIdToken`).
+const STS_TOKEN_URL: &str = "https://sts.googleapis.com/v1/token";
+const IAM_GENERATE_ID_TOKEN_URL: &str = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateIdToken";
+const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
+const SUBJECT_TOKEN_TYPE_ID_TOKEN: &str = "urn:ietf:params:oauth:token-type:id_token";
+const REQUESTED_TOKEN_TYPE_ACCESS_TOKEN: &str = "urn:ietf:params:oauth:token-type:access_token";
+const WIF_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
+const WIF_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Env var carrying a Warp OIDC task-identity JWT (audience = the WIF provider
+/// resource name), injected by warp-server so a cold sandboxed runner can
+/// bootstrap its first IAP mint without calling the IAP-gated identity-token
+/// endpoint. This is NOT the IAP bearer token — it is the subject token for the
+/// STS exchange.
+const INJECTED_OIDC_JWT_ENV_VAR: &str = "WARP_IAP_OIDC_JWT";
+
 pub type PathResolver = Box<dyn Fn(&mut AppContext) -> BoxFuture<'static, Option<String>>>;
+
+/// Mints a Warp-signed OIDC identity token for a given audience. Implemented in
+/// the `app` crate over the managed-secrets client so this crate need not depend
+/// on the managed-secrets stack.
+pub trait IapIdentityTokenMinter: Send + Sync + 'static {
+    fn mint_identity_token(
+        &self,
+        audience: String,
+        requested_duration: Duration,
+    ) -> BoxFuture<'static, Result<String>>;
+}
+
+/// Lets a sandboxed Oz runner self-mint IAP tokens via Workload Identity
+/// Federation. Present only in runner context.
+#[derive(Clone)]
+pub struct ManagedIapMint {
+    minter: Arc<dyn IapIdentityTokenMinter>,
+}
+
+impl ManagedIapMint {
+    pub fn new(minter: Arc<dyn IapIdentityTokenMinter>) -> Self {
+        Self { minter }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CachedToken {
@@ -52,15 +94,6 @@ pub enum IapCredentialsState {
         // in case the last token still works... we can try to use that for a couple more mins
         previous: Option<CachedToken>,
     },
-    /// Represents a terminal state in the iap creds state machine.
-    /// The gcloud refresh loop will never run, and an IAP challenge is logged
-    /// rather than triggering a refresh (we have no way to refresh a new token
-    /// from ambient agent context yet).
-    /// TODO(Isaiah/Jason): implement token refreshing scheme.
-    /// see: https://linear.app/warpdotdev/issue/REMOTE-1370/refresh-github-token
-    EnvInjected {
-        token: String,
-    },
 }
 
 impl IapCredentialsState {
@@ -69,7 +102,7 @@ impl IapCredentialsState {
             IapCredentialsState::Loaded(cached) => Some(cached.clone()),
             IapCredentialsState::Refreshing { previous }
             | IapCredentialsState::Failed { previous, .. } => previous.clone(),
-            IapCredentialsState::EnvInjected { .. } | IapCredentialsState::Missing => None,
+            IapCredentialsState::Missing => None,
         }
     }
 }
@@ -82,15 +115,10 @@ pub struct IapState {
 
 impl IapState {
     pub fn new(config: &IapConfig) -> Self {
-        let initial = std::env::var(INJECTED_TOKEN_ENV_VAR)
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(|token| IapCredentialsState::EnvInjected { token })
-            .unwrap_or(IapCredentialsState::Missing);
         Self {
             audiences: config.audiences.to_string(),
             service_account_email: config.service_account_email.to_string(),
-            inner: RwLock::new(initial),
+            inner: RwLock::new(IapCredentialsState::Missing),
         }
     }
 
@@ -102,7 +130,6 @@ impl IapState {
             // IAP challenge. Returning `None` lets the caller proceed without a
             // doomed token while the reactive refresh recovers.
             IapCredentialsState::Loaded(cached) => cached.valid_token(),
-            IapCredentialsState::EnvInjected { token } => Some(token.clone()),
             IapCredentialsState::Refreshing { previous }
             | IapCredentialsState::Failed { previous, .. } => {
                 previous.as_ref().and_then(CachedToken::valid_token)
@@ -159,6 +186,9 @@ impl http_client::iap::IapTokenProvider for IapState {
 pub struct IapManager {
     state: Option<Arc<IapState>>,
     path_resolver: PathResolver,
+    /// Runner-context Workload Identity Federation mint. When present, refreshes
+    /// self-mint via WIF instead of shelling out to gcloud.
+    managed_mint: Option<ManagedIapMint>,
     /// Number of consecutive failed fetches since the last success.
     consecutive_failures: u32,
 }
@@ -177,11 +207,13 @@ impl IapManager {
     pub fn new(
         state: Option<Arc<IapState>>,
         path_resolver: PathResolver,
+        managed_mint: Option<ManagedIapMint>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut manager = Self {
             state,
             path_resolver,
+            managed_mint,
             consecutive_failures: 0,
         };
         manager.start_refresh(ctx);
@@ -207,16 +239,6 @@ impl IapManager {
     }
 
     pub fn handle_challenge(&mut self, ctx: &mut ModelContext<Self>) {
-        let Some(state) = self.state.as_ref() else {
-            return;
-        };
-        if matches!(state.state(), IapCredentialsState::EnvInjected { .. }) {
-            log::warn!(
-                "Env-injected IAP token ({INJECTED_TOKEN_ENV_VAR}) was rejected by IAP; \
-                 token is likely stale — re-inject to recover"
-            );
-            return;
-        }
         self.consecutive_failures = 0;
         self.start_refresh(ctx);
     }
@@ -225,14 +247,19 @@ impl IapManager {
         let Some(state) = self.state.clone() else {
             return;
         };
-        // Don't touch state if a refresh is already running, or if we're
-        // in the terminal env-injected state (no refresh path exists).
-        if matches!(
-            state.state(),
-            IapCredentialsState::Refreshing { .. } | IapCredentialsState::EnvInjected { .. }
-        ) {
+        // Don't touch state if a refresh is already running.
+        if matches!(state.state(), IapCredentialsState::Refreshing { .. }) {
             return;
         }
+
+        // Runner context: self-mint via Workload Identity Federation. This is the
+        // only refresh path that works in a sandboxed Oz runner, which ships
+        // without gcloud.
+        if let Some(mint) = self.managed_mint.clone() {
+            self.start_wif_refresh(state, mint, ctx);
+            return;
+        }
+
         state.set_refreshing();
         ctx.emit(IapManagerEvent::StateChanged);
         ctx.notify();
@@ -272,36 +299,61 @@ impl IapManager {
                 })
                 .await
             },
-            move |manager, result, ctx| {
-                let Some(state) = manager.state.as_ref() else {
-                    return;
-                };
-                match result {
-                    Ok(cached) => {
-                        let expires_at = cached.expires_at;
-                        state.set_loaded(cached);
-                        manager.consecutive_failures = 0;
-                        log::info!("Warp Staging IAP token refreshed");
-                        ctx.emit(IapManagerEvent::StateChanged);
-                        ctx.notify();
-                        manager.schedule_next_refresh(expires_at, ctx);
-                    }
-                    Err(err) => {
-                        let message = format!("{err:#}");
-                        log::warn!("Warp Staging IAP token fetch failed: {message}");
-                        let is_first_failure_of_streak = manager.consecutive_failures == 0;
-                        state.set_failed(message.clone());
-                        ctx.emit(IapManagerEvent::RefreshFailed {
-                            message,
-                            is_first_failure_of_streak,
-                        });
-                        ctx.emit(IapManagerEvent::StateChanged);
-                        ctx.notify();
-                        manager.schedule_failure_retry(ctx);
-                    }
-                }
-            },
+            move |manager, result, ctx| manager.apply_refresh_result(result, ctx),
         );
+    }
+
+    /// Runner-context refresh: mint an IAP-valid ID token via Workload Identity
+    /// Federation (Warp OIDC JWT -> STS -> IAM `generateIdToken`). No gcloud.
+    fn start_wif_refresh(
+        &mut self,
+        state: Arc<IapState>,
+        mint: ManagedIapMint,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        state.set_refreshing();
+        ctx.emit(IapManagerEvent::StateChanged);
+        ctx.notify();
+
+        let minter = mint.minter.clone();
+        let iap_audience = state.audiences().to_string();
+        let service_account_email = state.service_account_email().to_string();
+
+        ctx.spawn(
+            async move { fetch_iap_token_via_wif(minter, iap_audience, service_account_email).await },
+            move |manager, result, ctx| manager.apply_refresh_result(result, ctx),
+        );
+    }
+
+    /// Shared completion handler for both the gcloud and WIF refresh paths.
+    fn apply_refresh_result(&mut self, result: Result<CachedToken>, ctx: &mut ModelContext<Self>) {
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        match result {
+            Ok(cached) => {
+                let expires_at = cached.expires_at;
+                state.set_loaded(cached);
+                self.consecutive_failures = 0;
+                log::info!("Warp Staging IAP token refreshed");
+                ctx.emit(IapManagerEvent::StateChanged);
+                ctx.notify();
+                self.schedule_next_refresh(expires_at, ctx);
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                log::warn!("Warp Staging IAP token fetch failed: {message}");
+                let is_first_failure_of_streak = self.consecutive_failures == 0;
+                state.set_failed(message.clone());
+                ctx.emit(IapManagerEvent::RefreshFailed {
+                    message,
+                    is_first_failure_of_streak,
+                });
+                ctx.emit(IapManagerEvent::StateChanged);
+                ctx.notify();
+                self.schedule_failure_retry(ctx);
+            }
+        }
     }
 
     fn schedule_next_refresh(&mut self, expires_at: Instant, ctx: &mut ModelContext<Self>) {
@@ -371,6 +423,125 @@ impl Entity for IapManager {
 }
 
 impl SingletonEntity for IapManager {}
+
+#[derive(Serialize)]
+struct StsTokenExchangeRequest<'a> {
+    grant_type: &'a str,
+    audience: &'a str,
+    scope: &'a str,
+    requested_token_type: &'a str,
+    subject_token: &'a str,
+    subject_token_type: &'a str,
+}
+
+#[derive(Deserialize)]
+struct StsTokenExchangeResponse {
+    access_token: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateIdTokenRequest<'a> {
+    audience: &'a str,
+    include_email: bool,
+}
+
+#[derive(Deserialize)]
+struct GenerateIdTokenResponse {
+    token: String,
+}
+
+/// Mints an IAP-valid ID token for a sandboxed Oz runner via Workload Identity
+/// Federation: Warp OIDC JWT -> GCP STS federated token -> IAM `generateIdToken`
+/// impersonating the IAP access service account. Requires no local gcloud.
+async fn fetch_iap_token_via_wif(
+    minter: Arc<dyn IapIdentityTokenMinter>,
+    iap_audience: String,
+    service_account_email: String,
+) -> Result<CachedToken> {
+    // The WIF provider resource name is the `aud` of the server-injected bootstrap
+    // JWT, so we read it straight off that token instead of carrying it as
+    // separate client config. The env var persists for the process lifetime, so
+    // its `aud` stays readable even once the token itself has expired.
+    let injected_jwt = std::env::var(INJECTED_OIDC_JWT_ENV_VAR)
+        .ok()
+        .filter(|jwt| !jwt.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("{INJECTED_OIDC_JWT_ENV_VAR} is unset; cannot mint an IAP token via WIF")
+        })?;
+    let federation_audience = parse_aud_from_jwt(&injected_jwt)
+        .ok_or_else(|| anyhow::anyhow!("injected OIDC JWT has no readable `aud` claim"))?;
+
+    // Leg 1: obtain a Warp-signed OIDC JWT (audience = the WIF provider resource
+    // name). Prefer the injected bootstrap JWT while it's still valid so a cold
+    // runner needn't call the IAP-gated identity-token endpoint; once it expires,
+    // mint a fresh one via the server (now reachable through IAP).
+    let identity_token = if get_expires_at(&injected_jwt).is_ok() {
+        injected_jwt
+    } else {
+        minter
+            .mint_identity_token(federation_audience.clone(), WIF_IDENTITY_TOKEN_DURATION)
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to mint Warp identity token: {err:#}"))?
+    };
+
+    // Leg 2: exchange the JWT at GCP STS for a federated access token.
+    let response = http_client::Client::new()
+        .post(STS_TOKEN_URL)
+        .form(&StsTokenExchangeRequest {
+            grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
+            audience: &federation_audience,
+            scope: CLOUD_PLATFORM_SCOPE,
+            requested_token_type: REQUESTED_TOKEN_TYPE_ACCESS_TOKEN,
+            subject_token: &identity_token,
+            subject_token_type: SUBJECT_TOKEN_TYPE_ID_TOKEN,
+        })
+        .timeout(WIF_MINT_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|err| anyhow::anyhow!("STS token exchange request failed: {err:#}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("STS token exchange failed (status {status}): {body}");
+    }
+    let sts_response: StsTokenExchangeResponse = response
+        .json()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to parse the STS response: {err:#}"))?;
+
+    // Leg 3: impersonate the IAP access service account to mint an ID token whose
+    // audience is the IAP OAuth client ID. IAM authorizes this only if the
+    // runner's federated identity holds roles/iam.serviceAccountTokenCreator on
+    // the service account.
+    let url = IAM_GENERATE_ID_TOKEN_URL.replace("{sa_email}", &service_account_email);
+    let response = http_client::Client::new()
+        .post(&url)
+        .bearer_auth(&sts_response.access_token)
+        .json(&GenerateIdTokenRequest {
+            audience: &iap_audience,
+            include_email: true,
+        })
+        .timeout(WIF_MINT_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|err| anyhow::anyhow!("generateIdToken request failed: {err:#}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("generateIdToken failed (status {status}): {body}");
+    }
+    let id_token_response: GenerateIdTokenResponse = response
+        .json()
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to parse the generateIdToken response: {err:#}"))?;
+
+    let expires_at = get_expires_at(&id_token_response.token)?;
+    Ok(CachedToken {
+        token: id_token_response.token,
+        expires_at,
+    })
+}
 
 /// How long to wait for `auth print-identity-token` command to respond before killing it.
 const GCLOUD_TIMEOUT: Duration = Duration::from_secs(30);
@@ -468,13 +639,26 @@ fn get_expires_at(token: &str) -> Result<Instant> {
     Ok(Instant::now() + Duration::from_secs(secs_remaining))
 }
 
-fn parse_exp_from_jwt(token: &str) -> Option<u64> {
+fn decode_jwt_payload(token: &str) -> Option<serde_json::Value> {
     let payload_b64 = token.split('.').nth(1)?;
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload_b64)
         .ok()?;
-    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
-    payload.get("exp")?.as_u64()
+    serde_json::from_slice(&payload_bytes).ok()
+}
+
+fn parse_exp_from_jwt(token: &str) -> Option<u64> {
+    decode_jwt_payload(token)?.get("exp")?.as_u64()
+}
+
+/// Reads the `aud` claim from a JWT. `aud` may be a single string or an array of
+/// strings (per RFC 7519); we take the first entry in the array case.
+fn parse_aud_from_jwt(token: &str) -> Option<String> {
+    match decode_jwt_payload(token)?.get("aud")? {
+        serde_json::Value::String(aud) => Some(aud.clone()),
+        serde_json::Value::Array(auds) => auds.iter().find_map(|v| v.as_str().map(str::to_string)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

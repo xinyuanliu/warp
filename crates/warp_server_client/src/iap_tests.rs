@@ -58,6 +58,27 @@ fn parse_exp_from_jwt_not_a_jwt_is_none() {
 }
 
 #[test]
+fn parse_aud_from_jwt_reads_string_aud() {
+    let token = jwt_with_payload(r#"{"aud": "//iam.googleapis.com/projects/1/x", "sub": "y"}"#);
+    assert_eq!(
+        parse_aud_from_jwt(&token).as_deref(),
+        Some("//iam.googleapis.com/projects/1/x")
+    );
+}
+
+#[test]
+fn parse_aud_from_jwt_reads_first_array_aud() {
+    let token = jwt_with_payload(r#"{"aud": ["first-aud", "second-aud"]}"#);
+    assert_eq!(parse_aud_from_jwt(&token).as_deref(), Some("first-aud"));
+}
+
+#[test]
+fn parse_aud_from_jwt_missing_aud_is_none() {
+    let token = jwt_with_payload(r#"{"sub": "y"}"#);
+    assert_eq!(parse_aud_from_jwt(&token), None);
+}
+
+#[test]
 fn parse_exp_from_jwt_invalid_base64_is_none() {
     assert_eq!(parse_exp_from_jwt("aaa.!!!not-base64!!!.ccc"), None);
 }
@@ -117,4 +138,29 @@ fn get_cached_failed_uses_valid_previous_token() {
     state.set_loaded(cached("prev-token", Some(Duration::from_secs(60))));
     state.set_failed("gcloud blew up".to_string());
     assert_eq!(state.get_cached().as_deref(), Some("prev-token"));
+}
+
+#[test]
+fn generate_id_token_request_uses_camel_case_include_email() {
+    let value = serde_json::to_value(GenerateIdTokenRequest {
+        audience: "iap-client-id",
+        include_email: true,
+    })
+    .unwrap();
+    assert_eq!(value["audience"], "iap-client-id");
+    assert_eq!(value["includeEmail"], true);
+}
+
+#[test]
+fn generate_id_token_response_parses_token() {
+    let parsed: GenerateIdTokenResponse =
+        serde_json::from_str(r#"{"token": "an-id-token"}"#).unwrap();
+    assert_eq!(parsed.token, "an-id-token");
+}
+
+#[test]
+fn sts_response_parses_and_ignores_extra_fields() {
+    let parsed: StsTokenExchangeResponse =
+        serde_json::from_str(r#"{"access_token": "federated", "expires_in": 3600}"#).unwrap();
+    assert_eq!(parsed.access_token, "federated");
 }
