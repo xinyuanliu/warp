@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     export_conversation_markdown, AIAgentActionId, AIConversationId, AgentInteractionMetadata,
-    BlockId, TerminalModel, TranscriptScope,
+    BlockId, PtyIntent, PtyIntentEvent, SizeInfo, SizeUpdate, TerminalModel, TranscriptScope,
 };
 use warpui::EntityIdMap;
 use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
@@ -14,7 +14,7 @@ use warpui_core::App;
 
 use super::{
     export_file_success_message, hide_agent_requested_command_from_top_level,
-    raw_prompt_if_not_blank,
+    raw_prompt_if_not_blank, TuiTerminalSessionEvent,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
 
@@ -205,4 +205,17 @@ fn file_export_success_message_includes_destination_path() {
         export_file_success_message(&export),
         format!("Conversation exported to {}", export.path().display())
     );
+}
+
+#[test]
+fn resize_event_maps_to_pty_resize_intent() {
+    let last_size = SizeInfo::new_without_font_metrics(24, 120);
+    let size_update = SizeUpdate::after_headless_layout(last_size, 8, 42);
+    let event = TuiTerminalSessionEvent::Resize(size_update);
+
+    let Some(PtyIntent::Resize(actual_update)) = event.pty_intent() else {
+        panic!("resize event should map to a PTY resize intent");
+    };
+    assert_eq!(actual_update.new_size().rows(), 8);
+    assert_eq!(actual_update.new_size().columns(), 42);
 }
