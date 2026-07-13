@@ -122,8 +122,8 @@ impl ComputerUsePermission {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunAgentsPermission {
     NeverAllow,
-    AlwaysAllow,
     #[default]
+    AlwaysAllow,
     AlwaysAsk,
 
     // This is intended to catch deserialization errors whenever we add new variants to this enum.
@@ -403,7 +403,7 @@ impl Default for AIExecutionProfile {
             write_to_pty: WriteToPtyPermission::AlwaysAsk,
             mcp_permissions: ActionPermission::AgentDecides,
             ask_user_question: AskUserQuestionPermission::AlwaysAsk,
-            run_agents: RunAgentsPermission::AlwaysAsk,
+            run_agents: RunAgentsPermission::AlwaysAllow,
             command_denylist: DEFAULT_COMMAND_EXECUTION_DENYLIST.clone(),
             command_allowlist: Vec::new(),
             directory_allowlist: Vec::new(),
