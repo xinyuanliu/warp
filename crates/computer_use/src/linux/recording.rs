@@ -26,8 +26,7 @@ use x11rb::protocol::composite::{ConnectionExt as _, Redirect};
 use x11rb::protocol::xproto::{self, ConnectionExt as _, ImageFormat};
 use x11rb::rust_connection::RustConnection;
 
-use super::x11::windows;
-use super::x11::{MAX_WINDOW_CAPTURE_PIXELS, convert_x11_image_to_rgb};
+use super::x11::{MAX_WINDOW_CAPTURE_PIXELS, convert_x11_image_to_rgb, windows};
 use crate::{
     RecordingCompletionStatus, RecordingConfig, RecordingError, RecordingHandle, RecordingOutput,
     Target,
