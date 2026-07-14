@@ -26,6 +26,10 @@ mod inline_menu;
 mod input_mode_policy;
 mod keybindings;
 mod model_menu;
+// Not consumed yet: the TUI orchestration card slice embeds this selector
+// and removes the allow.
+#[allow(dead_code)]
+mod option_selector;
 mod resume;
 mod slash_commands;
 mod terminal_background;
