@@ -1,6 +1,10 @@
 # Edit sent agent messages and regenerate
 ## Summary
-Users can edit a prompt they already sent to a Warp agent and regenerate the agent response from the edited prompt. The edited prompt replaces the original prompt in the conversation timeline, and Warp removes and regenerates the agent output and any later conversation turns that depended on the original prompt.
+Users can edit a prompt they already sent to a Warp agent and regenerate the agent response from the edited prompt. The edited prompt replaces the original prompt in the conversation timeline, and Warp removes and regenerates the agent output and any later conversation turns that depended on the original prompt. The feature is surfaced as a native "Edit" affordance that appears **on hover** over each sent prompt (not buried in a menu), and because sending an edit is destructive, the user must accept the breaking-change consequence in a warning modal that reuses/adapts the existing Rewind confirmation dialog before anything is truncated or regenerated.
+## Key design choices
+1. **Discoverable hover affordance.** The primary entry point is a native edit button rendered on hover over each editable sent prompt, in the prompt header's action row alongside the existing Rewind button and overflow menu. This makes editing discoverable without opening the overflow/context menu. The overflow-menu "Edit message" item remains as a secondary entry point.
+2. **Reuse the Rewind confirmation modal.** The destructive send reuses/adapts the existing `RewindConfirmationDialog` (Rewind-style confirm/cancel with Enter/Escape) so users explicitly accept that editing rewinds and regenerates the conversation — consistent with today's Rewind warning UX — before any state is mutated.
+3. **Rewind → new-prompt under the hood.** Submitting an edit runs the existing Rewind flow (cancel active work, revert diffs, fork a pre-edit backup, truncate from the edited exchange) and then resends the edited prompt as a fresh request, reusing the proven rewind/regeneration machinery rather than a parallel code path.
 ## Problem
 Today, a small typo, missing detail, or unclear sentence in a sent agent prompt requires a corrective follow-up or retyping the entire prompt. That workaround adds friction, creates noisy conversation history, and can make the agent reason from both the mistaken prompt and the correction instead of from the intended prompt alone.
 ## Goals
@@ -17,20 +21,20 @@ Today, a small typo, missing detail, or unclear sentence in a sent agent prompt 
 Figma: https://www.figma.com/design/3XTgwiTkNQI2byxsBY00cG/Edit-messages-sent-to-the-agent?node-id=47-2791&t=rwW7jRBJHfGwyXql-1
 Loom: https://www.loom.com/share/0725659433294c45aff89f3670189a49
 ## Behavior
-1. Every editable sent user prompt in an agent conversation exposes an “Edit message” action from the prompt block’s existing overflow/context menu.
+1. Every editable sent user prompt in an agent conversation exposes a native "Edit" affordance rendered **on hover** over the prompt block — a hover-revealed button in the prompt header's action row, alongside the existing Rewind button and overflow menu — so the feature is discoverable without opening the overflow/context menu. The same "Edit message" action also remains available from the prompt block's existing overflow/context menu; both entry points open the same inline edit flow. The hover affordance follows the same hover-visibility behavior as the adjacent Rewind/overflow controls (visible on prompt hover, hidden otherwise).
 2. A prompt is editable only when all of these are true:
    - The prompt was authored by the current user in a mutable local Warp agent conversation.
    - The block is not a read-only transcript, imported debug transcript, shared-session viewer transcript, or restored surface that cannot safely mutate local conversation state.
    - The prompt belongs to a user query that can be regenerated as an active agent request.
 3. A prompt is not editable when it represents agent output, tool results, passive suggestion output, read-only conversation search output, or a child/teammate message that the current user did not author.
 4. Selecting “Edit message” changes the selected prompt block into an inline editing state in place. The editor is prefilled with the sent prompt text exactly as the user sees it, including slash-command prefixes such as `/plan` when those prefixes were part of the user-facing prompt.
-5. While editing, the block shows clear actions to save/regenerate or cancel. The primary action is labeled to communicate that submitting the edit will regenerate the response, not only update text.
+5. While editing, the block shows clear actions to save/regenerate or cancel. The primary action is labeled to communicate that submitting the edit will regenerate the response, not only update text. Because submitting a changed edit is destructive, activating the primary action does not immediately mutate conversation state: it first opens a warning confirmation modal that reuses/adapts the existing Rewind confirmation dialog (`RewindConfirmationDialog`). The modal explains that saving the edit will rewind and regenerate the conversation from this prompt (restoring code and conversation to before this point and cancelling any in-flight agent work), and the user must confirm (Enter / the confirm button) or cancel (Escape / the cancel button) before any truncation or regeneration occurs. Cancelling the modal returns to the inline editing state with the edited text intact and no conversation changes.
 6. The inline editor supports multiline prompt text, soft wrapping, text selection, standard clipboard operations, and keyboard submission/cancellation.
 7. Pressing Escape or clicking Cancel exits editing state without changing the prompt, response, downstream conversation turns, attached context, usage, or files.
 8. Submitting an empty or whitespace-only edit is blocked. Warp keeps the editor open and shows a lightweight validation state instead of deleting the message.
 9. Submitting unchanged text exits editing state without regenerating and without changing conversation history.
 10. Submitting changed text replaces the original prompt with the edited prompt in the conversation timeline.
-11. After a changed edit is submitted, Warp removes the original agent response for that prompt and removes all later user prompts, agent responses, actions, suggestions, and generated artifacts in that same conversation branch that depended on the original prompt.
+11. Once the user confirms the warning modal, Warp removes the original agent response for that prompt and removes all later user prompts, agent responses, actions, suggestions, and generated artifacts in that same conversation branch that depended on the original prompt, reusing the existing Rewind flow (cancel active work, revert diffs, fork a pre-edit backup, truncate from the edited exchange) under the hood.
 12. Warp then sends the edited prompt as the next active agent request from the conversation state immediately before the edited prompt.
 13. The regenerated response streams in the same place the old response occupied after the downstream blocks have been removed. From the user’s perspective, the conversation now looks as if the edited prompt had been sent originally.
 14. If the edited prompt was the first prompt in the conversation, the conversation’s visible title/initial query reflects the edited prompt after regeneration begins.
@@ -52,15 +56,18 @@ Loom: https://www.loom.com/share/0725659433294c45aff89f3670189a49
 1. A user can send a prompt, edit it from the prompt UI, submit the edit, and see a regenerated response based on the edited prompt without manually copying or retyping the original prompt.
 2. Editing a middle prompt removes downstream conversation turns and regenerates from the pre-edit context without leaving stale blocks, stale pending actions, or stale generated-file state.
 3. Cancel, unchanged submit, empty submit, request failure, active streaming cancellation, and read-only transcript states behave predictably and do not corrupt conversation history.
-4. Users can discover and operate the edit flow with mouse and keyboard.
-5. Existing copy, link detection, secret redaction, sharing/debugging IDs, fork, rewind, and response rating behavior continue to work for regenerated conversations.
+4. Users can discover the edit affordance by hovering a sent prompt (without opening any menu) and can operate the full edit flow with both mouse and keyboard.
+5. Submitting a changed edit surfaces the reused Rewind-style warning modal; confirming it rewinds and regenerates, and cancelling it leaves the conversation and inline edit untouched.
+6. Existing copy, link detection, secret redaction, sharing/debugging IDs, fork, rewind, and response rating behavior continue to work for regenerated conversations.
 ## Validation
-1. Manually verify happy-path editing of the most recent prompt in a new agent conversation.
-2. Manually verify editing an earlier prompt after at least one follow-up removes downstream turns and regenerates from the edited prompt.
-3. Manually verify editing while the response is streaming cancels the old stream and starts a new one.
-4. Manually verify Cancel, unchanged submit, and empty submit do not mutate history.
-5. Verify read-only/shared transcript surfaces do not expose an enabled edit action.
-6. Verify any automated integration coverage checks the user-visible flow: send prompt, open edit, submit changed prompt, old response removed, new response appears.
+1. Manually verify the edit affordance appears on hover over a sent prompt (and is not shown for non-editable/read-only prompts).
+2. Manually verify happy-path editing of the most recent prompt in a new agent conversation, including the warning modal appearing before regeneration and confirming via both the button and Enter.
+3. Manually verify editing an earlier prompt after at least one follow-up removes downstream turns and regenerates from the edited prompt.
+4. Manually verify editing while the response is streaming cancels the old stream and starts a new one.
+5. Manually verify Cancel (inline), Escape/cancel on the warning modal, unchanged submit, and empty submit do not mutate history.
+6. Verify read-only/shared transcript surfaces do not expose an enabled edit action (neither on hover nor in the menu).
+7. Verify any automated integration coverage checks the user-visible flow: send prompt, open edit (via hover affordance), submit changed prompt, confirm modal, old response removed, new response appears.
+8. Capture a screen recording (video) of the working end-to-end flow — hover → edit → warning modal → confirm → regenerate — via computer use, and post it to the originating Slack thread and the PR. This video is a required acceptance artifact per the ticket.
 ## Open questions
 1. What exact keyboard shortcut should trigger editing the most recent editable sent agent message when the input buffer is empty?
 2. Should the first release include a visible “restore pre-edit version” affordance, or is the existing fork/rewind backup mechanism sufficient for dogfood?
