@@ -38,7 +38,7 @@ const WIF_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// bootstrap its first IAP mint without calling the IAP-gated identity-token
 /// endpoint. This is NOT the IAP bearer token — it is the subject token for the
 /// STS exchange.
-const INJECTED_OIDC_JWT_ENV_VAR: &str = "WARP_IAP_OIDC_JWT";
+const INJECTED_OIDC_JWT_ENV_VAR: &str = "WARP_STAGING_IAP_BOOTSTRAP_JWT";
 
 pub type PathResolver = Box<dyn Fn(&mut AppContext) -> BoxFuture<'static, Option<String>>>;
 
