@@ -19,6 +19,7 @@ use std::sync::Arc;
 use async_channel::Sender;
 use parking_lot::FairMutex;
 use warp::tui_export::{KeystrokeWithDetails, TermMode, TerminalModel, ToEscapeSequence as _};
+use warp_terminal::model::escape_sequences::{alt_screen_scroll_to_pty_bytes, ModeProvider};
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use warp_terminal::model::Point;
@@ -53,10 +54,10 @@ fn mouse_state_for_event(
     if !is_mode_set(TermMode::SGR_MOUSE) {
         return None;
     }
-
-    let reports_clicks = is_mode_set(TermMode::MOUSE_REPORT_CLICK)
-        || is_mode_set(TermMode::MOUSE_DRAG)
-        || is_mode_set(TermMode::MOUSE_MOTION);
+    let reports_clicks = is_mode_set(TermMode::MOUSE_REPORT_CLICK);
+    let reports_drag = is_mode_set(TermMode::MOUSE_DRAG);
+    let reports_motion = is_mode_set(TermMode::MOUSE_MOTION);
+    let reports_clicks = reports_clicks || reports_drag || reports_motion;
     let position = event.position()?;
     if !area.contains_point(position) {
         return None;
@@ -77,8 +78,7 @@ fn mouse_state_for_event(
             MouseState::new(MouseButton::Left, MouseAction::Released, *modifiers)
         }
         TuiEvent::LeftMouseDragged { modifiers, .. }
-            if (is_mode_set(TermMode::MOUSE_DRAG) || is_mode_set(TermMode::MOUSE_MOTION))
-                && !modifiers.shift =>
+            if (reports_drag || reports_motion) && !modifiers.shift =>
         {
             MouseState::new(MouseButton::LeftDrag, MouseAction::Pressed, *modifiers)
         }
@@ -86,21 +86,42 @@ fn mouse_state_for_event(
             modifiers,
             is_synthetic: false,
             ..
-        } if is_mode_set(TermMode::MOUSE_MOTION) => {
-            MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers)
-        }
-        TuiEvent::ScrollWheel {
-            delta: (_, rows), ..
-        } if reports_clicks && *rows != 0 => MouseState::new(
-            MouseButton::Wheel,
-            MouseAction::Scrolled {
-                delta: i32::try_from(*rows).ok()?,
-            },
-            Default::default(),
-        ),
+        } if reports_motion => MouseState::new(MouseButton::Move, MouseAction::Pressed, *modifiers),
         _ => return None,
     };
     Some(state.set_point(point))
+}
+
+/// Encodes a supported pointer event for the active alt-screen application.
+fn mouse_event_to_pty_bytes<T: ModeProvider>(
+    event: &TuiEvent,
+    area: TuiRect,
+    is_mode_set: impl Fn(TermMode) -> bool,
+    mode_provider: &T,
+) -> Option<Vec<u8>> {
+    if let TuiEvent::ScrollWheel {
+        position,
+        delta: (_, rows),
+        ..
+    } = event
+    {
+        if !area.contains_point(*position) {
+            return None;
+        }
+        let point = Point::new(
+            usize::from(position.y - area.y),
+            usize::from(position.x - area.x),
+        );
+        return alt_screen_scroll_to_pty_bytes(
+            i32::try_from(*rows).ok()?,
+            point,
+            is_mode_set(TermMode::SGR_MOUSE),
+            mode_provider,
+        );
+    }
+
+    mouse_state_for_event(event, area, is_mode_set)
+        .and_then(|state| state.to_escape_sequence(mode_provider))
 }
 
 impl TuiElement for AltScreenElement {
@@ -166,8 +187,12 @@ impl TuiElement for AltScreenElement {
                 TuiEvent::KeyDown {
                     is_composing: true, ..
                 } => None,
-                _ => mouse_state_for_event(event, area, |mode| model.is_term_mode_set(mode))
-                    .and_then(|state| state.to_escape_sequence(model.deref())),
+                _ => mouse_event_to_pty_bytes(
+                    event,
+                    area,
+                    |mode| model.is_term_mode_set(mode),
+                    model.deref(),
+                ),
             }
         };
         let Some(bytes) = bytes else {
