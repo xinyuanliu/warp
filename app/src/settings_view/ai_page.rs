@@ -9675,7 +9675,7 @@ struct GeminiEnterpriseWidget {
 impl GeminiEnterpriseWidget {
     fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
         let refresh_credentials_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Retry", SecondaryTheme)
+            ActionButton::new("Refresh", SecondaryTheme)
                 .with_icon(Icon::RefreshCw04)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
@@ -9880,13 +9880,14 @@ impl SettingsWidget for GeminiEnterpriseWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
         let column = Flex::column()
             .with_child(render_separator(appearance))
             .with_child(
                 build_sub_header(
                     appearance,
                     "Gemini Enterprise",
-                    Some(styles::header_font_color(true, app)),
+                    Some(styles::header_font_color(is_any_ai_enabled, app)),
                 )
                 .with_padding_bottom(HEADER_PADDING)
                 .finish(),

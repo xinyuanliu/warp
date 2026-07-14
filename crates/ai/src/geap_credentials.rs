@@ -121,9 +121,9 @@ impl LoadGeapCredentialsError {
             Self::ExchangeToken { status, .. } if is_admin_config_status(*status) => (
                 "Gemini Enterprise is misconfigured".to_string(),
                 "Google rejected Warp's identity token. Ask your workspace admin to verify \
-                that the Workload Identity Federation audience exactly matches the provider's full resource \
-                name, the provider trusts Warp's OIDC issuer, and its attribute condition allows this workspace.
-                "
+                 that the Workload Identity Federation audience exactly matches the provider's \
+                 full resource name, the provider trusts Warp's OIDC issuer, and its attribute \
+                 condition allows this workspace."
                     .to_string(),
                 GeapRecoveryAction::ContactAdmin,
             ),
@@ -136,7 +136,7 @@ impl LoadGeapCredentialsError {
             ),
             Self::ImpersonateServiceAccount { status, .. } if is_admin_config_status(*status) => (
                 "Gemini Enterprise service account access is misconfigured".to_string(),
-                "Warp couldn’t obtain credentials for the service account configured by your \
+                "Warp couldn't obtain credentials for the service account configured by your \
                  workspace admin. Ask them to verify the service account email, confirm the Warp \
                  workload identity has the Workload Identity User role on that service account, \
                  and ensure the IAM Service Account Credentials API is enabled."
@@ -166,6 +166,7 @@ fn format_status_timestamp(time: SystemTime) -> String {
         datetime.format("%b %-d at %-I:%M %p").to_string()
     }
 }
+
 fn refresh_scheduled_at(expires_at: SystemTime) -> SystemTime {
     expires_at
         .checked_sub(GEAP_REFRESH_LEAD_TIME)
