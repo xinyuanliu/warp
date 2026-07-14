@@ -85,14 +85,11 @@ impl TuiElement for AltScreenElement {
         let cursor = if alt.is_mode_set(TermMode::SHOW_CURSOR) {
             let grid = alt.grid_handler();
             let point = grid.cursor_render_point();
-            point
-                .row
-                .checked_sub(grid.history_size())
-                .and_then(|row| {
-                    let col = u16::try_from(point.col).ok()?;
-                    let row = u16::try_from(row).ok()?;
-                    (col < size.width && row < size.height).then_some((col, row))
-                })
+            point.row.checked_sub(grid.history_size()).and_then(|row| {
+                let col = u16::try_from(point.col).ok()?;
+                let row = u16::try_from(row).ok()?;
+                (col < size.width && row < size.height).then_some((col, row))
+            })
         } else {
             None
         };

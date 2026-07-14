@@ -27,9 +27,8 @@ use warp::tui_export::{
     GitStatusMetadata, LLMId, LLMPreferences, LLMPreferencesEvent, ModelEvent,
     ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, RepoDetectionSessionType,
     RepoDetectionSource, ServerConversationToken, ShellCommandExecutorEvent, SizeInfo, SizeUpdate,
-    SkillReference,
-    SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
+    SkillReference, SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand,
+    TerminalModel, TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
     COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
 };
