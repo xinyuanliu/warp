@@ -358,8 +358,8 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ObjectUid, SyncId};
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
-    self, AgentModeAttachContextMethod, AgentModeEntrypoint, AgentModeRewindEntrypoint,
-    AnonymousUserSignupEntrypoint, BlockLatencyInfo, BootstrappingInfo,
+    self, AgentModeAttachContextMethod, AgentModeEditPromptEntrypoint, AgentModeEntrypoint,
+    AgentModeRewindEntrypoint, AnonymousUserSignupEntrypoint, BlockLatencyInfo, BootstrappingInfo,
     CommandCorrectionAcceptedType, CommandCorrectionEvent, InteractionSource, LinkOpenMethod,
     NotificationAgentVariant, NotificationsTurnedOnSource, PaletteSource, PromptSuggestionViewType,
     SaveAsWorkflowModalSource, SecretInteraction, SharingDialogSource, SlowBootstrapInfo,
@@ -24418,14 +24418,19 @@ impl TerminalView {
     }
 
     /// Opens the inline prompt-editing state for the sent prompt in the given AI
-    /// block. Dispatched by the on-hover Edit button and the "Edit message"
-    /// overflow-menu item.
-    fn open_ai_prompt_edit(&mut self, ai_block_view_id: EntityId, ctx: &mut ViewContext<Self>) {
+    /// block. Dispatched by the "Edit message" overflow-menu item (the on-hover
+    /// Edit button opens editing directly via `AIBlockAction::StartEditingPrompt`).
+    fn open_ai_prompt_edit(
+        &mut self,
+        ai_block_view_id: EntityId,
+        entrypoint: AgentModeEditPromptEntrypoint,
+        ctx: &mut ViewContext<Self>,
+    ) {
         for rich_content in self.rich_content_views.iter() {
             if let Some(ai_metadata) = rich_content.ai_block_metadata() {
                 if ai_metadata.ai_block_handle.id() == ai_block_view_id {
                     ai_metadata.ai_block_handle.update(ctx, |block, ctx| {
-                        block.start_editing_prompt(ctx);
+                        block.start_editing_prompt(entrypoint, ctx);
                     });
                     break;
                 }
@@ -24515,6 +24520,16 @@ impl TerminalView {
             return;
         }
         let edited_input = editable.edited_input(trimmed);
+
+        // Mirror the rewind path's `AgentModeRewindExecuted`: record that the user
+        // confirmed the destructive edit and regeneration is about to run.
+        send_telemetry_from_ctx!(
+            TelemetryEvent::AgentModeEditPromptConfirmed {
+                conversation_id,
+                exchange_id,
+            },
+            ctx
+        );
 
         // Run the same destructive flow as rewind (cancel active work, revert
         // diffs, fork a pre-edit backup, truncate from the edited exchange,
@@ -26054,7 +26069,13 @@ impl TypedActionView for TerminalView {
             EditAIPrompt {
                 ai_block_view_id, ..
             } => {
-                self.open_ai_prompt_edit(*ai_block_view_id, ctx);
+                // The overflow / context menu is the only dispatcher of this
+                // action; the on-hover Edit button opens editing directly.
+                self.open_ai_prompt_edit(
+                    *ai_block_view_id,
+                    AgentModeEditPromptEntrypoint::ContextMenu,
+                    ctx,
+                );
             }
             SubmitEditAIPrompt {
                 ai_block_view_id,

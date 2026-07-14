@@ -167,7 +167,8 @@ use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::server::ids::SyncId;
 use crate::server::telemetry::{
-    AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
+    AgentModeEditPromptEntrypoint, AgentModeRewindEntrypoint, AutonomySettingToggleSource,
+    InteractionSource, TelemetryEvent,
 };
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AgentModeCodingPermissionsType, FontSettings,
@@ -305,9 +306,6 @@ struct ActionButtons {
 struct PromptEditState {
     /// The editor, prefilled with the sent prompt text.
     input: ViewHandle<CompactAgentInput>,
-    /// The original prompt text (with any mode prefix) used to detect no-op edits.
-    #[allow(dead_code)]
-    original_text: String,
     /// The inline "Save and regenerate" button.
     save_button: ViewHandle<ActionButton>,
     /// The inline "Cancel" button.
@@ -1489,10 +1487,12 @@ impl AIBlock {
         let Some(exchange_id) = self.model.exchange_id(app) else {
             return false;
         };
+        // Use the no-clone predicate: this runs in `AIBlock::render` every frame.
         BlocklistAIHistoryModel::as_ref(app)
             .conversation(&self.client_ids.conversation_id)
-            .and_then(|conversation| conversation.editable_user_query_for_exchange(exchange_id))
-            .is_some()
+            .is_some_and(|conversation| {
+                conversation.has_editable_user_query_for_exchange(exchange_id)
+            })
     }
 
     /// Whether the block is currently in inline prompt-editing mode.
@@ -1502,7 +1502,14 @@ impl AIBlock {
 
     /// Enters inline prompt-editing mode, prefilling the editor with the sent
     /// prompt text. No-op when the prompt is not editable or already being edited.
-    pub fn start_editing_prompt(&mut self, ctx: &mut ViewContext<Self>) {
+    ///
+    /// `entrypoint` records how the edit was opened (on-hover button vs. overflow
+    /// menu) for telemetry.
+    pub fn start_editing_prompt(
+        &mut self,
+        entrypoint: AgentModeEditPromptEntrypoint,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.prompt_edit_state.is_some() || !self.is_prompt_editable(ctx) {
             return;
         }
@@ -1540,11 +1547,21 @@ impl AIBlock {
 
         self.prompt_edit_state = Some(PromptEditState {
             input: input.clone(),
-            original_text,
             save_button,
             cancel_button,
         });
         ctx.focus(&input);
+
+        // Mirror the rewind path's `AgentModeRewindDialogOpened`: record that the
+        // edit flow was opened, with the entrypoint and conversation/exchange ids.
+        send_telemetry_from_ctx!(
+            TelemetryEvent::AgentModeEditPromptOpened {
+                entrypoint,
+                conversation_id: self.client_ids.conversation_id,
+                exchange_id,
+            },
+            ctx
+        );
         ctx.notify();
     }
 
@@ -6167,7 +6184,8 @@ impl TypedActionView for AIBlock {
                 });
             }
             AIBlockAction::StartEditingPrompt => {
-                self.start_editing_prompt(ctx);
+                // Dispatched by the on-hover Edit button in the prompt header.
+                self.start_editing_prompt(AgentModeEditPromptEntrypoint::Button, ctx);
             }
             AIBlockAction::SubmitPromptEdit => {
                 if let Some(text) = self

@@ -452,8 +452,21 @@ impl TerminalView {
         }
 
         // Secondary entry point for editing a sent prompt (the primary is the
-        // on-hover Edit button). Restored/read-only blocks can't be edited.
-        if FeatureFlag::EditSentAgentMessages.is_enabled() && !is_restored {
+        // on-hover Edit button). Gate this item on the *same* editability signal
+        // as the hover button (see `AIBlock::is_prompt_editable`): the feature
+        // flag, a non-restored, non-read-only surface, and a backing conversation
+        // that actually exposes an editable user query for this exchange. This
+        // keeps read-only/shared-session/transcript surfaces and non-editable
+        // exchanges from exposing an edit affordance that would silently no-op.
+        let is_prompt_editable = FeatureFlag::EditSentAgentMessages.is_enabled()
+            && !is_restored
+            && !self.model.lock().is_read_only()
+            && BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&ai_conversation_id)
+                .is_some_and(|conversation| {
+                    conversation.has_editable_user_query_for_exchange(ai_exchange_id)
+                });
+        if is_prompt_editable {
             menu_items.push(
                 MenuItemFields::new("Edit message")
                     .with_on_select_action(TerminalAction::EditAIPrompt {

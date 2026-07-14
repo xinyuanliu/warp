@@ -195,8 +195,6 @@ pub struct SubagentTaskNotFound;
 /// [`AIConversation::editable_user_query_for_exchange`].
 #[derive(Debug, Clone)]
 pub struct EditableUserQuery {
-    /// The task the edited prompt should be re-sent into.
-    task_id: TaskId,
     /// The original prompt text as displayed to the user, including any
     /// slash-command mode prefix such as `/plan`.
     original_text: String,
@@ -207,11 +205,6 @@ pub struct EditableUserQuery {
 }
 
 impl EditableUserQuery {
-    /// The task the edited prompt should be re-sent into.
-    pub fn task_id(&self) -> &TaskId {
-        &self.task_id
-    }
-
     /// The original prompt text as displayed to the user (with any mode prefix).
     pub fn original_text(&self) -> &str {
         &self.original_text
@@ -1710,17 +1703,18 @@ impl AIConversation {
         context_in_exchanges(self.exchange_with_id(exchange_id).into_iter())
     }
 
-    /// Returns the editable user query for the given root-task exchange, if the
-    /// exchange represents a user-authored prompt that can be edited in place and
-    /// regenerated.
+    /// Finds the editable user-query input for a root-task exchange, applying the
+    /// same editability guards as [`Self::editable_user_query_for_exchange`] but
+    /// **without cloning** the input. Suitable for hot paths such as
+    /// `AIBlock::render` that only need an existence/predicate check.
     ///
     /// Returns `None` for passive/action-result/non-user-query exchanges, or for
     /// exchanges that are not part of the conversation's root task (e.g. subagent
     /// exchanges), which are not user-editable.
-    pub fn editable_user_query_for_exchange(
+    fn editable_user_query_input_for_exchange(
         &self,
         exchange_id: AIAgentExchangeId,
-    ) -> Option<EditableUserQuery> {
+    ) -> Option<&AIAgentInput> {
         // Only root-task exchanges are editable (subagent exchanges are not).
         let exchange = self
             .root_task_exchanges()
@@ -1733,15 +1727,40 @@ impl AIConversation {
 
         // Find the user query input in the exchange. Exchanges without a user
         // query (e.g. action-result-only, resume-only) are not editable.
-        let original_input = exchange
-            .input
-            .iter()
-            .find(|input| input.is_user_query())?
+        exchange.input.iter().find(|input| input.is_user_query())
+    }
+
+    /// Returns `true` if the given root-task exchange exposes a user-authored
+    /// prompt that can be edited in place, **without cloning** the underlying
+    /// input or query text. Prefer this over
+    /// [`Self::editable_user_query_for_exchange`] on render/hot paths that only
+    /// need an existence check; use the latter only when the cloned payload is
+    /// actually needed (i.e. to drive the edit flow).
+    pub fn has_editable_user_query_for_exchange(&self, exchange_id: AIAgentExchangeId) -> bool {
+        self.editable_user_query_input_for_exchange(exchange_id)
+            .is_some()
+    }
+
+    /// Returns the editable user query for the given root-task exchange, if the
+    /// exchange represents a user-authored prompt that can be edited in place and
+    /// regenerated.
+    ///
+    /// Returns `None` for passive/action-result/non-user-query exchanges, or for
+    /// exchanges that are not part of the conversation's root task (e.g. subagent
+    /// exchanges), which are not user-editable.
+    ///
+    /// This clones the underlying input; for a render-path existence check that
+    /// avoids the clone, use [`Self::has_editable_user_query_for_exchange`].
+    pub fn editable_user_query_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<EditableUserQuery> {
+        let original_input = self
+            .editable_user_query_input_for_exchange(exchange_id)?
             .clone();
         let original_text = original_input.user_query()?;
 
         Some(EditableUserQuery {
-            task_id: self.get_root_task_id().clone(),
             original_text,
             original_input,
         })

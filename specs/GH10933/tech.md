@@ -51,7 +51,7 @@ Inspected commit: `ac4225c1805811a46bfa9df7531e6a4f0058ab12`.
    - If the edited exchange was the initial query, ensure `AIConversation::initial_query`, `AIConversationMetadata.initial_query`, conversation title fallback, and `AgentConversationsModel` rows update to the edited text after the new request is appended.
    - Emit or reuse a history event that makes conversation lists/search rows refresh after an edit, especially when the title/initial query changes before streaming finishes.
 8. Add telemetry and accessibility:
-   - Add telemetry for edit opened, edit cancelled, edit submitted, edit submit no-op, and edit regeneration failed/succeeded, with existing conversation/exchange identifiers and entrypoint.
+   - Add telemetry mirroring the rewind path (`AgentModeRewindDialogOpened`/`AgentModeRewindExecuted`). The initial release emits `AgentModeEditPromptOpened` (with entrypoint + conversation/exchange ids, when the inline editor opens) and `AgentModeEditPromptConfirmed` (with conversation/exchange ids, when the destructive edit is confirmed and regeneration runs); both gated on `FeatureFlag::EditSentAgentMessages`. Finer-grained events (edit cancelled, unchanged/empty submit no-op, and regeneration succeeded/failed) are deferred as a fast-follow — the opened→confirmed funnel is what's needed to validate the destructive-regeneration UX during dogfood.
    - Add accessibility content for the menu action and inline editor controls.
    - Add the final keyboard shortcut only after product/design confirms the binding; wire it to the latest editable user prompt when the input buffer is empty.
 9. Cloud/shared-session constraints:

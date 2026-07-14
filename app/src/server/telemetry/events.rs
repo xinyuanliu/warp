@@ -831,6 +831,15 @@ pub enum AgentModeRewindEntrypoint {
     SlashCommand,
 }
 
+/// The entrypoint from which inline prompt editing was opened.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum AgentModeEditPromptEntrypoint {
+    /// The on-hover Edit button in the AI block prompt header.
+    Button,
+    /// The "Edit message" overflow/context menu item.
+    ContextMenu,
+}
+
 /// Reasons why we fell back to a prompt suggestion from a suggested code diff.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum PromptSuggestionFallbackReason {
@@ -1974,6 +1983,26 @@ pub enum TelemetryEvent {
         num_blocks_reverted: usize,
     },
 
+    /// User opened the inline editor for a sent prompt (the first step of the
+    /// edit-and-regenerate flow). Mirrors `AgentModeRewindDialogOpened`.
+    AgentModeEditPromptOpened {
+        /// How the edit was opened (on-hover button vs. overflow menu).
+        entrypoint: AgentModeEditPromptEntrypoint,
+        /// The conversation whose prompt is being edited.
+        conversation_id: AIConversationId,
+        /// The exchange whose user prompt is being edited.
+        exchange_id: AIAgentExchangeId,
+    },
+
+    /// User confirmed the destructive edit modal, regenerating the conversation
+    /// from the edited prompt. Mirrors `AgentModeRewindExecuted`.
+    AgentModeEditPromptConfirmed {
+        /// The conversation being regenerated from the edited prompt.
+        conversation_id: AIConversationId,
+        /// The exchange whose user prompt was edited.
+        exchange_id: AIAgentExchangeId,
+    },
+
     /// Emitted when a user explicitly attaches a block as context to an Agent Mode query.
     ///
     /// This is only emitted for the initial attachment -- its intended to express user's intent to
@@ -3024,6 +3053,22 @@ impl TelemetryEvent {
             TelemetryEvent::AgentModeRewindExecuted {
                 num_blocks_reverted,
             } => Some(json!({"num_blocks_reverted": num_blocks_reverted})),
+            TelemetryEvent::AgentModeEditPromptOpened {
+                entrypoint,
+                conversation_id,
+                exchange_id,
+            } => Some(json!({
+                "entrypoint": entrypoint,
+                "conversation_id": conversation_id,
+                "exchange_id": exchange_id,
+            })),
+            TelemetryEvent::AgentModeEditPromptConfirmed {
+                conversation_id,
+                exchange_id,
+            } => Some(json!({
+                "conversation_id": conversation_id,
+                "exchange_id": exchange_id,
+            })),
             TelemetryEvent::BootstrappingSlow(info) => Some(json!(info)),
             TelemetryEvent::BootstrappingSlowContents(info) => Some(json!(info)),
             TelemetryEvent::ToggleSettingsSync {
@@ -4844,6 +4889,8 @@ impl TelemetryEvent {
             | TelemetryEvent::AgentModeContinueConversationButtonClicked { .. }
             | TelemetryEvent::AgentModeRewindDialogOpened { .. }
             | TelemetryEvent::AgentModeRewindExecuted { .. }
+            | TelemetryEvent::AgentModeEditPromptOpened { .. }
+            | TelemetryEvent::AgentModeEditPromptConfirmed { .. }
             | TelemetryEvent::OpenSuggestionsMenu(_)
             | TelemetryEvent::ConfirmSuggestion { .. }
             | TelemetryEvent::OpenContextMenu { .. }
@@ -5782,6 +5829,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeRewindExecuted { .. } => {
                 EnablementState::Flag(FeatureFlag::RevertToCheckpoints)
             }
+            Self::AgentModeEditPromptOpened { .. } | Self::AgentModeEditPromptConfirmed { .. } => {
+                EnablementState::Flag(FeatureFlag::EditSentAgentMessages)
+            }
             Self::RecentMenuItemSelected => EnablementState::Always,
             Self::OpenRepoFolderSubmitted => EnablementState::Always,
             Self::OutOfCreditsBannerClosed => EnablementState::Always,
@@ -5876,6 +5926,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::AgentModeRewindDialogOpened { .. } => "Opened Rewind Confirmation Dialog",
             Self::AgentModeRewindExecuted { .. } => "Executed Conversation Rewind",
+            Self::AgentModeEditPromptOpened { .. } => "Opened Edit Prompt Editor",
+            Self::AgentModeEditPromptConfirmed { .. } => "Confirmed Edit Prompt Regeneration",
             Self::ReinputCommands => "Context Menu: Reinput Commands",
             Self::ToggleSettingsSync => "Toggle Settings Sync",
             Self::ToggleFocusPaneOnHover => "Toggle Focus Pane On Hover",
@@ -6445,6 +6497,12 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::AgentModeRewindExecuted { .. } => {
                 "User executed a rewind to a previous conversation state"
+            }
+            Self::AgentModeEditPromptOpened { .. } => {
+                "User opened the inline editor for a sent prompt"
+            }
+            Self::AgentModeEditPromptConfirmed { .. } => {
+                "User confirmed the destructive edit and regenerated the conversation from the edited prompt"
             }
             Self::BlockCompletedOnDogfoodOnly => {
                 "Completed a block, with extra information for dogfood only"
