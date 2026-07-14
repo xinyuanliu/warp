@@ -18,12 +18,9 @@ fn admin_config_status_flags_only_non_429_4xx() {
     assert!(is_admin_config_status(Some(401)));
     assert!(is_admin_config_status(Some(403)));
     assert!(is_admin_config_status(Some(404)));
-    // 429 is rate limiting -> transient, user can retry.
     assert!(!is_admin_config_status(Some(429)));
-    // 5xx is provider-side transient.
     assert!(!is_admin_config_status(Some(500)));
     assert!(!is_admin_config_status(Some(503)));
-    // No HTTP status means a network failure before any response.
     assert!(!is_admin_config_status(None));
 }
 

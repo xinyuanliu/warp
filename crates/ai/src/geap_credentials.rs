@@ -79,10 +79,6 @@ pub enum GeapCredentialsState {
     #[default]
     Missing,
     Disabled,
-    /// Enabled for this user, but the workspace admin hasn't finished
-    /// configuring Gemini Enterprise (no audience yet), so there is nothing to
-    /// mint from. Distinct from `Missing` (a cold start before the first mint)
-    /// so the UI can tell the user their admin still needs to act.
     Unconfigured,
     Refreshing {
         previous: Option<(GeapCredentials, GeapMintBinding)>,
@@ -104,8 +100,7 @@ pub enum GeapRecoveryAction {
 }
 
 /// A 4xx status (other than 429 Too Many Requests) from a Google auth leg means
-/// a configuration/permission problem an admin must fix. A network failure (no
-/// status), 429, or any 5xx is transient and user-retryable.
+/// a configuration/permission problem an admin must fix.
 fn is_admin_config_status(status: Option<u16>) -> bool {
     match status {
         Some(code) => (400..500).contains(&code) && code != 429,
