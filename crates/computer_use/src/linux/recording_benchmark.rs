@@ -2,6 +2,8 @@ use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use instant::Instant;
@@ -22,33 +24,32 @@ const ACCENT_PIXEL: u32 = 0x00FF_FFFF;
 #[derive(Clone, Copy)]
 enum CaptureCase {
     Screen,
-    CompositeVisible,
-    CompositeCovered,
     NativeWindowVisible,
+    WarpGetImageVisible,
+    WarpGetImageCovered,
     NativeWindowCovered,
 }
 
 impl CaptureCase {
-    const ALL: [Self; 5] = [
+    const PERFORMANCE: [Self; 4] = [
         Self::Screen,
-        Self::CompositeVisible,
-        Self::CompositeCovered,
         Self::NativeWindowVisible,
-        Self::NativeWindowCovered,
+        Self::WarpGetImageVisible,
+        Self::WarpGetImageCovered,
     ];
 
     fn name(self) -> &'static str {
         match self {
             Self::Screen => "screen_x11grab",
-            Self::CompositeVisible => "composite_visible",
-            Self::CompositeCovered => "composite_covered",
-            Self::NativeWindowVisible => "native_window_visible",
-            Self::NativeWindowCovered => "native_window_covered",
+            Self::NativeWindowVisible => "window_x11grab_visible",
+            Self::WarpGetImageVisible => "warp_getimage_visible",
+            Self::WarpGetImageCovered => "warp_getimage_covered",
+            Self::NativeWindowCovered => "window_x11grab_covered_control",
         }
     }
 
     fn is_covered(self) -> bool {
-        matches!(self, Self::CompositeCovered | Self::NativeWindowCovered)
+        matches!(self, Self::WarpGetImageCovered | Self::NativeWindowCovered)
     }
 
     fn uses_native_window(self) -> bool {
@@ -58,7 +59,7 @@ impl CaptureCase {
     fn target(self, window: xproto::Window) -> Target {
         match self {
             Self::Screen => Target::Screen,
-            Self::CompositeVisible | Self::CompositeCovered => Target::Window {
+            Self::WarpGetImageVisible | Self::WarpGetImageCovered => Target::Window {
                 window_id: window,
                 pid: 0,
             },
@@ -83,10 +84,17 @@ struct BenchmarkRow {
     start_ms: f64,
     capture_wall_ms: f64,
     stop_ms: f64,
+    total_wall_ms: f64,
     media_duration_s: f64,
     frames: u64,
-    wall_fps: f64,
+    lifecycle_fps: f64,
+    media_to_lifecycle_ratio: f64,
     size_bytes: u64,
+    bytes_per_media_second: f64,
+    bytes_per_frame: f64,
+    active_cpu_seconds: f64,
+    active_cpu_percent: f64,
+    peak_combined_rss_kb: u64,
     sample: &'static str,
 }
 
@@ -104,6 +112,99 @@ struct BenchmarkParameters {
 struct NativeCapture {
     process: Child,
     path: PathBuf,
+}
+
+#[derive(Default)]
+struct ResourceState {
+    start_cpu_ticks: u64,
+    latest_cpu_ticks: u64,
+    peak_rss_kb: u64,
+}
+
+struct ResourceMonitor {
+    stop: Arc<AtomicBool>,
+    state: Arc<Mutex<ResourceState>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ResourceMonitor {
+    fn start(child_pid: u32) -> Self {
+        let mut pids = vec![std::process::id(), child_pid];
+        if let Ok(pid) = std::env::var("WARP_RECORDING_BENCHMARK_XVFB_PID")
+            && let Ok(pid) = pid.parse()
+        {
+            pids.push(pid);
+        }
+        let initial = aggregate_resources(&pids);
+        let state = Arc::new(Mutex::new(ResourceState {
+            start_cpu_ticks: initial.cpu_ticks,
+            latest_cpu_ticks: initial.cpu_ticks,
+            peak_rss_kb: initial.rss_kb,
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let task_state = state.clone();
+        let task_stop = stop.clone();
+        let task = tokio::spawn(async move {
+            while !task_stop.load(Ordering::Acquire) {
+                let sample = aggregate_resources(&pids);
+                {
+                    let mut state = task_state.lock().expect("resource monitor state");
+                    state.latest_cpu_ticks = sample.cpu_ticks;
+                    state.peak_rss_kb = state.peak_rss_kb.max(sample.rss_kb);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let sample = aggregate_resources(&pids);
+            let mut state = task_state.lock().expect("resource monitor state");
+            state.latest_cpu_ticks = sample.cpu_ticks;
+            state.peak_rss_kb = state.peak_rss_kb.max(sample.rss_kb);
+        });
+        Self { stop, state, task }
+    }
+
+    async fn finish(self) -> (u64, u64) {
+        self.stop.store(true, Ordering::Release);
+        self.task.await.expect("resource monitor task");
+        let state = self.state.lock().expect("resource monitor state");
+        (
+            state.latest_cpu_ticks.saturating_sub(state.start_cpu_ticks),
+            state.peak_rss_kb,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ResourceSample {
+    cpu_ticks: u64,
+    rss_kb: u64,
+}
+
+fn aggregate_resources(pids: &[u32]) -> ResourceSample {
+    pids.iter()
+        .filter_map(|pid| read_process_resources(*pid))
+        .fold(ResourceSample::default(), |mut total, sample| {
+            total.cpu_ticks += sample.cpu_ticks;
+            total.rss_kb += sample.rss_kb;
+            total
+        })
+}
+
+fn read_process_resources(pid: u32) -> Option<ResourceSample> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<_> = stat[stat.rfind(')')? + 1..].split_whitespace().collect();
+    let user_ticks: u64 = fields.get(11)?.parse().ok()?;
+    let system_ticks: u64 = fields.get(12)?.parse().ok()?;
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let rss_kb = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    Some(ResourceSample {
+        cpu_ticks: user_ticks + system_ticks,
+        rss_kb,
+    })
 }
 
 struct WindowPainter<'a> {
@@ -185,7 +286,7 @@ impl Drop for WindowPainter<'_> {
     }
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "performance benchmark; run with script/benchmark_linux_recording"]
 async fn benchmark_recording_capture_paths() {
     assert_benchmark_environment().await;
@@ -209,25 +310,41 @@ async fn benchmark_recording_capture_paths() {
     };
 
     let mut rows = Vec::new();
+    let control_frame_rate = *frame_rates.first().expect("at least one frame rate");
     for frame_rate in frame_rates {
         for repetition in 1..=repetitions {
-            for case in CaptureCase::ALL {
+            for case in CaptureCase::PERFORMANCE {
                 let row = run_case(&conn, &screen, case, repetition, frame_rate, parameters).await;
                 eprintln!(
-                    "{} rep={} fps={} start={:.1}ms stop={:.1}ms frames={} wall_fps={:.2} sample={}",
+                    "{} rep={} fps={} start={:.1}ms stop={:.1}ms frames={} lifecycle_fps={:.2} media_ratio={:.3} sample={}",
                     row.case,
                     row.repetition,
                     row.frame_rate,
                     row.start_ms,
                     row.stop_ms,
                     row.frames,
-                    row.wall_fps,
+                    row.lifecycle_fps,
+                    row.media_to_lifecycle_ratio,
                     row.sample,
                 );
                 rows.push(row);
             }
         }
     }
+    let control = run_case(
+        &conn,
+        &screen,
+        CaptureCase::NativeWindowCovered,
+        1,
+        control_frame_rate,
+        parameters,
+    )
+    .await;
+    eprintln!(
+        "{} correctness_control sample={}",
+        control.case, control.sample
+    );
+    rows.push(control);
 
     write_csv(&output_path, &rows);
     eprintln!("benchmark results: {}", output_path.display());
@@ -255,14 +372,24 @@ async fn run_case(
     conn.flush().expect("flush benchmark windows");
 
     let start = Instant::now();
-    let (path, start_ms, capture_wall_ms, stop_ms, size_bytes) = if case.uses_native_window() {
+    let (
+        path,
+        start_ms,
+        capture_wall_ms,
+        stop_ms,
+        size_bytes,
+        active_cpu_ticks,
+        peak_combined_rss_kb,
+    ) = if case.uses_native_window() {
         let mut capture = start_native_window_capture(target, width, height, frame_rate)
             .await
             .expect("start native window capture");
         let start_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let monitor = ResourceMonitor::start(capture.process.id().expect("ffmpeg process id"));
         let capture_start = Instant::now();
         animate(&painter, duration).await;
         let capture_wall_ms = capture_start.elapsed().as_secs_f64() * 1000.0;
+        let (active_cpu_ticks, peak_combined_rss_kb) = monitor.finish().await;
         let stop_start = Instant::now();
         super::finalize_screen_capture(&mut capture.process, &capture.path)
             .await
@@ -271,7 +398,15 @@ async fn run_case(
         let size_bytes = std::fs::metadata(&capture.path)
             .expect("native recording metadata")
             .len();
-        (capture.path, start_ms, capture_wall_ms, stop_ms, size_bytes)
+        (
+            capture.path,
+            start_ms,
+            capture_wall_ms,
+            stop_ms,
+            size_bytes,
+            active_cpu_ticks,
+            peak_combined_rss_kb,
+        )
     } else {
         let recorder = Recorder::new();
         let config = RecordingConfig {
@@ -282,9 +417,16 @@ async fn run_case(
         };
         let handle = recorder.start(config).await.expect("start recorder");
         let start_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let child_pid = handle
+            .process
+            .as_ref()
+            .and_then(|process| process.id())
+            .expect("ffmpeg process id");
+        let monitor = ResourceMonitor::start(child_pid);
         let capture_start = Instant::now();
         animate(&painter, duration).await;
         let capture_wall_ms = capture_start.elapsed().as_secs_f64() * 1000.0;
+        let (active_cpu_ticks, peak_combined_rss_kb) = monitor.finish().await;
         let stop_start = Instant::now();
         let output = recorder.stop(handle).await.expect("stop recorder");
         let stop_ms = stop_start.elapsed().as_secs_f64() * 1000.0;
@@ -294,6 +436,8 @@ async fn run_case(
             capture_wall_ms,
             stop_ms,
             output.size_bytes,
+            active_cpu_ticks,
+            peak_combined_rss_kb,
         )
     };
 
@@ -302,7 +446,15 @@ async fn run_case(
     if let Some(expected) = case.expected_sample() {
         assert_eq!(sample, expected, "{} captured wrong pixels", case.name());
     }
-    let wall_fps = probe.frames as f64 / (capture_wall_ms / 1000.0);
+    let capture_lifecycle_s = (start_ms + capture_wall_ms) / 1000.0;
+    let total_wall_ms = start_ms + capture_wall_ms + stop_ms;
+    let lifecycle_fps = probe.frames as f64 / capture_lifecycle_s;
+    let media_to_lifecycle_ratio = probe.duration_s / capture_lifecycle_s;
+    let bytes_per_media_second = size_bytes as f64 / probe.duration_s;
+    let bytes_per_frame = size_bytes as f64 / probe.frames as f64;
+    let ticks_per_second = env_parse("WARP_RECORDING_BENCHMARK_TICKS_PER_SECOND", 100.0);
+    let active_cpu_seconds = active_cpu_ticks as f64 / ticks_per_second;
+    let active_cpu_percent = active_cpu_seconds / (capture_wall_ms / 1000.0) * 100.0;
 
     let _ = std::fs::remove_file(&path);
     if let Some(cover) = cover {
@@ -320,10 +472,17 @@ async fn run_case(
         start_ms,
         capture_wall_ms,
         stop_ms,
+        total_wall_ms,
         media_duration_s: probe.duration_s,
         frames: probe.frames,
-        wall_fps,
+        lifecycle_fps,
+        media_to_lifecycle_ratio,
         size_bytes,
+        bytes_per_media_second,
+        bytes_per_frame,
+        active_cpu_seconds,
+        active_cpu_percent,
+        peak_combined_rss_kb,
         sample,
     }
 }
@@ -536,13 +695,13 @@ fn write_csv(path: &Path, rows: &[BenchmarkRow]) {
         .expect("create benchmark output");
     writeln!(
         file,
-        "case,repetition,requested_fps,width,height,start_ms,capture_wall_ms,stop_ms,media_duration_s,frames,wall_fps,size_bytes,sample"
+        "case,repetition,requested_fps,width,height,start_ms,capture_wall_ms,stop_ms,total_wall_ms,media_duration_s,frames,lifecycle_fps,media_to_lifecycle_ratio,size_bytes,bytes_per_media_second,bytes_per_frame,active_cpu_seconds,active_cpu_percent,peak_combined_rss_kb,sample"
     )
     .expect("write benchmark header");
     for row in rows {
         writeln!(
             file,
-            "{},{},{},{},{},{:.3},{:.3},{:.3},{:.6},{},{:.3},{},{}",
+            "{},{},{},{},{},{:.3},{:.3},{:.3},{:.3},{:.6},{},{:.3},{:.6},{},{:.3},{:.3},{:.3},{:.1},{},{}",
             row.case,
             row.repetition,
             row.frame_rate,
@@ -551,10 +710,17 @@ fn write_csv(path: &Path, rows: &[BenchmarkRow]) {
             row.start_ms,
             row.capture_wall_ms,
             row.stop_ms,
+            row.total_wall_ms,
             row.media_duration_s,
             row.frames,
-            row.wall_fps,
+            row.lifecycle_fps,
+            row.media_to_lifecycle_ratio,
             row.size_bytes,
+            row.bytes_per_media_second,
+            row.bytes_per_frame,
+            row.active_cpu_seconds,
+            row.active_cpu_percent,
+            row.peak_combined_rss_kb,
             row.sample,
         )
         .expect("write benchmark row");
