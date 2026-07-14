@@ -671,6 +671,8 @@ pub enum FeatureFlag {
 
     /// Enables file-based MCP server support via .mcp.json files in repo roots.
     FileBasedMcp,
+    /// Enables independent global MCP configuration and status in the Warp TUI.
+    TuiMcpServers,
 
     /// Enables passing user query arguments to skill invocations ($ARGUMENTS, $N).
     SkillArguments,
@@ -982,6 +984,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudRunners,
     FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::McpJsonTreeView,
+    FeatureFlag::TuiMcpServers,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

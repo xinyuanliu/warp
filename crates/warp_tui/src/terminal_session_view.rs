@@ -27,10 +27,11 @@ use warp::tui_export::{
     PtyIntent, PtyIntentEvent, RepoDetectionSessionType, RepoDetectionSource,
     ServerConversationToken, ShellCommandExecutorEvent, SkillReference,
     SlashCommandDataSource as _, SlashCommandSelectionBehavior, StaticCommand, TerminalModel,
-    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiSlashCommand,
-    TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiZeroStateDataSource,
-    COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
+    TerminalSurface, TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpModel,
+    TuiSlashCommand, TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs,
+    TuiZeroStateDataSource, COMMAND_REGISTRY, WAKEUP_THROTTLE_PERIOD,
 };
+use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
 use warp_editor::model::CoreEditorModel;
 use warp_errors::report_error;
@@ -56,6 +57,7 @@ use crate::inline_menu::{TuiInlineMenu, MAX_INLINE_MENU_ROWS};
 use crate::input::{TuiInputView, TuiInputViewEvent};
 use crate::input_mode_policy::{self, TuiInputModePolicy};
 use crate::keybindings::TUI_BINDING_GROUP;
+use crate::mcp_menu::{TuiMcpMenuEvent, TuiMcpMenuModel};
 use crate::resume::TuiExitSummaryHandle;
 use crate::slash_commands::TuiSlashCommandModel;
 use crate::transcript_view::{TuiTranscriptView, TuiTranscriptViewEvent};
@@ -196,6 +198,7 @@ pub(crate) struct TuiTerminalSessionView {
     input_view: ViewHandle<TuiInputView>,
     inline_menus: Vec<TuiInlineMenu>,
     conversation_menu: ModelHandle<TuiConversationMenuModel>,
+    mcp_menu: Option<ModelHandle<TuiMcpMenuModel>>,
     slash_commands_source: ModelHandle<TuiSlashCommandDataSource>,
     conversation_selection: ConversationSelectionHandle,
     ai_action_model: ModelHandle<BlocklistAIActionModel>,
@@ -397,6 +400,14 @@ impl TuiTerminalSessionView {
                 );
             }
         });
+        let mcp_menu = FeatureFlag::TuiMcpServers.is_enabled().then(|| {
+            let menu = ctx.add_model(TuiMcpMenuModel::new);
+            ctx.subscribe_to_model(&menu, |_, _, event, ctx| {
+                let TuiMcpMenuEvent::Updated = event;
+                ctx.notify();
+            });
+            menu
+        });
         // Typing after a ctrl-c press disarms the pending exit confirmation.
         // The ctrl-c buffer clear leaves the buffer empty, so the window it
         // arms survives its own clear.
@@ -435,10 +446,13 @@ impl TuiTerminalSessionView {
         });
 
         let input_mode_for_input_view = ai_input_model.clone();
-        let inline_menus = vec![
+        let mut inline_menus = vec![
             TuiInlineMenu::new(slash_commands.clone()),
             TuiInlineMenu::new(conversation_menu.clone()),
         ];
+        if let Some(mcp_menu) = &mcp_menu {
+            inline_menus.push(TuiInlineMenu::new(mcp_menu.clone()));
+        }
         let inline_menus_for_input = inline_menus.clone();
         let input_view = ctx.add_typed_action_tui_view(move |ctx| {
             TuiInputView::new(
@@ -470,6 +484,9 @@ impl TuiTerminalSessionView {
             }
             TuiInputViewEvent::AcceptedConversation(entry_id) => {
                 view.handle_accepted_conversation(*entry_id, ctx);
+            }
+            TuiInputViewEvent::AcceptedMcp(action) => {
+                view.handle_accepted_mcp_action(*action, ctx);
             }
         });
         // The input box border color and the footer's shell-mode hint depend
@@ -516,6 +533,11 @@ impl TuiTerminalSessionView {
                 ctx.notify();
             }
         });
+        if FeatureFlag::TuiMcpServers.is_enabled() {
+            ctx.subscribe_to_model(&TuiMcpModel::handle(ctx), |_, _, _, ctx| {
+                ctx.notify();
+            });
+        }
 
         // Bridge shared shell-tool executor events into terminal-manager PTY intents.
         let shell_command_executor = action_model.as_ref(ctx).shell_command_executor(ctx);
@@ -654,6 +676,7 @@ impl TuiTerminalSessionView {
             input_view,
             inline_menus,
             conversation_menu,
+            mcp_menu,
             slash_commands_source,
             conversation_selection,
             ai_action_model: action_model,
@@ -1466,6 +1489,13 @@ impl TuiTerminalSessionView {
         self.restore_conversation(target, TuiConversationRestoreOrigin::ConversationList, ctx);
     }
 
+    fn handle_accepted_mcp_action(&mut self, action: TuiMcpAction, ctx: &mut ViewContext<Self>) {
+        TuiMcpModel::handle(ctx).update(ctx, |model, ctx| {
+            model.apply_action(action, ctx);
+        });
+        ctx.notify();
+    }
+
     fn select_tui_slash_command(&mut self, command: &StaticCommand, ctx: &mut ViewContext<Self>) {
         match slash_command_selection_behavior(command) {
             SlashCommandSelectionBehavior::InsertCommandText(text) => {
@@ -1524,6 +1554,13 @@ impl TuiTerminalSessionView {
                 self.input_view.update(ctx, |input, ctx| input.clear(ctx));
                 self.conversation_menu
                     .update(ctx, |menu, ctx| menu.open(ctx));
+                record_static_slash_command_accepted(command.name, true, ctx);
+            }
+            TuiSlashCommand::Mcp => {
+                self.input_view.update(ctx, |input, ctx| input.clear(ctx));
+                if let Some(menu) = &self.mcp_menu {
+                    menu.update(ctx, |menu, ctx| menu.open(ctx));
+                }
                 record_static_slash_command_accepted(command.name, true, ctx);
             }
             TuiSlashCommand::CreateNewProject => {
