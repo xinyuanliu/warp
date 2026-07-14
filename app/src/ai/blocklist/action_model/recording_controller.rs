@@ -5,9 +5,7 @@
 //! from a later resumed turn), so the live handle lives here rather than in a
 //! per-call executor.
 
-use computer_use::{
-    ActionLogEntry, RecordingCompletionStatus, RecordingExitKind, DEFAULT_PILL_DURATION,
-};
+use computer_use::{ActionLogEntry, RecordingCompletionStatus, RecordingExitKind};
 use instant::Instant;
 use thiserror::Error;
 use warpui::{Entity, SingletonEntity};
@@ -139,15 +137,19 @@ impl RecordingController {
         self.starting = false;
     }
 
-    /// Appends an overlay group to the active recording.
+    /// Appends an overlay group when the active recording belongs to the
+    /// originating conversation.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub fn record_action(&mut self, labels: Vec<String>) {
+    pub fn record_action(&mut self, conversation_id: AIConversationId, labels: Vec<String>) {
         if !labels.is_empty() {
-            if let Some(active) = self.active.as_mut() {
+            if let Some(active) = self
+                .active
+                .as_mut()
+                .filter(|active| active.conversation_id == conversation_id)
+            {
                 active.actions.push(ActionLogEntry {
                     offset: active.started_at.elapsed(),
                     labels,
-                    show_duration: DEFAULT_PILL_DURATION,
                 });
             }
         }
@@ -268,3 +270,7 @@ impl Entity for RecordingController {
 }
 
 impl SingletonEntity for RecordingController {}
+
+#[cfg(test)]
+#[path = "recording_controller_tests.rs"]
+mod tests;

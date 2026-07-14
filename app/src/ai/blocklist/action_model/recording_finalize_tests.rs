@@ -5,10 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use computer_use::testing::MockRecorder;
-use computer_use::{
-    ActionLogEntry, RecordingCompletionStatus, RecordingHandle, RecordingOutput,
-    DEFAULT_PILL_DURATION,
-};
+use computer_use::{ActionLogEntry, RecordingCompletionStatus, RecordingHandle, RecordingOutput};
 
 use super::{finalize_recording, RecordingTerminalOutcome, RecordingUploader};
 use crate::ai::agent_sdk::artifact_upload::{
@@ -254,12 +251,10 @@ async fn published_with_overlay_entries_uploads_once() {
         ActionLogEntry {
             offset: Duration::from_millis(500),
             labels: vec!["ctrl+a".to_string()],
-            show_duration: DEFAULT_PILL_DURATION,
         },
         ActionLogEntry {
             offset: Duration::from_millis(2000),
             labels: vec!["typing\u{2026}".to_string(), "scroll \u{2193}".to_string()],
-            show_duration: DEFAULT_PILL_DURATION,
         },
     ];
 
