@@ -6,8 +6,7 @@
 //! per-call executor.
 
 use computer_use::{
-    ActionLogEntry, OverlayKind, RecordingCompletionStatus, RecordingExitKind,
-    DEFAULT_PILL_DURATION,
+    ActionLogEntry, RecordingCompletionStatus, RecordingExitKind, DEFAULT_PILL_DURATION,
 };
 use instant::Instant;
 use thiserror::Error;
@@ -77,7 +76,7 @@ impl FinalizeReason {
 }
 
 /// The single in-progress recording: controller id, owning conversation, live
-/// capture handle, and the keyboard action log accumulated while it records.
+/// capture handle, and the action overlay log accumulated while it records.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 struct ActiveRecording {
     id: String,
@@ -85,7 +84,7 @@ struct ActiveRecording {
     handle: computer_use::RecordingHandle,
     /// When capture went live; action offsets are measured from here.
     started_at: Instant,
-    /// Keyboard actions to burn into the video, in dispatch order.
+    /// Action groups to burn into the video, in dispatch order.
     actions: Vec<ActionLogEntry>,
 }
 
@@ -140,18 +139,17 @@ impl RecordingController {
         self.starting = false;
     }
 
-    /// Appends a keyboard overlay entry to the active recording, timestamped
-    /// relative to capture start. No-op when nothing is recording, so callers can
-    /// record unconditionally.
+    /// Appends an overlay group to the active recording.
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
-    pub fn record_action(&mut self, kind: OverlayKind, label: String) {
-        if let Some(active) = self.active.as_mut() {
-            active.actions.push(ActionLogEntry {
-                offset: active.started_at.elapsed(),
-                kind,
-                label,
-                show_duration: DEFAULT_PILL_DURATION,
-            });
+    pub fn record_action(&mut self, labels: Vec<String>) {
+        if !labels.is_empty() {
+            if let Some(active) = self.active.as_mut() {
+                active.actions.push(ActionLogEntry {
+                    offset: active.started_at.elapsed(),
+                    labels,
+                    show_duration: DEFAULT_PILL_DURATION,
+                });
+            }
         }
     }
 

@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use computer_use::testing::MockRecorder;
 use computer_use::{
-    ActionLogEntry, OverlayKind, RecordingCompletionStatus, RecordingHandle, RecordingOutput,
+    ActionLogEntry, RecordingCompletionStatus, RecordingHandle, RecordingOutput,
     DEFAULT_PILL_DURATION,
 };
 
@@ -253,14 +253,12 @@ async fn published_with_overlay_entries_uploads_once() {
     let entries = vec![
         ActionLogEntry {
             offset: Duration::from_millis(500),
-            kind: OverlayKind::Key,
-            label: "ctrl+a".to_string(),
+            labels: vec!["ctrl+a".to_string()],
             show_duration: DEFAULT_PILL_DURATION,
         },
         ActionLogEntry {
             offset: Duration::from_millis(2000),
-            kind: OverlayKind::Type,
-            label: "typing\u{2026}".to_string(),
+            labels: vec!["typing\u{2026}".to_string(), "scroll \u{2193}".to_string()],
             show_duration: DEFAULT_PILL_DURATION,
         },
     ];
