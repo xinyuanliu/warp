@@ -41,6 +41,7 @@ mod tui_block_list_viewport_source;
 mod tui_column_layout;
 mod tui_diff_storage;
 mod tui_file_edits_view;
+mod tui_markdown;
 mod tui_shell_command_view;
 mod usage;
 mod warping_indicator;
