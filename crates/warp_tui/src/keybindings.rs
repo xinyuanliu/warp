@@ -23,7 +23,9 @@ use warpui_core::keymap::{BindingLens, IsBindingValid, Trigger};
 use warpui_core::AppContext;
 
 use crate::input::TuiInputView;
+use crate::option_selector::TuiOptionSelector;
 use crate::root_view::RootTuiView;
+use crate::run_agents_card_view::TuiRunAgentsCardView;
 use crate::terminal_session_view::TuiTerminalSessionView;
 use crate::transcript_view::TuiTranscriptView;
 
@@ -37,6 +39,7 @@ pub(crate) fn init(app: &mut AppContext) {
     crate::root_view::init(app);
     crate::terminal_session_view::init(app);
     crate::input::init(app);
+    crate::run_agents_card_view::init(app);
 
     register_binding_validators(app);
 }
@@ -48,6 +51,8 @@ fn register_binding_validators(app: &mut AppContext) {
     app.register_tui_binding_validator::<TuiTerminalSessionView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiInputView>(is_tui_owned_binding);
     app.register_tui_binding_validator::<TuiTranscriptView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiRunAgentsCardView>(is_tui_owned_binding);
+    app.register_tui_binding_validator::<TuiOptionSelector>(is_tui_owned_binding);
 }
 
 fn is_tui_owned_binding(binding: BindingLens) -> IsBindingValid {

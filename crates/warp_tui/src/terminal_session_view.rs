@@ -47,6 +47,7 @@ use warpui_core::{
     AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
 };
 
+use crate::agent_block::TuiBlockingChild;
 use crate::autoupdate::{TuiAutoupdater, TuiAutoupdaterEvent};
 use crate::clipboard::copy_to_clipboard;
 use crate::conversation_menu::{TuiConversationMenuEvent, TuiConversationMenuModel};
@@ -226,6 +227,10 @@ pub(crate) struct TuiTerminalSessionView {
     conversation_restore_state: ConversationRestoreState,
     next_restore_request_id: u64,
     exit_summary: TuiExitSummaryHandle,
+    /// The view id of the blocker currently holding focus, tracked only to
+    /// detect blocker transitions in [`Self::sync_blocker_focus`]. Input
+    /// visibility itself is derived at render time, never stored.
+    active_blocker_view_id: Option<EntityId>,
 }
 
 /// Registers the session surface's keybindings. Called once at TUI startup
@@ -356,6 +361,12 @@ impl TuiTerminalSessionView {
                 ctx,
             )
         });
+        // Input visibility and focus derive from the front-of-queue blocker;
+        // re-derive on every action-queue transition (queued, blocked,
+        // finished). No suppression flag is stored.
+        ctx.subscribe_to_model(&action_model, |view, _, _, ctx| {
+            view.sync_blocker_focus(ctx);
+        });
         let input_editor_model =
             ctx.add_model(|ctx| CodeEditorModel::new_tui(INITIAL_INPUT_WIDTH, ctx));
         let slash_commands_source = ctx.add_model(|ctx| {
@@ -470,6 +481,9 @@ impl TuiTerminalSessionView {
                     view.show_transient_hint(COPY_FAILED_HINT.to_owned(), ctx);
                 }
             },
+            TuiTranscriptViewEvent::BlockingStateChanged => {
+                view.sync_blocker_focus(ctx);
+            }
         });
 
         ctx.subscribe_to_view(&input_view, |view, _, event, ctx| match event {
@@ -684,7 +698,32 @@ impl TuiTerminalSessionView {
             conversation_restore_state: ConversationRestoreState::Idle,
             next_restore_request_id: 0,
             exit_summary,
+            active_blocker_view_id: None,
         }
+    }
+
+    /// The active front-of-queue blocking interaction, if any (PRODUCT 1, 4).
+    fn active_blocking_child(&self, ctx: &AppContext) -> Option<TuiBlockingChild> {
+        self.transcript.as_ref(ctx).active_blocking_child(ctx)
+    }
+
+    /// Reconciles focus with the derived blocker: a newly active blocker is
+    /// focused (handing off directly between consecutive blockers with no
+    /// intermediate editable input, PRODUCT 6), and focus returns to the
+    /// input when the last blocker resolves (PRODUCT 5). Nothing here writes
+    /// to the input model, so its draft/cursor/selection are untouched
+    /// (PRODUCT 3).
+    fn sync_blocker_focus(&mut self, ctx: &mut ViewContext<Self>) {
+        let blocker = self.active_blocking_child(ctx);
+        let blocker_view_id = blocker.as_ref().map(|child| child.view.id());
+        if blocker_view_id != self.active_blocker_view_id {
+            match &blocker {
+                Some(child) => ctx.focus(&child.view),
+                None => ctx.focus(&self.input_view),
+            }
+            self.active_blocker_view_id = blocker_view_id;
+        }
+        ctx.notify();
     }
 
     /// Restores an Oz conversation into the TUI's sole conversation surface.
@@ -1826,18 +1865,28 @@ impl TuiView for TuiTerminalSessionView {
                 }
             }
         }
-        if let Some(menu) = inline_menu {
-            content = content.child(
-                TuiConstrainedBox::new(menu)
-                    .with_max_rows(MAX_INLINE_MENU_ROWS)
+        // While a `RunAgents` card (or another blocking interaction) is the
+        // active front-of-queue blocker, the input box, inline menus, and
+        // normal footer are omitted; the blocker renders its own action
+        // hints in their place (PRODUCT 1-2). Visibility is derived fresh
+        // each pass — no stored suppression flag — and the hidden input
+        // model is never written to, so its draft/cursor/selection/scroll
+        // survive untouched (PRODUCT 3).
+        let blocker_active = self.active_blocking_child(ctx).is_some();
+        if !blocker_active {
+            if let Some(menu) = inline_menu {
+                content = content.child(
+                    TuiConstrainedBox::new(menu)
+                        .with_max_rows(MAX_INLINE_MENU_ROWS)
+                        .finish(),
+                );
+            }
+            content = content.child(input_box.finish()).child(
+                TuiConstrainedBox::new(self.render_footer(ctx).finish())
+                    .with_max_rows(1)
                     .finish(),
             );
         }
-        content = content.child(input_box.finish()).child(
-            TuiConstrainedBox::new(self.render_footer(ctx).finish())
-                .with_max_rows(1)
-                .finish(),
-        );
         TuiContainer::new(content.finish())
             .with_padding_x(2)
             .with_padding_top(2)

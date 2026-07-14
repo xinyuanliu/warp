@@ -9,6 +9,7 @@
 
 mod agent_block;
 mod agent_block_sections;
+mod agent_identity;
 mod autoupdate;
 mod clipboard;
 pub mod input;
@@ -26,11 +27,9 @@ mod inline_menu;
 mod input_mode_policy;
 mod keybindings;
 mod model_menu;
-// Not consumed yet: the TUI orchestration card slice embeds this selector
-// and removes the allow.
-#[allow(dead_code)]
 mod option_selector;
 mod resume;
+mod run_agents_card_view;
 mod slash_commands;
 mod terminal_background;
 mod terminal_block;
