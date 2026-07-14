@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd -P)"
+output_dir="${WARP_RECORDING_BENCHMARK_OUTPUT_DIR:-${root}/target/recording-benchmark}"
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+output="${output_dir}/recording-benchmark-${timestamp}.csv"
+
+mkdir -p "$output_dir"
+
+if [[ "$(uname -s)" == "Linux" ]] && command -v Xvfb >/dev/null && command -v ffmpeg >/dev/null; then
+  display="${DISPLAY:-:99}"
+  if [[ -z "${DISPLAY:-}" ]]; then
+    Xvfb "$display" -screen 0 "${WARP_RECORDING_BENCHMARK_RESOLUTION:-1920x1080}x24" -nolisten tcp >/tmp/warp-recording-benchmark-xvfb.log 2>&1 &
+    xvfb_pid=$!
+    trap 'kill "$xvfb_pid" 2>/dev/null || true' EXIT
+    export DISPLAY="$display"
+    sleep 1
+  fi
+  export WARP_RECORDING_BENCHMARK_OUTPUT="$output"
+  cargo test --manifest-path "${root}/Cargo.toml" --locked --release -p computer_use \
+    benchmark_recording_capture_paths -- \
+    --ignored --nocapture --test-threads=1
+else
+  image="warp-recording-benchmark:local"
+  docker build -f "${root}/docker/recording-benchmark/Dockerfile" -t "$image" "$root"
+  gh_token="${GH_TOKEN:-}"
+  if [[ -z "$gh_token" ]] && command -v gh >/dev/null; then
+    gh_token="$(gh auth token 2>/dev/null || true)"
+  fi
+  export GH_TOKEN="$gh_token"
+  docker run --rm --init \
+    -e GH_TOKEN \
+    -e WARP_RECORDING_BENCHMARK_FPS="${WARP_RECORDING_BENCHMARK_FPS:-15,30}" \
+    -e WARP_RECORDING_BENCHMARK_REPETITIONS="${WARP_RECORDING_BENCHMARK_REPETITIONS:-3}" \
+    -e WARP_RECORDING_BENCHMARK_RESOLUTION="${WARP_RECORDING_BENCHMARK_RESOLUTION:-1920x1080}" \
+    -e WARP_RECORDING_BENCHMARK_SECONDS="${WARP_RECORDING_BENCHMARK_SECONDS:-3}" \
+    -e WARP_RECORDING_BENCHMARK_OUTPUT="/output/$(basename "$output")" \
+    -v "${root}:/workspace:ro" \
+    -v "${output_dir}:/output" \
+    -v warp-recording-benchmark-cargo-git:/usr/local/cargo/git \
+    -v warp-recording-benchmark-cargo-registry:/usr/local/cargo/registry \
+    -v warp-recording-benchmark-target:/cargo-target \
+    "$image"
+fi
+
+printf 'Results: %s\n' "$output"

@@ -559,3 +559,7 @@ fn ffmpeg_error_tail(log: &str) -> String {
 #[cfg(test)]
 #[path = "recording_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "recording_benchmark.rs"]
+mod benchmark;
