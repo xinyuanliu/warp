@@ -1061,23 +1061,35 @@ impl View for AIBlock {
                 if did_render_header {
                     contents.add_child(rendered_query.with_content_item_spacing().finish());
                 } else {
+                    // No prompt header rendered (e.g. Agent View with no attached
+                    // context), so the prompt row carries the inline controls. Add
+                    // the on-hover Edit affordance here alongside the overflow menu
+                    // so it stays discoverable without opening the menu.
                     // The query element is designed to be exactly icon_size() height.
                     let rendered_query_height = icon_size(app);
                     let margin_bottom = (CONTENT_ITEM_VERTICAL_MARGIN
                         - (OVERFLOW_BUTTON_SIZE - rendered_query_height).max(0.))
                     .max(0.);
+                    let mut prompt_row = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_child(Expanded::new(1., rendered_query).finish());
+                    if show_edit_button {
+                        prompt_row.add_child(
+                            Container::new(ChildView::new(&self.edit_button).finish())
+                                .with_margin_right(4.)
+                                .finish(),
+                        );
+                    }
+                    prompt_row.add_child(render_overflow_menu_button(
+                        self.state_handles.overflow_menu_handle.clone(),
+                        self.view_id,
+                        self.client_ids.client_exchange_id,
+                        self.client_ids.conversation_id,
+                        self.is_restored(),
+                        app,
+                    ));
                     contents.add_child(
-                        Flex::row()
-                            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                            .with_child(Expanded::new(1., rendered_query).finish())
-                            .with_child(render_overflow_menu_button(
-                                self.state_handles.overflow_menu_handle.clone(),
-                                self.view_id,
-                                self.client_ids.client_exchange_id,
-                                self.client_ids.conversation_id,
-                                self.is_restored(),
-                                app,
-                            ))
+                        prompt_row
                             .finish()
                             .with_content_item_spacing()
                             .with_margin_bottom(margin_bottom)
