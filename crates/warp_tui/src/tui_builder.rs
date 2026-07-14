@@ -218,6 +218,18 @@ impl TuiUiBuilder {
         let magenta = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
         cell_color(self.base_background().blend(&magenta.with_opacity(10)))
     }
+
+    /// Stronger magenta tint for the orchestration permission title row:
+    /// the surface overlay applied twice, matching the design's stacked
+    /// header overlays.
+    pub(crate) fn orchestration_header_background(&self) -> Color {
+        let magenta = ThemeFill::from(self.warp_theme.terminal_colors().normal.magenta);
+        cell_color(
+            self.base_background()
+                .blend(&magenta.with_opacity(10))
+                .blend(&magenta.with_opacity(10)),
+        )
+    }
     /// Bold magenta text for the selected orchestration option.
     pub(crate) fn orchestration_option_selected_style(&self) -> TuiStyle {
         TuiStyle::default()
