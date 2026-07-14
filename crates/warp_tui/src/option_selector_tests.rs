@@ -64,6 +64,17 @@ fn header() -> OptionSelectorHeader {
 
 type CapturedEvents = Rc<RefCell<Vec<TuiOptionSelectorEvent>>>;
 
+/// The captured events with `LayoutChanged` filtered out, for tests that
+/// assert on the primary confirmation flow.
+fn primary_events(events: &CapturedEvents) -> Vec<TuiOptionSelectorEvent> {
+    events
+        .borrow()
+        .iter()
+        .filter(|event| **event != TuiOptionSelectorEvent::LayoutChanged)
+        .cloned()
+        .collect()
+}
+
 /// Adds a selector in a fresh TUI window and captures its emitted events.
 fn add_selector(app: &mut App) -> (ViewHandle<TuiOptionSelector>, CapturedEvents) {
     app.add_singleton_model(|_| Appearance::mock());
@@ -285,7 +296,7 @@ fn digits_are_viewport_relative_in_scrolled_lists() {
             TuiOptionSelectorAction::SelectNumberedOption(1),
         );
         assert_eq!(
-            events.borrow().as_slice(),
+            primary_events(&events),
             [TuiOptionSelectorEvent::Confirmed {
                 id: "row-2".to_string()
             }],
@@ -438,7 +449,7 @@ fn custom_text_editor_trims_validates_and_submits() {
             TuiOptionSelectorAction::InsertChar(' '),
         );
         confirm(&mut app, &selector);
-        assert!(events.borrow().is_empty());
+        assert!(primary_events(&events).is_empty());
         assert!(render_lines(&app, &selector, 60)
             .iter()
             .any(|line| line.contains("Enter a value to continue.")));
@@ -450,7 +461,7 @@ fn custom_text_editor_trims_validates_and_submits() {
         act(&mut app, &selector, TuiOptionSelectorAction::Backspace);
         confirm(&mut app, &selector);
         assert_eq!(
-            events.borrow().as_slice(),
+            primary_events(&events),
             [TuiOptionSelectorEvent::CustomTextSubmitted {
                 value: "my-host".to_string()
             }],
@@ -504,6 +515,69 @@ fn create_new_auth_secret_footer_is_ignored() {
 }
 
 #[test]
+fn layout_changed_is_emitted_only_when_overflow_markers_toggle() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        set_page(
+            &mut app,
+            &selector,
+            snapshot(&["a", "b", "c", "d", "e", "f"], Some("a")),
+        );
+        events.borrow_mut().clear();
+
+        // Moves within the viewport do not scroll, so nothing is emitted.
+        for _ in 0..3 {
+            act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        }
+        assert!(!events
+            .borrow()
+            .contains(&TuiOptionSelectorEvent::LayoutChanged));
+
+        // Scrolling past the viewport reveals the `↑` marker: one event.
+        act(&mut app, &selector, TuiOptionSelectorAction::MoveDown);
+        assert_eq!(
+            events
+                .borrow()
+                .iter()
+                .filter(|event| **event == TuiOptionSelectorEvent::LayoutChanged)
+                .count(),
+            1,
+        );
+    });
+}
+
+#[test]
+fn layout_changed_is_emitted_when_the_custom_text_error_row_toggles() {
+    App::test((), |mut app| async move {
+        let (selector, events) = add_selector(&mut app);
+        let mut with_footer = snapshot(&["warp"], Some("warp"));
+        with_footer.footer = Some(OptionFooter::CustomText {
+            label: "Custom host…".to_string(),
+        });
+        set_page(&mut app, &selector, with_footer);
+        act(&mut app, &selector, TuiOptionSelectorAction::SelectItem(1));
+        events.borrow_mut().clear();
+
+        // An empty submit adds the validation-error row.
+        confirm(&mut app, &selector);
+        assert!(events
+            .borrow()
+            .contains(&TuiOptionSelectorEvent::LayoutChanged));
+        events.borrow_mut().clear();
+
+        // Typing clears the error row.
+        act(
+            &mut app,
+            &selector,
+            TuiOptionSelectorAction::InsertChar('x'),
+        );
+        assert!(events
+            .borrow()
+            .contains(&TuiOptionSelectorEvent::LayoutChanged));
+    });
+}
+
+#[test]
 fn snapshot_refresh_preserves_the_highlighted_row() {
     App::test((), |mut app| async move {
         let (selector, events) = add_selector(&mut app);
@@ -517,7 +591,7 @@ fn snapshot_refresh_preserves_the_highlighted_row() {
         });
         confirm(&mut app, &selector);
         assert_eq!(
-            events.borrow().as_slice(),
+            primary_events(&events),
             [TuiOptionSelectorEvent::Confirmed {
                 id: "c".to_string()
             }],
@@ -539,7 +613,7 @@ fn snapshot_refresh_falls_back_to_the_selected_value_when_the_highlight_vanishes
         });
         confirm(&mut app, &selector);
         assert_eq!(
-            events.borrow().as_slice(),
+            primary_events(&events),
             [TuiOptionSelectorEvent::Confirmed {
                 id: "a".to_string()
             }],

@@ -52,6 +52,11 @@ pub(crate) enum TuiOptionSelectorEvent {
     /// The selector asked to be dismissed (element-level Escape fallback for
     /// hosts without their own Escape binding).
     Dismissed,
+    /// Something that affects the selector's rendered height changed: the
+    /// viewport scrolled (overflow markers), the row catalog refreshed, or
+    /// the custom-text error row toggled. Hosts whose measured height is
+    /// cached re-measure on this event.
+    LayoutChanged,
 }
 
 /// User interactions dispatched from the selector's element tree.
@@ -164,6 +169,8 @@ impl TuiOptionSelector {
             .or_else(|| self.snapshot.selected_id.clone());
         self.highlight_id(target);
         self.sync_after_items_changed();
+        // A refreshed catalog can change the row count and thus the height.
+        ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
         ctx.notify();
     }
 
@@ -171,6 +178,26 @@ impl TuiOptionSelector {
     #[cfg(test)]
     fn is_editing_custom_text(&self) -> bool {
         self.custom_text.is_some()
+    }
+
+    /// Scrolls to keep `selected` visible, announcing the scroll change (it
+    /// toggles overflow markers, so the height may change) to the host.
+    fn scroll_to_keep_visible(
+        &mut self,
+        items_len: usize,
+        selected: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let before = self.scroll_offset;
+        keep_selected_visible(
+            items_len,
+            selected,
+            MAX_VISIBLE_OPTION_ROWS,
+            &mut self.scroll_offset,
+        );
+        if self.scroll_offset != before {
+            ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
+        }
     }
 
     /// Confirms the highlighted item (Enter): enabled rows emit
@@ -193,7 +220,10 @@ impl TuiOptionSelector {
     /// editing and reports whether the key was consumed, so the card only
     /// leaves the page when the selector had nothing to unwind.
     pub(crate) fn handle_back(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        if self.custom_text.take().is_some() {
+        if let Some(editor) = self.custom_text.take() {
+            if editor.error.is_some() {
+                ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
+            }
             ctx.notify();
             return true;
         }
@@ -291,12 +321,7 @@ impl TuiOptionSelector {
             self.selection.select_previous(items_len, |_| true);
         }
         if let Some(selected) = self.selection.selected_index() {
-            keep_selected_visible(
-                items_len,
-                selected,
-                MAX_VISIBLE_OPTION_ROWS,
-                &mut self.scroll_offset,
-            );
+            self.scroll_to_keep_visible(items_len, selected, ctx);
         }
         ctx.notify();
     }
@@ -309,12 +334,7 @@ impl TuiOptionSelector {
             return;
         };
         self.selection.select(index, items.len(), |_| true);
-        keep_selected_visible(
-            items.len(),
-            index,
-            MAX_VISIBLE_OPTION_ROWS,
-            &mut self.scroll_offset,
-        );
+        self.scroll_to_keep_visible(items.len(), index, ctx);
         if !self.item_is_confirmable(item) {
             ctx.notify();
             return;
@@ -344,8 +364,14 @@ impl TuiOptionSelector {
         };
         let value = editor.buffer.trim().to_string();
         if value.is_empty() {
-            editor.error = Some(CUSTOM_TEXT_EMPTY_ERROR.to_string());
+            if editor.error.is_none() {
+                editor.error = Some(CUSTOM_TEXT_EMPTY_ERROR.to_string());
+                ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
+            }
         } else {
+            if editor.error.is_some() {
+                ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
+            }
             self.custom_text = None;
             self.snapshot.selected_id = Some(value.clone());
             self.custom_text_value = Some(value.clone());
@@ -359,10 +385,14 @@ impl TuiOptionSelector {
     fn scroll_by(&mut self, rows: isize, ctx: &mut ViewContext<Self>) {
         let items_len = self.items().len();
         let max_offset = items_len.saturating_sub(MAX_VISIBLE_OPTION_ROWS);
+        let before = self.scroll_offset;
         self.scroll_offset = self
             .scroll_offset
             .saturating_add_signed(rows)
             .min(max_offset);
+        if self.scroll_offset != before {
+            ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
+        }
         ctx.notify();
     }
 
@@ -661,14 +691,18 @@ impl TypedActionView for TuiOptionSelector {
             TuiOptionSelectorAction::InsertChar(c) => {
                 if let Some(editor) = &mut self.custom_text {
                     editor.buffer.push(*c);
-                    editor.error = None;
+                    if editor.error.take().is_some() {
+                        ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
+                    }
                     ctx.notify();
                 }
             }
             TuiOptionSelectorAction::Backspace => {
                 if let Some(editor) = &mut self.custom_text {
                     editor.buffer.pop();
-                    editor.error = None;
+                    if editor.error.take().is_some() {
+                        ctx.emit(TuiOptionSelectorEvent::LayoutChanged);
+                    }
                     ctx.notify();
                 }
             }
