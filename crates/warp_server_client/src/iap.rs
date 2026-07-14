@@ -36,8 +36,7 @@ const WIF_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Env var carrying a Warp OIDC task-identity JWT (audience = the WIF provider
 /// resource name), injected by warp-server so a cold sandboxed runner can
 /// bootstrap its first IAP mint without calling the IAP-gated identity-token
-/// endpoint. This is NOT the IAP bearer token — it is the subject token for the
-/// STS exchange.
+/// endpoint.
 const STAGING_IAP_BOOTSTRAP_TOKEN_ENV_VAR: &str = "WARP_STAGING_IAP_BOOTSTRAP_JWT";
 
 pub type PathResolver = Box<dyn Fn(&mut AppContext) -> BoxFuture<'static, Option<String>>>;
