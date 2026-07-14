@@ -712,6 +712,27 @@ fn raw_value_only_writes_under_secret_name() {
 
 #[test]
 #[serial_test::serial]
+fn slack_bot_token_surfaces_as_env_var() {
+    // The per-factory Slack app bot token is delivered by the server as a
+    // system-managed RawValue task secret named OZ_SLACK_BOT_TOKEN and must reach
+    // the agent through the generic raw-value path (alongside the worker-injected
+    // OZ_SLACK_CHANNEL_ID / OZ_SLACK_THREAD_TS coordinate env vars) so the
+    // factory-slack-progress skill can set the Slack thread status.
+    std::env::remove_var("OZ_SLACK_BOT_TOKEN");
+    let secrets = HashMap::from([(
+        "OZ_SLACK_BOT_TOKEN".to_string(),
+        ManagedSecretValue::raw_value("xoxb-factory-bot-token"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets);
+    assert_eq!(
+        env_vars.get(&OsString::from("OZ_SLACK_BOT_TOKEN")),
+        Some(&OsString::from("xoxb-factory-bot-token"))
+    );
+    assert_eq!(env_vars.len(), 1);
+}
+
+#[test]
+#[serial_test::serial]
 fn anthropic_api_key_writes_anthropic_env_var() {
     std::env::remove_var("ANTHROPIC_API_KEY");
     let secrets = HashMap::from([(

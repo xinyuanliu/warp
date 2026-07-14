@@ -3689,6 +3689,13 @@ impl AgentDriver {
 ///    if any one env var for a typed secret is already worker-injected, the entire
 ///    secret is skipped.
 /// 3. Generic `RawValue` secrets. Skipped on collision with either of the above.
+///
+/// Well-known server-derived secrets flow through phase 3 by name. In particular
+/// the per-factory Slack app bot token is delivered as a `RawValue` task secret
+/// named `OZ_SLACK_BOT_TOKEN`, so it reaches the agent as an env var of that name
+/// (alongside the worker-injected, non-secret `OZ_SLACK_CHANNEL_ID` /
+/// `OZ_SLACK_THREAD_TS` coordinates). Do not narrow phase 3 to an allowlist
+/// without also surfacing that name.
 fn build_secret_env_vars(
     secrets: &HashMap<String, ManagedSecretValue>,
 ) -> HashMap<OsString, OsString> {
