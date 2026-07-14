@@ -22,11 +22,12 @@ use warp::tui_export::{
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
     TuiChildView, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
-    TuiParentElement, TuiSize,
+    TuiParentElement, TuiSelectionSpan, TuiSize,
 };
 use warpui_core::elements::MouseStateHandle;
 use warpui_core::{
-    AppContext, Entity, EntityId, ModelHandle, TuiView, TypedActionView, ViewContext, ViewHandle,
+    AppContext, Entity, EntityId, EntityIdMap, ModelHandle, TuiView, TypedActionView, ViewContext,
+    ViewHandle,
 };
 
 use super::tui_file_edits_view::{TuiFileEditsView, TuiFileEditsViewEvent};
@@ -429,6 +430,165 @@ impl TuiAIBlock {
         )
     }
 
+    /// Logical (unwrapped) text for a selection over this block's text
+    /// sections — the user's query and the agent's plain-text responses.
+    ///
+    /// Copy would otherwise reconstruct the text from the rendered cell grid,
+    /// inserting a newline at every soft-wrap boundary, capturing wrap/quote
+    /// indentation, and dropping rows beyond what was rendered. Sourcing from
+    /// the model returns the text exactly as authored. Each section's row span
+    /// at `width` is derived from the same composition `render_element` uses
+    /// (one blank `BLOCK_TOP_PADDING_ROWS` on top, one padding row between
+    /// sections), so the selection can be mapped back to whole sections.
+    ///
+    /// Returns `None` — so the caller falls back to per-row grid text — when the
+    /// selection only partially covers a section, covers a section with no clean
+    /// logical form (a tool call, reasoning, summary, or todo list), or the
+    /// block contains a child-view tool call whose height can't be measured
+    /// here. That keeps partial selections and non-text content on the existing
+    /// path (the diagram-style fallback).
+    pub(super) fn selection_logical_text(
+        &self,
+        selection: TuiSelectionSpan,
+        block_top: usize,
+        width: u16,
+        app: &AppContext,
+    ) -> Option<String> {
+        if selection.start.row < block_top {
+            return None;
+        }
+        let output_streaming = self.block_model.status(app).is_streaming();
+        let sections = self.sections(app);
+        if sections.is_empty() {
+            return None;
+        }
+        let last_index = sections.len().saturating_sub(1);
+        let end_row_exclusive = if selection.end.col == 0 {
+            selection.end.row
+        } else {
+            selection.end.row.saturating_add(1)
+        };
+
+        let mut rendered_views = EntityIdMap::default();
+        let mut ctx = TuiLayoutContext {
+            rendered_views: &mut rendered_views,
+        };
+        let mut section_top = block_top.saturating_add(usize::from(BLOCK_TOP_PADDING_ROWS));
+        let mut collected = Vec::new();
+        let mut overlapped_any = false;
+        for (index, section) in sections.iter().enumerate() {
+            let mut element = self.measurable_section_element(section, output_streaming, app)?;
+            let height = usize::from(
+                element
+                    .layout(
+                        TuiConstraint::loose(TuiSize::new(width, u16::MAX)),
+                        &mut ctx,
+                        app,
+                    )
+                    .height,
+            );
+            let start = section_top;
+            let end = section_top.saturating_add(height);
+            // One padding row separates sections; the last section ends flush.
+            section_top = if index < last_index {
+                end.saturating_add(1)
+            } else {
+                end
+            };
+            if height == 0 {
+                continue;
+            }
+            let overlaps = start < end_row_exclusive && end > selection.start.row;
+            if !overlaps {
+                continue;
+            }
+            overlapped_any = true;
+            // The section must be covered from its first column through its last
+            // row; a partial-column or partial-row overlap falls back.
+            let covers_start = selection.start.row < start
+                || (selection.start.row == start && selection.start.col == 0);
+            if !covers_start || end_row_exclusive < end {
+                return None;
+            }
+            collected.push(section_logical_text(section)?);
+        }
+        overlapped_any.then(|| collected.join("\n"))
+    }
+
+    /// Rebuilds a section's element for standalone height measurement, mirroring
+    /// `render_element`'s per-section construction. Returns `None` for a tool
+    /// call backed by a registered child view, whose height can't be measured
+    /// without the presenter's `rendered_views`.
+    fn measurable_section_element(
+        &self,
+        section: &TuiAIBlockSection,
+        output_streaming: bool,
+        app: &AppContext,
+    ) -> Option<Box<dyn TuiElement>> {
+        Some(match section {
+            TuiAIBlockSection::Input(text) => render_input_section(text, app),
+            TuiAIBlockSection::PlainText(text) => render_plain_text_section(text, app),
+            TuiAIBlockSection::ToolCall(action) => {
+                if self.action_views.contains_key(&action.id) {
+                    return None;
+                }
+                let status = self.action_model.as_ref(app).get_action_status(&action.id);
+                render_fallback_tool_call_section(
+                    action,
+                    status.as_ref(),
+                    output_streaming,
+                    None,
+                    app,
+                )
+            }
+            TuiAIBlockSection::Thinking {
+                message_id,
+                finished_duration,
+                body,
+            } => render_thinking_section(
+                &self.collapsible_states,
+                message_id,
+                *finished_duration,
+                body,
+                app,
+            ),
+            TuiAIBlockSection::Summarization {
+                message_id,
+                finished,
+                body,
+            } => render_summarization_section(
+                &self.collapsible_states,
+                message_id,
+                *finished,
+                body,
+                app,
+            ),
+            TuiAIBlockSection::TodoList { message_id, todos } => {
+                let history = BlocklistAIHistoryModel::as_ref(app);
+                let rows: Vec<(String, TodoStatus)> = todos
+                    .iter()
+                    .map(|todo| {
+                        (
+                            todo.title.clone(),
+                            history
+                                .todo_status(&self.conversation_id, &todo.id)
+                                .unwrap_or(TodoStatus::Cancelled),
+                        )
+                    })
+                    .collect();
+                render_todo_list_section(&self.collapsible_states, message_id, &rows, app)
+            }
+            TuiAIBlockSection::CompletedTodos { completed } => {
+                let history = BlocklistAIHistoryModel::as_ref(app);
+                render_completed_todos_section(
+                    completed,
+                    history.active_todo_list(&self.conversation_id),
+                    app,
+                )
+            }
+        })
+    }
+
     /// Extracts this exchange's visible input/output into logical render sections,
     /// preserving message order so reasoning interleaves with plain-text output.
     fn sections(&self, app: &AppContext) -> Vec<TuiAIBlockSection> {
@@ -648,6 +808,20 @@ impl TuiAIBlock {
         TuiContainer::new(column.finish())
             .with_padding_top(BLOCK_TOP_PADDING_ROWS)
             .finish()
+    }
+}
+
+/// The copy-able logical text for a section, or `None` for section kinds with no
+/// clean logical form (tool calls, reasoning, summaries, todo lists), which fall
+/// back to per-row grid text.
+fn section_logical_text(section: &TuiAIBlockSection) -> Option<String> {
+    match section {
+        TuiAIBlockSection::Input(text) | TuiAIBlockSection::PlainText(text) => Some(text.clone()),
+        TuiAIBlockSection::ToolCall(_)
+        | TuiAIBlockSection::Thinking { .. }
+        | TuiAIBlockSection::Summarization { .. }
+        | TuiAIBlockSection::TodoList { .. }
+        | TuiAIBlockSection::CompletedTodos { .. } => None,
     }
 }
 
