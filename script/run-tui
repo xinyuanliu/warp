@@ -14,8 +14,8 @@
 # don't re-prompt for your keychain password. Ad-hoc signatures from a plain
 # `cargo run` change on every build, which is what causes repeated prompts.
 #
-# Extra arguments are forwarded to `cargo` (e.g. `--release`); use `--` to
-# pass arguments through to the binary itself.
+# Extra arguments are forwarded to `cargo build` (e.g. `--release`); use `--`
+# to pass arguments through to the binary itself.
 
 set -e
 
@@ -66,17 +66,31 @@ while (( "$#" )); do
   esac
 done
 
-if [[ "$(uname -s)" = "Darwin" ]]; then
-  echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-  cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
+# Build first rather than using `cargo run` so bundled resources can be staged
+# next to the executable before it starts. The standalone feature makes this
+# sibling resource layout explicit on macOS; Linux and Windows use the same
+# layout by default.
+echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
+cargo build -p warp_tui --bin "${BIN}" --features standalone "${CARGO_ARGS[@]}"
 
-  # Resolve Cargo's actual target directory rather than assuming ./target
-  # (honors CARGO_TARGET_DIR / build.target-dir).
-  TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
-  if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
-    TARGET_DIR="${REPO_ROOT}/target"
-  fi
-  TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
+# Resolve Cargo's actual target directory rather than assuming ./target
+# (honors CARGO_TARGET_DIR / build.target-dir).
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+  TARGET_DIR="${REPO_ROOT}/target"
+fi
+TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
+
+# Mirror the GUI launcher's local resource preparation, skipping expensive
+# license and settings-schema generation. `bundled_resources_dir()` resolves
+# this sibling directory.
+echo "Preparing bundled resources..."
+NO_LICENSES=1 SKIP_SETTINGS_SCHEMA=1 \
+  "${REPO_ROOT}/script/prepare_bundled_resources" \
+  "${TARGET_DIR}/${PROFILE_DIR}/resources" \
+  "${CHANNEL}"
+
+if [[ "$(uname -s)" = "Darwin" ]]; then
 
   SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
   if [ -n "$SIGNING_CERT" ]; then
@@ -85,13 +99,7 @@ if [[ "$(uname -s)" = "Darwin" ]]; then
   else
     echo "Warning: no Apple Development signing identity found; skipping codesign (keychain may re-prompt on rebuilds)." >&2
   fi
-
-  exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
-else
-  echo "Running cargo run -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-  if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}" -- "${BIN_ARGS[@]}"
-  else
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
-  fi
 fi
+
+echo "Running ${TUI_BIN_PATH} (channel: ${CHANNEL})"
+exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
