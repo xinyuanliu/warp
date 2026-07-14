@@ -156,7 +156,10 @@ pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bo
     )
 }
 
-pub fn should_show_vertex_ai_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bool {
+pub fn should_show_gemini_enterprise_agent_platform_icon_for_model(
+    llm: &LLMInfo,
+    app: &AppContext,
+) -> bool {
     should_show_host_icon_for_model(
         llm,
         &LLMModelHost::GeminiEnterprise,
