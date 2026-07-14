@@ -31,6 +31,9 @@ pub(super) struct Props<'a> {
     pub(super) attached_blocks_chip_mouse_state: &'a MouseStateHandle,
     pub(super) overflow_menu_mouse_state: &'a MouseStateHandle,
     pub(super) rewind_button: &'a ViewHandle<ActionButton>,
+    /// Hover-visible "Edit" button, present when the prompt is editable (feature
+    /// flag on, non-restored, user-authored). `None` hides the button.
+    pub(super) edit_button: Option<&'a ViewHandle<ActionButton>>,
     pub(super) num_attached_context_blocks: usize,
     pub(super) has_attached_context_selected_text: bool,
     pub(super) directory_context: &'a DirectoryContext,
@@ -105,6 +108,17 @@ pub(super) fn render(props: Props, app: &AppContext) -> Option<Box<dyn Element>>
     }
 
     let mut right_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+    // The native on-hover Edit affordance sits alongside the Rewind button and
+    // overflow menu. Editability (feature flag, non-restored, user-authored) is
+    // determined by the caller, which passes `Some(..)` only when it should show.
+    if let Some(edit_button) = props.edit_button {
+        right_row.add_child(
+            Container::new(ChildView::new(edit_button).finish())
+                .with_margin_right(4.)
+                .finish(),
+        );
+    }
 
     if FeatureFlag::RevertToCheckpoints.is_enabled() && !props.is_restored {
         right_row.add_child(

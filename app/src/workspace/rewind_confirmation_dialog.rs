@@ -46,6 +46,18 @@ pub struct RewindDialogSource {
     pub ai_block_view_id: EntityId,
     pub exchange_id: AIAgentExchangeId,
     pub conversation_id: AIConversationId,
+    /// When `Some`, the dialog was opened for an in-place prompt **edit** (rather
+    /// than a plain rewind). The dialog shows edit-specific copy and the confirm
+    /// event carries this edited prompt text so the edit-and-regenerate flow can
+    /// resend it. `None` for a plain rewind.
+    pub edited_text: Option<String>,
+}
+
+impl RewindDialogSource {
+    /// Whether this dialog was opened for an in-place prompt edit.
+    fn is_edit(&self) -> bool {
+        self.edited_text.is_some()
+    }
 }
 
 pub struct RewindConfirmationDialog {
@@ -92,6 +104,24 @@ impl View for RewindConfirmationDialog {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
+        // The same dialog is reused for a plain rewind and for an in-place prompt
+        // edit; only the copy differs.
+        let is_edit = self
+            .rewind_source
+            .as_ref()
+            .is_some_and(RewindDialogSource::is_edit);
+        let dialog_title = if is_edit {
+            "Save and regenerate"
+        } else {
+            "Rewind"
+        };
+        let confirm_label = dialog_title;
+        let dialog_body = if is_edit {
+            "Are you sure you want to save this edit? This will regenerate the conversation from this prompt, restoring your code and conversation to before this point and cancelling any commands the agent is currently running. A copy of the original conversation will be saved in your conversation history."
+        } else {
+            "Are you sure you want to rewind? This will restore your code and conversation to before this point, and cancel any commands the agent is currently running. A copy of the original conversation will be saved in your conversation history."
+        };
+
         let button_style = UiComponentStyles {
             font_size: Some(14.),
             font_weight: Some(Weight::Bold),
@@ -99,13 +129,13 @@ impl View for RewindConfirmationDialog {
             ..Default::default()
         };
 
-        // Build rewind button label with Enter keyboard shortcut indicator
+        // Build confirm button label with Enter keyboard shortcut indicator
         let enter_keystroke = Keystroke::parse("enter").expect("Valid keystroke");
         let text_color = theme.main_text_color(theme.accent()).into_solid();
         let rewind_button_label = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
-                Text::new_inline("Rewind", appearance.ui_font_family(), 14.)
+                Text::new_inline(confirm_label, appearance.ui_font_family(), 14.)
                     .with_color(text_color)
                     .finish(),
             )
@@ -197,11 +227,8 @@ impl View for RewindConfirmationDialog {
 
         let dialog = Container::new(
             Dialog::new(
-                "Rewind".into(),
-                Some(
-                    "Are you sure you want to rewind? This will restore your code and conversation to before this point, and cancel any commands the agent is currently running. A copy of the original conversation will be saved in your conversation history."
-                        .into(),
-                ),
+                dialog_title.into(),
+                Some(dialog_body.into()),
                 UiComponentStyles {
                     width: Some(DIALOG_WIDTH),
                     padding: Some(Coords::uniform(24.)),

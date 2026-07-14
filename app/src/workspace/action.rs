@@ -678,6 +678,21 @@ pub enum WorkspaceAction {
         exchange_id: AIAgentExchangeId,
         conversation_id: AIConversationId,
     },
+    /// Show the confirmation dialog before saving an edited prompt (which
+    /// rewinds and regenerates the conversation from the edited prompt).
+    ShowEditPromptConfirmationDialog {
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+        edited_text: String,
+    },
+    /// Execute the edit-and-regenerate flow after the user confirms in the dialog.
+    ExecuteEditAIPrompt {
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+        edited_text: String,
+    },
     /// Execute the actual deletion of a conversation after confirmation
     ExecuteDeleteConversation {
         conversation_id: AIConversationId,
@@ -1028,6 +1043,8 @@ impl WorkspaceAction {
             | OpenAIDocumentPane { .. }
             | ShowRewindConfirmationDialog { .. }
             | ExecuteRewindAIConversation { .. }
+            | ShowEditPromptConfirmationDialog { .. }
+            | ExecuteEditAIPrompt { .. }
             | ExecuteDeleteConversation { .. }
             | OpenOrAttachAmbientAgentConversation { .. }
             | OpenConversationTranscriptViewer { .. }

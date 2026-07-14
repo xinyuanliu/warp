@@ -43,9 +43,10 @@ use warp_core::ui::color::contrast::{
 use warp_core::ui::color::Rgb;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
-    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded,
-    Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, SelectableArea, Text,
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+    SelectableArea, Text,
 };
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -55,7 +56,7 @@ use warpui::{AppContext, Element, SingletonEntity, View, ViewContext};
 
 use super::secret_redaction::SecretRedactionState;
 use super::{
-    attachment_names, AIBlock, AIBlockAction, TextLocation,
+    attachment_names, AIBlock, AIBlockAction, PromptEditState, TextLocation,
     DISPATCHED_REQUESTED_EDIT_KEYMAP_CONTEXT, HAS_PENDING_ACTION,
     RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID,
 };
@@ -856,6 +857,43 @@ pub fn render_autonomy_checkbox_setting_speedbump_footer(
         .finish()
 }
 
+impl AIBlock {
+    /// Renders the inline prompt editor shown in place of the sent prompt while
+    /// the user is editing it, with "Save and regenerate" / "Cancel" affordances.
+    fn render_prompt_editor(
+        &self,
+        edit_state: &PromptEditState,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+
+        let editor = Container::new(ChildView::new(&edit_state.input).finish())
+            .with_background(theme.surface_2())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_horizontal_padding(8.)
+            .with_vertical_padding(6.)
+            .finish();
+
+        let buttons = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Container::new(ChildView::new(&edit_state.cancel_button).finish())
+                    .with_margin_right(8.)
+                    .finish(),
+            )
+            .with_child(ChildView::new(&edit_state.save_button).finish())
+            .finish();
+
+        Flex::column()
+            .with_child(editor)
+            .with_child(Container::new(buttons).with_margin_top(8.).finish())
+            .finish()
+    }
+}
+
 impl View for AIBlock {
     fn ui_name() -> &'static str {
         "AIBlock"
@@ -922,6 +960,11 @@ impl View for AIBlock {
         )) = query_and_index
         {
             let mut did_render_header = false;
+            // Whether this prompt can be edited in place (feature-flagged,
+            // non-restored, user-authored, backed by a loaded local conversation)
+            // and whether we're currently editing it.
+            let is_editing_prompt = self.prompt_edit_state.is_some();
+            let show_edit_button = self.is_prompt_editable(app) && !is_editing_prompt;
             if let Some(header) = header::render(
                 header::Props {
                     attached_blocks_chip_mouse_state: &self
@@ -929,6 +972,7 @@ impl View for AIBlock {
                         .attached_blocks_chip_state_handle,
                     overflow_menu_mouse_state: &self.state_handles.overflow_menu_handle,
                     rewind_button: &self.rewind_button,
+                    edit_button: show_edit_button.then_some(&self.edit_button),
                     num_attached_context_blocks: self.num_attached_context_blocks,
                     has_attached_context_selected_text: self.has_attached_context_selected_text,
                     directory_context: &self.directory_context,
@@ -982,7 +1026,14 @@ impl View for AIBlock {
                     self.profile_image_path.clone(),
                     None,
                 ));
-            if let Some(rendered_query) = query::maybe_render(
+            if let Some(edit_state) = &self.prompt_edit_state {
+                // While editing, replace the rendered prompt with the inline editor.
+                contents.add_child(
+                    self.render_prompt_editor(edit_state, app)
+                        .with_content_item_spacing()
+                        .finish(),
+                );
+            } else if let Some(rendered_query) = query::maybe_render(
                 query::Props {
                     user_display_name: &avatar_display_name,
                     profile_image_path: profile_image_path.as_ref(),

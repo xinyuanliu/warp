@@ -1304,6 +1304,54 @@ impl BlocklistAIController {
         )
     }
 
+    /// Re-sends an edited user prompt into an existing conversation as a fresh
+    /// active request, reusing the standard send pipeline (streaming, telemetry,
+    /// status, persistence, usage refresh, error handling).
+    ///
+    /// This is the second half of the edit-and-regenerate flow: the caller is
+    /// expected to have already run the destructive rewind (cancel active work,
+    /// revert diffs, fork a pre-edit backup, truncate the conversation from the
+    /// edited exchange) so that this send appends the edited prompt from the
+    /// conversation state immediately before the edited prompt. `edited_input`
+    /// should be produced by
+    /// [`crate::ai::agent::conversation::EditableUserQuery::edited_input`], which
+    /// preserves the original query's context and attachments.
+    pub fn edit_user_query_and_regenerate(
+        &mut self,
+        conversation_id: AIConversationId,
+        edited_input: AIAgentInput,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let participant_id = self.get_sharer_participant_id();
+        let task_id = {
+            let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+            let Some(conversation) = history_model.conversation(&conversation_id) else {
+                log::error!(
+                    "Tried to regenerate an edited prompt for non-existent conversation: {conversation_id:?}"
+                );
+                return;
+            };
+            conversation.get_root_task_id().clone()
+        };
+
+        self.send_query(
+            InputQuery {
+                which_task: WhichTask::Task {
+                    conversation_id,
+                    task_id,
+                },
+                input_query: InputQueryType::AIInputType {
+                    ai_input: edited_input,
+                },
+                additional_attachments: HashMap::new(),
+            },
+            EntrypointType::UserInitiated,
+            participant_id,
+            /*is_queued_prompt*/ false,
+            ctx,
+        );
+    }
+
     pub fn send_slash_command_request(
         &mut self,
         slash_command: SlashCommandRequest,

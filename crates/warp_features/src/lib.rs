@@ -888,6 +888,12 @@ pub enum FeatureFlag {
 
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
+
+    /// Enables editing a sent agent prompt in place and regenerating the
+    /// conversation from the edit (a native "Edit" affordance on hover over each
+    /// sent user prompt, wired to the existing Rewind -> new-prompt flow behind a
+    /// destructive-change confirmation modal).
+    EditSentAgentMessages,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -956,6 +962,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     FeatureFlag::OrchestrationViewerStreamer,
+    FeatureFlag::EditSentAgentMessages,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

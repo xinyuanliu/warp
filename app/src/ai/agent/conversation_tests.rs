@@ -154,6 +154,79 @@ fn latest_user_query_trims_and_skips_empty_queries() {
 }
 
 #[test]
+fn editable_user_query_for_exchange_returns_user_query_text() {
+    let conversation =
+        restored_conversation_with_queries(&["write unit tests", "fix the failing test"]);
+    let exchange_ids: Vec<_> = conversation.root_task_exchanges().map(|e| e.id).collect();
+
+    let first = conversation
+        .editable_user_query_for_exchange(exchange_ids[0])
+        .expect("first exchange is editable");
+    assert_eq!(first.original_text(), "write unit tests");
+
+    let second = conversation
+        .editable_user_query_for_exchange(exchange_ids[1])
+        .expect("second exchange is editable");
+    assert_eq!(second.original_text(), "fix the failing test");
+}
+
+#[test]
+fn editable_user_query_for_exchange_rejects_unknown_exchange() {
+    let conversation = restored_conversation_with_queries(&["write unit tests"]);
+    assert!(conversation
+        .editable_user_query_for_exchange(super::AIAgentExchangeId::new())
+        .is_none());
+}
+
+#[test]
+fn edited_input_replaces_text_and_preserves_normal_mode() {
+    use crate::ai::agent::{AIAgentInput, UserQueryMode};
+
+    let conversation = restored_conversation_with_queries(&["write unit tests"]);
+    let exchange_id = conversation.root_task_exchanges().next().unwrap().id;
+    let editable = conversation
+        .editable_user_query_for_exchange(exchange_id)
+        .expect("editable");
+
+    match editable.edited_input("write integration tests instead") {
+        AIAgentInput::UserQuery {
+            query,
+            user_query_mode,
+            ..
+        } => {
+            assert_eq!(query, "write integration tests instead");
+            assert_eq!(user_query_mode, UserQueryMode::Normal);
+        }
+        other => panic!("expected UserQuery, got {other:?}"),
+    }
+}
+
+#[test]
+fn edited_input_rederives_mode_from_slash_prefix() {
+    use crate::ai::agent::{AIAgentInput, UserQueryMode};
+
+    let conversation = restored_conversation_with_queries(&["write unit tests"]);
+    let exchange_id = conversation.root_task_exchanges().next().unwrap().id;
+    let editable = conversation
+        .editable_user_query_for_exchange(exchange_id)
+        .expect("editable");
+
+    // Editing the prompt to add a `/plan` prefix should switch the mode to Plan
+    // and strip the prefix from the stored query text, matching normal submission.
+    match editable.edited_input("/plan write unit tests") {
+        AIAgentInput::UserQuery {
+            query,
+            user_query_mode,
+            ..
+        } => {
+            assert_eq!(query, "write unit tests");
+            assert_eq!(user_query_mode, UserQueryMode::Plan);
+        }
+        other => panic!("expected UserQuery, got {other:?}"),
+    }
+}
+
+#[test]
 fn restored_conversation_defaults_autoexecute_override_when_not_persisted() {
     let _flag = FeatureFlag::RememberFastForwardState.override_enabled(true);
     let conversation_data: AgentConversationData =

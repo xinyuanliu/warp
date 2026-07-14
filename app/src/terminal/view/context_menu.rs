@@ -451,6 +451,20 @@ impl TerminalView {
             }
         }
 
+        // Secondary entry point for editing a sent prompt (the primary is the
+        // on-hover Edit button). Restored/read-only blocks can't be edited.
+        if FeatureFlag::EditSentAgentMessages.is_enabled() && !is_restored {
+            menu_items.push(
+                MenuItemFields::new("Edit message")
+                    .with_on_select_action(TerminalAction::EditAIPrompt {
+                        ai_block_view_id,
+                        exchange_id: ai_exchange_id,
+                        conversation_id: ai_conversation_id,
+                    })
+                    .into_item(),
+            );
+        }
+
         // We can't revert restored blocks since we don't restore the full diff
         if FeatureFlag::RevertToCheckpoints.is_enabled() && !is_restored {
             menu_items.push(

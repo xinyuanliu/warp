@@ -24417,6 +24417,116 @@ impl TerminalView {
         );
     }
 
+    /// Opens the inline prompt-editing state for the sent prompt in the given AI
+    /// block. Dispatched by the on-hover Edit button and the "Edit message"
+    /// overflow-menu item.
+    fn open_ai_prompt_edit(&mut self, ai_block_view_id: EntityId, ctx: &mut ViewContext<Self>) {
+        for rich_content in self.rich_content_views.iter() {
+            if let Some(ai_metadata) = rich_content.ai_block_metadata() {
+                if ai_metadata.ai_block_handle.id() == ai_block_view_id {
+                    ai_metadata.ai_block_handle.update(ctx, |block, ctx| {
+                        block.start_editing_prompt(ctx);
+                    });
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Closes the inline prompt-editing state for the given AI block without
+    /// mutating the conversation (used for unchanged/cancelled edits).
+    fn close_ai_prompt_edit(&mut self, ai_block_view_id: EntityId, ctx: &mut ViewContext<Self>) {
+        for rich_content in self.rich_content_views.iter() {
+            if let Some(ai_metadata) = rich_content.ai_block_metadata() {
+                if ai_metadata.ai_block_handle.id() == ai_block_view_id {
+                    ai_metadata.ai_block_handle.update(ctx, |block, ctx| {
+                        block.cancel_editing_prompt(ctx);
+                    });
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Validates a submitted inline prompt edit. Empty submits are blocked (the
+    /// inline editor keeps its validation state); unchanged submits exit editing
+    /// without mutating history; changed submits open the destructive-change
+    /// confirmation modal before anything is truncated or regenerated.
+    fn submit_ai_prompt_edit(
+        &mut self,
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+        edited_text: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let original_text = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.editable_user_query_for_exchange(exchange_id))
+            .map(|editable| editable.original_text().to_owned());
+        let Some(original_text) = original_text else {
+            log::warn!("Edit prompt submit: no editable user query for exchange {exchange_id:?}");
+            return;
+        };
+
+        let trimmed = edited_text.trim();
+        // Empty submit is blocked: keep the editor open (no mutation).
+        if trimmed.is_empty() {
+            return;
+        }
+        // Unchanged submit: exit editing without regenerating or mutating history.
+        if trimmed == original_text.trim() {
+            self.close_ai_prompt_edit(ai_block_view_id, ctx);
+            return;
+        }
+        // Changed submit is destructive: confirm before mutating anything.
+        ctx.dispatch_typed_action(&WorkspaceAction::ShowEditPromptConfirmationDialog {
+            ai_block_view_id,
+            exchange_id,
+            conversation_id,
+            edited_text: trimmed.to_owned(),
+        });
+    }
+
+    /// Executes the edit-and-regenerate flow after the user confirms in the
+    /// dialog: run the same destructive rewind used by the Rewind action, then
+    /// resend the edited prompt as a new active request from the pre-edit state.
+    fn edit_user_query_and_regenerate(
+        &mut self,
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+        edited_text: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Resolve the editable query BEFORE mutating so we can preserve the
+        // original context/attachments and re-check the guards.
+        let editable = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .and_then(|conversation| conversation.editable_user_query_for_exchange(exchange_id));
+        let Some(editable) = editable else {
+            log::warn!("Edit-and-regenerate: no editable user query for exchange {exchange_id:?}");
+            return;
+        };
+
+        let trimmed = edited_text.trim();
+        // Defense-in-depth: never mutate on empty or unchanged text.
+        if trimmed.is_empty() || trimmed == editable.original_text().trim() {
+            return;
+        }
+        let edited_input = editable.edited_input(trimmed);
+
+        // Run the same destructive flow as rewind (cancel active work, revert
+        // diffs, fork a pre-edit backup, truncate from the edited exchange,
+        // remove blocks, clear stale action results).
+        self.rewind_ai_conversation(ai_block_view_id, exchange_id, conversation_id, ctx);
+
+        // Resend the edited prompt as a new active request from the pre-edit state.
+        self.ai_controller.update(ctx, |controller, ctx| {
+            controller.edit_user_query_and_regenerate(conversation_id, edited_input, ctx);
+        });
+    }
+
     fn handle_input_context_menu_action(
         &mut self,
         action: &InputContextMenuAction,
@@ -25696,6 +25806,10 @@ impl TypedActionView for TerminalView {
                 "Execute rewind to before this point in the AI conversation.".to_owned(),
                 WarpA11yRole::ButtonRole,
             )),
+            EditAIPrompt { .. } => Custom(AccessibilityContent::new_without_help(
+                "Edit this sent prompt and regenerate the conversation from it.".to_owned(),
+                WarpA11yRole::ButtonRole,
+            )),
             SelectAIAttachedBlock(_) => Custom(AccessibilityContent::new_without_help(
                 "Click on a block attached as context to this AI query.".to_owned(),
                 WarpA11yRole::ButtonRole,
@@ -25789,6 +25903,8 @@ impl TypedActionView for TerminalView {
             | AwsBedrockLoginBanner(_)
             | AwsCliNotInstalledBanner(_)
             | ExecuteRewindFromInlineMenu { .. }
+            | SubmitEditAIPrompt { .. }
+            | ExecuteEditAIPrompt { .. }
             | ToggleUsageFooter
             | RevealChildAgent { .. }
             | SwitchAgentViewToConversation { .. }
@@ -25934,6 +26050,39 @@ impl TypedActionView for TerminalView {
                         conversation_id
                     );
                 }
+            }
+            EditAIPrompt {
+                ai_block_view_id, ..
+            } => {
+                self.open_ai_prompt_edit(*ai_block_view_id, ctx);
+            }
+            SubmitEditAIPrompt {
+                ai_block_view_id,
+                exchange_id,
+                conversation_id,
+                edited_text,
+            } => {
+                self.submit_ai_prompt_edit(
+                    *ai_block_view_id,
+                    *exchange_id,
+                    *conversation_id,
+                    edited_text.clone(),
+                    ctx,
+                );
+            }
+            ExecuteEditAIPrompt {
+                ai_block_view_id,
+                exchange_id,
+                conversation_id,
+                edited_text,
+            } => {
+                self.edit_user_query_and_regenerate(
+                    *ai_block_view_id,
+                    *exchange_id,
+                    *conversation_id,
+                    edited_text.clone(),
+                    ctx,
+                );
             }
             CloseContextMenu => self.close_context_menu(ctx, true),
             Paste => self.paste(false, ctx),

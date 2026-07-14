@@ -69,6 +69,7 @@ use warpui::{
 
 #[cfg(feature = "agent_mode_debug")]
 use self::code_diff_view::FileDiff;
+use self::compact_agent_input::{CompactAgentInput, CompactAgentInputEvent};
 use self::model::{AIBlockModel, AIBlockModelHelper};
 use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
 use super::code_block::CodeSnippetButtonHandles;
@@ -297,6 +298,20 @@ impl AIBlockResponseRating {
 struct ActionButtons {
     run_button: CompactibleActionButton,
     cancel_button: CompactibleActionButton,
+}
+
+/// Inline prompt-editing state, present while the user is editing this block's
+/// sent prompt in place (see [`AIBlock::start_editing_prompt`]).
+struct PromptEditState {
+    /// The editor, prefilled with the sent prompt text.
+    input: ViewHandle<CompactAgentInput>,
+    /// The original prompt text (with any mode prefix) used to detect no-op edits.
+    #[allow(dead_code)]
+    original_text: String,
+    /// The inline "Save and regenerate" button.
+    save_button: ViewHandle<ActionButton>,
+    /// The inline "Cancel" button.
+    cancel_button: ViewHandle<ActionButton>,
 }
 
 /// Like `SecondaryTheme` but with grey text instead of white.
@@ -922,6 +937,14 @@ pub struct AIBlock {
     /// Rewind button to revert to before this block.
     rewind_button: ViewHandle<ActionButton>,
 
+    /// Hover-visible "Edit" button in the prompt header. Only rendered when the
+    /// `EditSentAgentMessages` feature flag is enabled and the prompt is editable.
+    edit_button: ViewHandle<ActionButton>,
+
+    /// Inline prompt-editing state, present while the user is editing this
+    /// block's sent prompt in place. `None` when not editing.
+    prompt_edit_state: Option<PromptEditState>,
+
     /// Per-action button components for "View screenshot" buttons on UseComputer actions.
     view_screenshot_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
 
@@ -1307,6 +1330,16 @@ impl AIBlock {
                 })
         });
 
+        let edit_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Edit", RewindButtonTheme)
+                .with_icon(Icon::Pencil)
+                .with_size(ButtonSize::XSmall)
+                .with_tooltip("Edit prompt and regenerate")
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(AIBlockAction::StartEditingPrompt);
+                })
+        });
+
         let comment_data = model
             .inputs_to_render(ctx)
             .iter()
@@ -1390,6 +1423,8 @@ impl AIBlock {
             dismiss_suggestion_button,
             disable_rule_suggestions_button,
             rewind_button,
+            edit_button,
+            prompt_edit_state: None,
             view_screenshot_buttons: Default::default(),
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
@@ -1434,6 +1469,133 @@ impl AIBlock {
             AIBlockOutputStatus::PartiallyReceived { .. } | AIBlockOutputStatus::Pending => (),
         }
         me
+    }
+
+    /// Returns `true` if this block's sent prompt can be edited in place.
+    ///
+    /// A prompt is editable only when the `EditSentAgentMessages` feature flag is
+    /// enabled, the block is not a restored/read-only surface, and the backing
+    /// conversation exposes an editable user query for this block's exchange.
+    pub fn is_prompt_editable(&self, app: &AppContext) -> bool {
+        if !FeatureFlag::EditSentAgentMessages.is_enabled() {
+            return false;
+        }
+        if self.is_restored() {
+            return false;
+        }
+        if self.terminal_model.lock().is_read_only() {
+            return false;
+        }
+        let Some(exchange_id) = self.model.exchange_id(app) else {
+            return false;
+        };
+        BlocklistAIHistoryModel::as_ref(app)
+            .conversation(&self.client_ids.conversation_id)
+            .and_then(|conversation| conversation.editable_user_query_for_exchange(exchange_id))
+            .is_some()
+    }
+
+    /// Whether the block is currently in inline prompt-editing mode.
+    pub fn is_editing_prompt(&self) -> bool {
+        self.prompt_edit_state.is_some()
+    }
+
+    /// Enters inline prompt-editing mode, prefilling the editor with the sent
+    /// prompt text. No-op when the prompt is not editable or already being edited.
+    pub fn start_editing_prompt(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.prompt_edit_state.is_some() || !self.is_prompt_editable(ctx) {
+            return;
+        }
+        let Some(exchange_id) = self.model.exchange_id(ctx) else {
+            return;
+        };
+        let Some(original_text) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&self.client_ids.conversation_id)
+            .and_then(|conversation| conversation.editable_user_query_for_exchange(exchange_id))
+            .map(|editable| editable.original_text().to_owned())
+        else {
+            return;
+        };
+
+        let input = ctx.add_view(CompactAgentInput::new);
+        input.update(ctx, |input, ctx| {
+            input.set_text(&original_text, ctx);
+        });
+        ctx.subscribe_to_view(&input, Self::handle_prompt_edit_input_event);
+
+        let save_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Save and regenerate", PrimaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AIBlockAction::SubmitPromptEdit);
+                })
+        });
+        let cancel_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Cancel", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AIBlockAction::CancelPromptEdit);
+                })
+        });
+
+        self.prompt_edit_state = Some(PromptEditState {
+            input: input.clone(),
+            original_text,
+            save_button,
+            cancel_button,
+        });
+        ctx.focus(&input);
+        ctx.notify();
+    }
+
+    /// Exits inline prompt-editing mode without mutating the conversation.
+    pub fn cancel_editing_prompt(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.prompt_edit_state.take().is_some() {
+            ctx.notify();
+        }
+    }
+
+    fn handle_prompt_edit_input_event(
+        &mut self,
+        _handle: ViewHandle<CompactAgentInput>,
+        event: &CompactAgentInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            CompactAgentInputEvent::Submit(text) => {
+                self.submit_prompt_edit(text.clone(), ctx);
+            }
+            CompactAgentInputEvent::Escape => {
+                self.cancel_editing_prompt(ctx);
+            }
+        }
+    }
+
+    /// Submits the current inline prompt edit, routing through the terminal view
+    /// so the destructive-change confirmation modal can gate the regeneration.
+    fn submit_prompt_edit(&mut self, edited_text: String, ctx: &mut ViewContext<Self>) {
+        let edited_text = edited_text.trim().to_owned();
+        // Empty submit is blocked: keep the editor open.
+        if edited_text.is_empty() {
+            return;
+        }
+        // Keep the inline editor populated with the edited text so the edit is
+        // not lost if the user cancels the confirmation modal (the editor clears
+        // its buffer on Enter).
+        if let Some(state) = &self.prompt_edit_state {
+            state.input.update(ctx, |input, ctx| {
+                input.set_text(&edited_text, ctx);
+            });
+        }
+        let Some(exchange_id) = self.model.exchange_id(ctx) else {
+            return;
+        };
+        ctx.dispatch_typed_action(&TerminalAction::SubmitEditAIPrompt {
+            ai_block_view_id: self.view_id,
+            exchange_id,
+            conversation_id: self.client_ids.conversation_id,
+            edited_text,
+        });
     }
 
     /// Update this block's directory context (pwd and home_dir) after creation.
@@ -5957,6 +6119,13 @@ pub enum AIBlockAction {
     OpenCommentInGitHub {
         url: String,
     },
+    /// Enter inline prompt-editing mode for this block's sent prompt.
+    StartEditingPrompt,
+    /// Submit the current inline prompt edit (dispatched by the "Save and
+    /// regenerate" button; the editor's Enter key submits directly).
+    SubmitPromptEdit,
+    /// Exit inline prompt-editing mode without mutating the conversation.
+    CancelPromptEdit,
 }
 
 impl TypedActionView for AIBlock {
@@ -5996,6 +6165,21 @@ impl TypedActionView for AIBlock {
                 ctx.emit(AIBlockEvent::ResumeConversation {
                     conversation_id: self.client_ids.conversation_id,
                 });
+            }
+            AIBlockAction::StartEditingPrompt => {
+                self.start_editing_prompt(ctx);
+            }
+            AIBlockAction::SubmitPromptEdit => {
+                if let Some(text) = self
+                    .prompt_edit_state
+                    .as_ref()
+                    .map(|state| state.input.as_ref(ctx).text(ctx))
+                {
+                    self.submit_prompt_edit(text, ctx);
+                }
+            }
+            AIBlockAction::CancelPromptEdit => {
+                self.cancel_editing_prompt(ctx);
             }
             AIBlockAction::ForkConversation => {
                 // Fully reset the fork button's interaction state before navigation.

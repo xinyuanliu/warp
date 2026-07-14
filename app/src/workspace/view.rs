@@ -10705,14 +10705,29 @@ impl Workspace {
             RewindConfirmationEvent::Confirm { rewind_source } => {
                 self.current_workspace_state
                     .is_rewind_confirmation_dialog_open = false;
-                self.handle_action(
-                    &WorkspaceAction::ExecuteRewindAIConversation {
-                        ai_block_view_id: rewind_source.ai_block_view_id,
-                        exchange_id: rewind_source.exchange_id,
-                        conversation_id: rewind_source.conversation_id,
-                    },
-                    ctx,
-                );
+                // The same dialog is reused for a plain rewind and for an
+                // in-place prompt edit; route based on whether an edited prompt
+                // was carried through.
+                if let Some(edited_text) = rewind_source.edited_text.clone() {
+                    self.handle_action(
+                        &WorkspaceAction::ExecuteEditAIPrompt {
+                            ai_block_view_id: rewind_source.ai_block_view_id,
+                            exchange_id: rewind_source.exchange_id,
+                            conversation_id: rewind_source.conversation_id,
+                            edited_text,
+                        },
+                        ctx,
+                    );
+                } else {
+                    self.handle_action(
+                        &WorkspaceAction::ExecuteRewindAIConversation {
+                            ai_block_view_id: rewind_source.ai_block_view_id,
+                            exchange_id: rewind_source.exchange_id,
+                            conversation_id: rewind_source.conversation_id,
+                        },
+                        ctx,
+                    );
+                }
                 self.focus_active_tab(ctx);
                 ctx.notify();
             }
@@ -24129,9 +24144,51 @@ impl TypedActionView for Workspace {
                         ai_block_view_id: *ai_block_view_id,
                         exchange_id: *exchange_id,
                         conversation_id: *conversation_id,
+                        edited_text: None,
                     },
                     ctx,
                 );
+            }
+            ShowEditPromptConfirmationDialog {
+                ai_block_view_id,
+                exchange_id,
+                conversation_id,
+                edited_text,
+            } => {
+                self.show_rewind_confirmation_dialog(
+                    RewindDialogSource {
+                        ai_block_view_id: *ai_block_view_id,
+                        exchange_id: *exchange_id,
+                        conversation_id: *conversation_id,
+                        edited_text: Some(edited_text.clone()),
+                    },
+                    ctx,
+                );
+            }
+            ExecuteEditAIPrompt {
+                ai_block_view_id,
+                exchange_id,
+                conversation_id,
+                edited_text,
+            } => {
+                // Dispatch to the active terminal to execute the edit-and-regenerate flow.
+                if let Some(terminal_view) = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .focused_session_view(ctx)
+                {
+                    terminal_view.update(ctx, |terminal, ctx| {
+                        terminal.handle_action(
+                            &TerminalAction::ExecuteEditAIPrompt {
+                                ai_block_view_id: *ai_block_view_id,
+                                exchange_id: *exchange_id,
+                                conversation_id: *conversation_id,
+                                edited_text: edited_text.clone(),
+                            },
+                            ctx,
+                        );
+                    });
+                }
             }
             ExecuteRewindAIConversation {
                 ai_block_view_id,

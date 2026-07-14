@@ -191,6 +191,64 @@ pub enum RestoreConversationError {
 #[error("Subagent task not found")]
 pub struct SubagentTaskNotFound;
 
+/// A user prompt that can be edited in place and regenerated. Produced by
+/// [`AIConversation::editable_user_query_for_exchange`].
+#[derive(Debug, Clone)]
+pub struct EditableUserQuery {
+    /// The task the edited prompt should be re-sent into.
+    task_id: TaskId,
+    /// The original prompt text as displayed to the user, including any
+    /// slash-command mode prefix such as `/plan`.
+    original_text: String,
+    /// The original `AIAgentInput::UserQuery`, retained so we can preserve its
+    /// context, referenced attachments, static query type, running-command
+    /// metadata, and intended agent when regenerating.
+    original_input: AIAgentInput,
+}
+
+impl EditableUserQuery {
+    /// The task the edited prompt should be re-sent into.
+    pub fn task_id(&self) -> &TaskId {
+        &self.task_id
+    }
+
+    /// The original prompt text as displayed to the user (with any mode prefix).
+    pub fn original_text(&self) -> &str {
+        &self.original_text
+    }
+
+    /// Builds a new [`AIAgentInput::UserQuery`] for the edited prompt text,
+    /// preserving the original query's context, referenced attachments, static
+    /// query type, running-command metadata, and intended agent. The user query
+    /// mode is re-derived from the edited text so editing a slash-command prefix
+    /// (e.g. adding or removing `/plan`) updates the mode the same way normal
+    /// prompt submission would.
+    pub fn edited_input(&self, edited_text: &str) -> AIAgentInput {
+        let (query, user_query_mode) = super::extract_user_query_mode(edited_text.to_owned());
+        match &self.original_input {
+            AIAgentInput::UserQuery {
+                context,
+                static_query_type,
+                referenced_attachments,
+                running_command,
+                intended_agent,
+                ..
+            } => AIAgentInput::UserQuery {
+                query,
+                context: context.clone(),
+                static_query_type: static_query_type.clone(),
+                referenced_attachments: referenced_attachments.clone(),
+                user_query_mode,
+                running_command: running_command.clone(),
+                intended_agent: *intended_agent,
+            },
+            // `editable_user_query_for_exchange` only ever constructs this from a
+            // `UserQuery`, but fall back to cloning to keep this total.
+            other => other.clone(),
+        }
+    }
+}
+
 /// An Agent Mode conversation.
 #[derive(Debug, Clone)]
 pub struct AIConversation {
@@ -1650,6 +1708,43 @@ impl AIConversation {
         exchange_id: AIAgentExchangeId,
     ) -> impl Iterator<Item = &AIAgentContext> {
         context_in_exchanges(self.exchange_with_id(exchange_id).into_iter())
+    }
+
+    /// Returns the editable user query for the given root-task exchange, if the
+    /// exchange represents a user-authored prompt that can be edited in place and
+    /// regenerated.
+    ///
+    /// Returns `None` for passive/action-result/non-user-query exchanges, or for
+    /// exchanges that are not part of the conversation's root task (e.g. subagent
+    /// exchanges), which are not user-editable.
+    pub fn editable_user_query_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<EditableUserQuery> {
+        // Only root-task exchanges are editable (subagent exchanges are not).
+        let exchange = self
+            .root_task_exchanges()
+            .find(|exchange| exchange.id == exchange_id)?;
+
+        // Reject passive requests (auto code diffs, suggestion triggers, etc.).
+        if exchange.has_passive_request() {
+            return None;
+        }
+
+        // Find the user query input in the exchange. Exchanges without a user
+        // query (e.g. action-result-only, resume-only) are not editable.
+        let original_input = exchange
+            .input
+            .iter()
+            .find(|input| input.is_user_query())?
+            .clone();
+        let original_text = original_input.user_query()?;
+
+        Some(EditableUserQuery {
+            task_id: self.get_root_task_id().clone(),
+            original_text,
+            original_input,
+        })
     }
 
     pub fn update_for_new_request_input(

@@ -246,6 +246,31 @@ pub enum TerminalAction {
         exchange_id: AIAgentExchangeId,
         conversation_id: AIConversationId,
     },
+    /// Open the inline prompt-editing state for a sent user prompt (dispatched by
+    /// the on-hover Edit button and the "Edit message" overflow-menu item).
+    EditAIPrompt {
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+    },
+    /// Submit an inline prompt edit. Validates the edit (non-empty, changed) and,
+    /// if it would mutate the conversation, shows the destructive-change
+    /// confirmation modal before anything is truncated or regenerated.
+    SubmitEditAIPrompt {
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+        edited_text: String,
+    },
+    /// Execute the edit-and-regenerate flow (called after the user confirms in the
+    /// dialog): rewind the conversation from the edited exchange and resend the
+    /// edited prompt as a new active request.
+    ExecuteEditAIPrompt {
+        ai_block_view_id: EntityId,
+        exchange_id: AIAgentExchangeId,
+        conversation_id: AIConversationId,
+        edited_text: String,
+    },
     SelectAllBlocks,
     ExpandBlockSelectionAbove,
     ExpandBlockSelectionBelow,
@@ -650,6 +675,9 @@ impl fmt::Debug for TerminalAction {
             RewindAIConversation { .. } => write!(f, "RewindAIConversation"),
             ExecuteRewindAIConversation { .. } => write!(f, "ExecuteRewindAIConversation"),
             ExecuteRewindFromInlineMenu { .. } => write!(f, "ExecuteRewindFromInlineMenu"),
+            EditAIPrompt { .. } => write!(f, "EditAIPrompt"),
+            SubmitEditAIPrompt { .. } => write!(f, "SubmitEditAIPrompt"),
+            ExecuteEditAIPrompt { .. } => write!(f, "ExecuteEditAIPrompt"),
             SelectAIAttachedBlock(_) => write!(f, "SelectAIAttachedBlock"),
             DragAndDropFiles(_) => write!(f, "DragAndDropFiles"),
             WarpifySSHSession => write!(f, "WarpifySSHSession"),

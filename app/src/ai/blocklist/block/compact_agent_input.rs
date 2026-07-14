@@ -71,6 +71,11 @@ impl CompactAgentInput {
         });
     }
 
+    /// Returns the current trimmed buffer contents.
+    pub fn text(&self, ctx: &AppContext) -> String {
+        self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned()
+    }
+
     fn handle_editor_event(
         &mut self,
         _handle: ViewHandle<EditorView>,
