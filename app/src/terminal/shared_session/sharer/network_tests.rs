@@ -18,7 +18,7 @@ use websocket::{Message, WebsocketMessage as _};
 
 use super::{
     startup_max_attempts, Network, PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState,
-    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, TEST_PTY_READS_BATCH_THRESHOLD,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, PTY_READS_BATCH_THRESHOLD,
 };
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
@@ -381,8 +381,8 @@ fn test_handle_pty_read_event_while_not_batching() {
             .expect("Can send event over ordered_events_tx");
 
         // The test executor uses real (async_io) timers with no mock clock, so this
-        // test relies on the batch timer actually firing. `new_for_test` injects
-        // TEST_PTY_READS_BATCH_THRESHOLD (larger than the ~50ms production value) so the
+        // test relies on the batch timer actually firing. Under test builds
+        // PTY_READS_BATCH_THRESHOLD is larger than the ~50ms production value so the
         // transient `Batching` state below is reliably observable instead of racing the
         // timer under coarse scheduler granularity (which flaked on Windows CI).
         assert_eventually!(
@@ -395,12 +395,12 @@ fn test_handle_pty_read_event_while_not_batching() {
 
         // When the batch timer fires, the accumulated event is flushed to the server.
         // Await the flush directly rather than polling a fixed tick budget, but bound the
-        // wait (generously, relative to the injected batch threshold) so a regression in
+        // wait (generously, relative to the test-build batch threshold) so a regression in
         // the timer/flush path fails this test promptly instead of hanging until the CI
         // timeout.
         let item = ws_proxy_rx
             .recv()
-            .with_timeout(TEST_PTY_READS_BATCH_THRESHOLD * 20)
+            .with_timeout(PTY_READS_BATCH_THRESHOLD * 20)
             .await
             .expect("Accumulated event should be flushed before the timeout");
         assert!(is_upstream_message_pty_bytes_read(

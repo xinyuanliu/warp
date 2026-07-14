@@ -58,14 +58,15 @@ use crate::terminal::shared_session::{
 use crate::terminal::TerminalModel;
 use crate::throttle::throttle;
 
-/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
-#[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
+/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server.
+#[cfg(not(any(test, feature = "integration_tests")))]
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
-/// A larger batch threshold injected in tests so the transient `Batching` state
-/// is reliably observable instead of racing the real ~50ms timer under coarse
-/// scheduler granularity; see `test_handle_pty_read_event_while_not_batching`.
+/// Under `test`/`integration_tests` the threshold is larger so the transient
+/// `Batching` state is reliably observable instead of racing the real ~50ms timer
+/// under coarse scheduler granularity (which flaked on Windows CI); see
+/// `test_handle_pty_read_event_while_not_batching`.
 #[cfg(any(test, feature = "integration_tests"))]
-const TEST_PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
+const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
@@ -277,11 +278,6 @@ pub struct Network {
 
     pty_bytes_batch_status: PtyBytesBatchStatus,
 
-    /// How long to batch consecutive PTY read events before flushing. Defaults to
-    /// [`PTY_READS_BATCH_THRESHOLD`] in production; tests inject a larger value so
-    /// the batch window is deterministically observable.
-    pty_reads_batch_threshold: Duration,
-
     // TODO (suraj): figure out how to better structure the
     // Network model for testing so that we don't need stuff like this.
     #[allow(dead_code)]
@@ -336,7 +332,6 @@ impl Network {
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
-            pty_reads_batch_threshold: TEST_PTY_READS_BATCH_THRESHOLD,
             ws_proxy_rx,
             selection_throttled_tx,
             cached_latest_state: CachedLatestState {
@@ -436,7 +431,6 @@ impl Network {
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
-            pty_reads_batch_threshold: PTY_READS_BATCH_THRESHOLD,
             cached_latest_state: CachedLatestState {
                 prompt: active_prompt.clone(),
                 selection: selection.clone(),
@@ -1560,7 +1554,7 @@ impl Network {
 
                         // Calculate how much time we should be batching for.
                         let next_send_time = last_sent_at
-                            .checked_add(network.pty_reads_batch_threshold)
+                            .checked_add(PTY_READS_BATCH_THRESHOLD)
                             .expect("Can add durations");
                         let wait_time = next_send_time.saturating_duration_since(Instant::now());
                         let spawn_handle = ctx.spawn(
