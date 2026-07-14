@@ -6,7 +6,11 @@
 # is available (mirroring `./script/run`), otherwise falls back to the OSS
 # channel so contributors without repo access can still run the TUI. Unlike the
 # GUI `./script/run`, the TUI is a console binary, so there is no `.app` bundle
-# step.
+# step. Instead, bundled resources (bundled skills, etc.) are staged into a
+# `resources/` directory next to the built binary, and the binary is built with
+# the `standalone` cargo feature so `warp_core::paths::bundled_resources_dir()`
+# resolves that sibling directory on every platform (mirroring how the GUI
+# `./script/run` stages resources into the `.app` bundle on macOS).
 #
 # On macOS the binary is built with `cargo build` and then codesigned with a
 # stable "Apple Development" identity (mirroring `./script/macos/run`). Keychain
@@ -66,16 +70,32 @@ while (( "$#" )); do
   esac
 done
 
-if [[ "$(uname -s)" = "Darwin" ]]; then
-  echo "Building cargo build -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
-  cargo build -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
-
-  # Resolve Cargo's actual target directory rather than assuming ./target
-  # (honors CARGO_TARGET_DIR / build.target-dir).
+# Resolve Cargo's actual target directory rather than assuming ./target
+# (honors CARGO_TARGET_DIR / build.target-dir). `jq` may not be installed on
+# every dev machine, so fall back gracefully when it's unavailable.
+TARGET_DIR=""
+if command -v jq &>/dev/null; then
   TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
-  if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
-    TARGET_DIR="${REPO_ROOT}/target"
-  fi
+fi
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+  TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
+fi
+
+# Stage bundled resources (bundled skills, settings schema location, etc.)
+# next to the built binary. The TUI is built with the `standalone` cargo
+# feature, so `warp_core::paths::bundled_resources_dir()` resolves this
+# sibling `resources/` directory at runtime. Skip the settings-schema
+# generation (it compiles the full GUI app) and the license aggregation —
+# neither is needed for a local dev run, matching `./script/macos/run`.
+RESOURCES_DIR="${TARGET_DIR}/${PROFILE_DIR}/resources"
+echo "Preparing bundled resources in ${RESOURCES_DIR}..."
+SKIP_SETTINGS_SCHEMA=1 NO_LICENSES=1 \
+  "${REPO_ROOT}/script/prepare_bundled_resources" "${RESOURCES_DIR}" "${CHANNEL}"
+
+if [[ "$(uname -s)" = "Darwin" ]]; then
+  echo "Building cargo build -p warp_tui --bin ${BIN} --features standalone (channel: ${CHANNEL})"
+  cargo build -p warp_tui --bin "${BIN}" --features standalone "${CARGO_ARGS[@]}"
+
   TUI_BIN_PATH="${TARGET_DIR}/${PROFILE_DIR}/${BIN}"
 
   SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
@@ -88,10 +108,10 @@ if [[ "$(uname -s)" = "Darwin" ]]; then
 
   exec "$TUI_BIN_PATH" "${BIN_ARGS[@]}"
 else
-  echo "Running cargo run -p warp_tui --bin ${BIN} (channel: ${CHANNEL})"
+  echo "Running cargo run -p warp_tui --bin ${BIN} --features standalone (channel: ${CHANNEL})"
   if [[ ${#BIN_ARGS[@]} -gt 0 ]]; then
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}" -- "${BIN_ARGS[@]}"
+    exec cargo run -p warp_tui --bin "${BIN}" --features standalone "${CARGO_ARGS[@]}" -- "${BIN_ARGS[@]}"
   else
-    exec cargo run -p warp_tui --bin "${BIN}" "${CARGO_ARGS[@]}"
+    exec cargo run -p warp_tui --bin "${BIN}" --features standalone "${CARGO_ARGS[@]}"
   fi
 fi
