@@ -1,13 +1,11 @@
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 
-use super::{
-    should_show_auth_secret_picker, should_show_harness_picker, AuthSecretSelection,
-    OrchestrationEditState,
-};
+use super::{AuthSecretSelection, OrchestrationConfigState};
+use crate::ai::orchestration::{should_show_auth_secret_picker, should_show_harness_picker};
 
-fn remote_claude_state() -> OrchestrationEditState {
-    OrchestrationEditState::from_run_agents_fields(
+fn remote_claude_state() -> OrchestrationConfigState {
+    OrchestrationConfigState::from_run_agents_fields(
         "sonnet",
         "claude",
         &RunAgentsExecutionMode::Remote {
@@ -29,7 +27,7 @@ fn local_config(harness_type: &str, model_id: &str) -> OrchestrationConfig {
 #[test]
 fn from_orchestration_config_preserves_local_claude() {
     let state =
-        OrchestrationEditState::from_orchestration_config(&local_config("claude", "sonnet"));
+        OrchestrationConfigState::from_orchestration_config(&local_config("claude", "sonnet"));
     assert_eq!(state.harness_type, "claude");
     assert_eq!(state.model_id, "sonnet");
     assert!(matches!(
@@ -40,7 +38,7 @@ fn from_orchestration_config_preserves_local_claude() {
 
 #[test]
 fn harness_picker_stays_visible_for_local_mode() {
-    let state = OrchestrationEditState::from_run_agents_fields(
+    let state = OrchestrationConfigState::from_run_agents_fields(
         "auto",
         "oz",
         &RunAgentsExecutionMode::Local,
@@ -50,7 +48,7 @@ fn harness_picker_stays_visible_for_local_mode() {
 
 #[test]
 fn harness_picker_stays_visible_for_remote_mode() {
-    let state = OrchestrationEditState::from_run_agents_fields(
+    let state = OrchestrationConfigState::from_run_agents_fields(
         "auto",
         "oz",
         &RunAgentsExecutionMode::Remote {
@@ -65,7 +63,7 @@ fn harness_picker_stays_visible_for_remote_mode() {
 
 #[test]
 fn from_orchestration_config_preserves_remote_claude() {
-    let state = OrchestrationEditState::from_orchestration_config(&OrchestrationConfig {
+    let state = OrchestrationConfigState::from_orchestration_config(&OrchestrationConfig {
         model_id: "sonnet".to_string(),
         harness_type: "claude".to_string(),
         execution_mode: OrchestrationExecutionMode::Remote {
@@ -88,7 +86,7 @@ fn from_orchestration_config_preserves_remote_claude() {
 
 #[test]
 fn toggle_to_local_sanitizes_disabled_codex() {
-    let mut state = OrchestrationEditState::from_run_agents_fields(
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
         "gpt-5",
         "codex",
         &RunAgentsExecutionMode::Remote {
@@ -110,7 +108,7 @@ fn toggle_to_local_sanitizes_disabled_codex() {
 
 #[test]
 fn toggle_to_local_preserves_claude() {
-    let mut state = OrchestrationEditState::from_run_agents_fields(
+    let mut state = OrchestrationConfigState::from_run_agents_fields(
         "sonnet",
         "claude",
         &RunAgentsExecutionMode::Remote {
@@ -132,7 +130,7 @@ fn toggle_to_local_preserves_claude() {
 
 #[test]
 fn accept_disabled_reason_allows_local_claude_product() {
-    let state = OrchestrationEditState::from_run_agents_fields(
+    let state = OrchestrationConfigState::from_run_agents_fields(
         "auto",
         "claude",
         &RunAgentsExecutionMode::Local,
@@ -143,7 +141,7 @@ fn accept_disabled_reason_allows_local_claude_product() {
 #[test]
 fn resolve_from_config_preserves_local_claude() {
     let mut state =
-        OrchestrationEditState::from_run_agents_fields("", "", &RunAgentsExecutionMode::Local);
+        OrchestrationConfigState::from_run_agents_fields("", "", &RunAgentsExecutionMode::Local);
 
     state.resolve_from_config(&local_config("claude", "sonnet"));
     assert_eq!(state.harness_type, "claude");
@@ -157,7 +155,7 @@ fn resolve_from_config_preserves_local_claude() {
 #[test]
 fn resolve_from_config_sanitizes_disabled_local_codex() {
     let mut state =
-        OrchestrationEditState::from_run_agents_fields("", "", &RunAgentsExecutionMode::Local);
+        OrchestrationConfigState::from_run_agents_fields("", "", &RunAgentsExecutionMode::Local);
 
     state.resolve_from_config(&local_config("codex", "gpt-5"));
 
