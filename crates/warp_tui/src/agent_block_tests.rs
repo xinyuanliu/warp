@@ -17,8 +17,9 @@ use warp_core::ui::theme::Fill as ThemeFill;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, SingletonEntity};
 use warpui_core::elements::tui::{
-    Color, Modifier, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPoint, TuiRect, TuiSize,
+    Color, Modifier, TuiBuffer, TuiBufferExt, TuiConstraint, TuiEvent, TuiEventContext,
+    TuiLayoutContext, TuiPaintContext, TuiPaintSurface, TuiPoint, TuiRect, TuiScreenPosition,
+    TuiSize,
 };
 use warpui_core::elements::Fill as CoreFill;
 use warpui_core::event::ModifiersState;
@@ -535,6 +536,34 @@ fn finished_reasoning_renders_collapsed_thought_for_header() {
     });
 }
 
+/// Duration-only reasoning records do not create empty thinking sections.
+#[test]
+fn empty_finished_reasoning_is_omitted() {
+    App::test((), |mut app| async move {
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: complete_output_messages(vec![
+                    plain_text_message("m1", "before"),
+                    reasoning_message("r1", Some(Duration::from_secs(15)), ""),
+                    plain_text_message("m2", "after"),
+                ]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::PlainText("before".to_owned()),
+                    TuiAIBlockSection::PlainText("after".to_owned()),
+                ]
+            );
+        });
+    });
+}
+
 #[test]
 fn manual_expand_override_shows_finished_reasoning_body() {
     App::test((), |mut app| async move {
@@ -907,7 +936,16 @@ fn task_list_header_hover_underlines_only_the_label() {
                 rendered_views: &mut rendered_views,
             };
             element.layout(TuiConstraint::loose(TuiSize::new(40, 2)), &mut ctx, app_ctx);
-            let mut event_ctx = TuiEventContext::default();
+            // Paint once so the element retains its scene geometry for
+            // hit-testing the hover move.
+            let scene = {
+                let mut buffer = TuiBuffer::empty(area);
+                let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+                let mut surface = TuiPaintSurface::new(&mut buffer);
+                element.render(TuiScreenPosition::new(0, 0), &mut surface, &mut paint_ctx);
+                Rc::new(paint_ctx.scene.clone())
+            };
+            let mut event_ctx = TuiEventContext::new(scene, &mut rendered_views);
             event_ctx.set_origin_view(Some(EntityId::new()));
             element.dispatch_event(
                 &TuiEvent::MouseMoved {
@@ -915,9 +953,7 @@ fn task_list_header_hover_underlines_only_the_label() {
                     modifiers: ModifiersState::default(),
                     is_synthetic: false,
                 },
-                area,
                 &mut event_ctx,
-                &mut ctx,
                 app_ctx,
             );
 

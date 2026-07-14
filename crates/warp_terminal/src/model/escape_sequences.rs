@@ -271,7 +271,7 @@ impl KeystrokeWithDetails<'_> {
     ///    → their C0 bytes, so e.g. Escape can leave an editor's insert mode.
     ///
     /// Returns `None` when the key produces nothing to send.
-    pub fn to_pty_bytes<T: ModeProvider>(&self, mode_provider: &T) -> Option<Vec<u8>> {
+    pub fn key_event_to_pty_bytes<T: ModeProvider>(&self, mode_provider: &T) -> Option<Vec<u8>> {
         if let Some(sequence) = self.to_escape_sequence(mode_provider) {
             return Some(sequence);
         }

@@ -500,7 +500,7 @@ fn test_unmatched_keystroke_does_not_yield_escape_sequence() {
 }
 
 #[test]
-fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
+fn test_key_event_to_pty_bytes_layers_fallbacks_over_the_encoder() {
     let mock = TerminalModelMock::new();
     let pty_bytes = |keystroke: &Keystroke, chars: Option<&str>| {
         KeystrokeWithDetails {
@@ -508,7 +508,7 @@ fn test_to_pty_bytes_layers_fallbacks_over_the_encoder() {
             key_without_modifiers: None,
             chars,
         }
-        .to_pty_bytes(&mock)
+        .key_event_to_pty_bytes(&mock)
     };
     // A key with no `chars` and no encoder mapping, built the way the
     // crossterm→key-event conversion supplies named keys (tab is "\t").
