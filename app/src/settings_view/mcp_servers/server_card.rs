@@ -1085,3 +1085,7 @@ impl View for ServerCardView {
         hoverable.finish()
     }
 }
+
+#[cfg(test)]
+#[path = "server_card_tests.rs"]
+mod tests;
