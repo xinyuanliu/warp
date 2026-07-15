@@ -1,0 +1,52 @@
+# 中文优先 Warp fork —— 第一次出可安装 .dmg 的最小构建 workflow
+# 走未签名 OSS 通道，云端 macOS runner 编译，本机无需 Xcode。
+# 在 GitHub 仓库 Actions 页面手动 Run workflow 触发。
+name: Build OSS (unsigned)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build_macos_arm64:
+    name: Build macOS arm64 .dmg (unsigned, oss)
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Prepare environment (LFS, Rust, protoc, deps)
+        uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          install_release_deps: true
+
+      - name: Install cargo-bundle
+        run: script/install_cargo_bundle
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build & bundle (unsigned, oss, arm64, debug)
+        run: script/macos/bundle --debug --nosign --channel oss --arch aarch64
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.14"
+
+      - name: Locate .dmg
+        id: dmg
+        run: |
+          set -e
+          DMG_PATH=$(find target -name "*.dmg" -type f | head -1)
+          echo "Found DMG: $DMG_PATH"
+          echo "path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$DMG_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dmg.outputs.name }}
+          path: ${{ steps.dmg.outputs.path }}
+          if-no-files-found: error
