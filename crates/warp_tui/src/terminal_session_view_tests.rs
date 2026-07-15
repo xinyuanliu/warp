@@ -6,17 +6,82 @@ use std::sync::Arc;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     export_conversation_markdown, AIAgentActionId, AIConversationId, AgentInteractionMetadata,
-    BlockId, TerminalModel, TranscriptScope,
+    Appearance, BlockId, TerminalModel, TranscriptScope,
 };
 use warpui::EntityIdMap;
-use warpui_core::elements::tui::{TuiLayoutContext, TuiViewportWindow, TuiViewportedElement};
-use warpui_core::App;
+use warpui_core::elements::tui::{
+    TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiRect, TuiScreenPosition, TuiSize, TuiViewportWindow, TuiViewportedElement,
+};
+use warpui_core::{App, AppContext};
 
 use super::{
     export_file_success_message, hide_agent_requested_command_from_top_level,
-    raw_prompt_if_not_blank,
+    raw_prompt_if_not_blank, render_idle_navigation_hint,
 };
 use crate::tui_block_list_viewport_source::TuiBlockListViewportSource;
+use crate::tui_builder::TuiUiBuilder;
+
+fn render_buffer(
+    ctx: &AppContext,
+    mut element: impl TuiElement,
+    width: u16,
+    height: u16,
+) -> TuiBuffer {
+    let mut rendered_views = EntityIdMap::default();
+    let mut layout_ctx = TuiLayoutContext {
+        rendered_views: &mut rendered_views,
+    };
+    let size = element.layout(
+        TuiConstraint::loose(TuiSize::new(width, height)),
+        &mut layout_ctx,
+        ctx,
+    );
+    let area = TuiRect::new(0, 0, size.width, size.height);
+    let mut buffer = TuiBuffer::empty(area);
+    let mut paint_ctx = TuiPaintContext::new(&mut rendered_views);
+    let mut surface = TuiPaintSurface::new(&mut buffer);
+    element.render(
+        TuiScreenPosition::new(i32::from(area.x), i32::from(area.y)),
+        &mut surface,
+        &mut paint_ctx,
+    );
+    buffer
+}
+
+#[test]
+fn idle_footer_navigation_hint_renders_key_and_action_text() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| Appearance::mock());
+            let builder = TuiUiBuilder::from_app(ctx);
+            let buffer = render_buffer(ctx, render_idle_navigation_hint(&builder), 80, 1);
+            let line = buffer.to_lines()[0].trim_end().to_owned();
+
+            assert_eq!(line, "↑ to edit  Esc to stop  ← for conversations");
+
+            let key_color = builder.key_hint_style().fg.expect("key hint foreground");
+            let action_color = builder
+                .muted_text_style()
+                .fg
+                .expect("action hint foreground");
+            let escape_col = line
+                .chars()
+                .position(|character| character == 'E')
+                .expect("escape hint") as u16;
+            let conversations_col = line
+                .chars()
+                .position(|character| character == '←')
+                .expect("conversation hint") as u16;
+            assert_eq!(buffer[(0, 0)].fg, key_color);
+            assert_eq!(buffer[(1, 0)].fg, action_color);
+            assert_eq!(buffer[(escape_col, 0)].fg, key_color);
+            assert_eq!(buffer[(escape_col + 3, 0)].fg, action_color);
+            assert_eq!(buffer[(conversations_col, 0)].fg, key_color);
+            assert_eq!(buffer[(conversations_col + 1, 0)].fg, action_color);
+        });
+    });
+}
 
 fn model_with_finished_block(command: &str) -> (TerminalModel, BlockId) {
     let mut model = TerminalModel::mock(None, None);

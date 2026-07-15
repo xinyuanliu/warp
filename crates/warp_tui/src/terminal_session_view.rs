@@ -115,6 +115,20 @@ const MODEL_PERSISTENCE_FAILED_HINT: &str = "Could not save the selected model."
 const SHELL_MODE_HINT: &str = "shell mode · esc to exit";
 const COPY_SELECTION_HINT: &str = "copied to clipboard";
 const COPY_FAILED_HINT: &str = "failed to copy to clipboard";
+
+fn render_idle_navigation_hint(builder: &TuiUiBuilder) -> TuiText {
+    let key = builder.key_hint_style();
+    let action = builder.muted_text_style();
+    TuiText::from_spans([
+        ("↑".to_owned(), key),
+        (" to edit  ".to_owned(), action),
+        ("Esc".to_owned(), key),
+        (" to stop  ".to_owned(), action),
+        ("←".to_owned(), key),
+        (" for conversations".to_owned(), action),
+    ])
+    .truncate()
+}
 /// Keeps an agent-requested command's canonical block out of the TUI's
 /// top-level transcript. The shell-command action embeds the block's terminal
 /// content inside its own disclosure, so the canonical block must have zero
@@ -1057,9 +1071,10 @@ impl TuiTerminalSessionView {
 
     /// Builds the status footer under the input box. The left slot shows one
     /// hint at a time — the ctrl-c exit confirmation while armed, else a
-    /// transient notice, else the shell-mode callout; the active model and
-    /// working directory are pushed to the right edge behind a flex spacer.
-    /// Every child truncates to a single row, so the row lays out one row tall.
+    /// transient notice, else the shell-mode callout, else navigation hints
+    /// after a completed exchange; the active model and working directory are
+    /// pushed to the right edge behind a flex spacer. Every child truncates to
+    /// a single row, so the row lays out one row tall.
     fn render_footer(&self, ctx: &AppContext) -> TuiFlex {
         let builder = TuiUiBuilder::from_app(ctx);
         let muted = builder.muted_text_style();
@@ -1093,6 +1108,17 @@ impl TuiTerminalSessionView {
 
         if let Some((text, style)) = hint {
             left = left.child(TuiText::new(text).with_style(style).truncate().finish());
+        } else if self
+            .conversation_selection
+            .as_ref(ctx)
+            .selected_conversation(ctx)
+            .is_some_and(|conversation| {
+                conversation
+                    .wall_to_wall_response_time_since_last_query()
+                    .is_some()
+            })
+        {
+            left = left.child(render_idle_navigation_hint(&builder).finish());
         }
         let mut footer = TuiFlex::row().flex_child(left.finish());
         let model_name = LLMPreferences::as_ref(ctx)

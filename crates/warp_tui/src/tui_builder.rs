@@ -61,6 +61,10 @@ impl TuiUiBuilder {
         TuiStyle::default()
             .fg(self.foreground_text_color(self.warp_theme.details().sub_text_opacity))
     }
+    /// Light blue-purple key labels used by footer navigation hints.
+    pub(crate) fn key_hint_style(&self) -> TuiStyle {
+        TuiStyle::default().fg(Color::Rgb(208, 209, 254))
+    }
 
     /// Muted and dimmed: de-emphasized status rows (e.g. tool-call stubs).
     pub(crate) fn dim_text_style(&self) -> TuiStyle {
