@@ -232,6 +232,10 @@ impl GeapCredentialsState {
             Self::Missing | Self::Disabled | Self::Refreshing { .. } | Self::Loaded { .. } => None,
         }
     }
+
+    pub fn requires_admin_action(&self) -> bool {
+        self.recovery_action() == Some(GeapRecoveryAction::ContactAdmin)
+    }
 }
 
 #[cfg(test)]

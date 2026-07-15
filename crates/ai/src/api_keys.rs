@@ -11,7 +11,7 @@ use warpui_extras::secure_storage::{self, AppContextExt};
 
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 pub use crate::geap_credentials::{
-    GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding, GeapRecoveryAction,
+    GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
     LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
 };
 

@@ -136,18 +136,23 @@ fn state_recovery_action_for_failed_and_unconfigured() {
         minted_for: binding(),
     };
     assert_eq!(GeapCredentialsState::Missing.recovery_action(), None);
+    assert!(!GeapCredentialsState::Missing.requires_admin_action());
     assert_eq!(GeapCredentialsState::Disabled.recovery_action(), None);
+    assert!(!GeapCredentialsState::Disabled.requires_admin_action());
     assert_eq!(
         GeapCredentialsState::Refreshing { previous: None }.recovery_action(),
         None
     );
+    assert!(!GeapCredentialsState::Refreshing { previous: None }.requires_admin_action());
     assert_eq!(loaded.recovery_action(), None);
+    assert!(!loaded.requires_admin_action());
 
     // An incomplete admin setup routes to admin guidance, not a client retry.
     assert_eq!(
         GeapCredentialsState::Unconfigured.recovery_action(),
         Some(GeapRecoveryAction::ContactAdmin)
     );
+    assert!(GeapCredentialsState::Unconfigured.requires_admin_action());
 
     let failed = GeapCredentialsState::Failed {
         error: LoadGeapCredentialsError::ExchangeToken {
@@ -159,6 +164,15 @@ fn state_recovery_action_for_failed_and_unconfigured() {
         failed.recovery_action(),
         Some(GeapRecoveryAction::ContactAdmin)
     );
+    assert!(failed.requires_admin_action());
+
+    let retryable = GeapCredentialsState::Failed {
+        error: LoadGeapCredentialsError::ExchangeToken {
+            status: Some(503),
+            detail: "unavailable".to_string(),
+        },
+    };
+    assert!(!retryable.requires_admin_action());
 }
 
 #[test]

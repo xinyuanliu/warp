@@ -9665,9 +9665,15 @@ struct GeminiEnterpriseWidget {
 }
 
 impl GeminiEnterpriseWidget {
+    fn is_refresh_enabled(app: &AppContext) -> bool {
+        AISettings::as_ref(app).is_any_ai_enabled(app)
+            && UserWorkspaces::as_ref(app).is_gemini_enterprise_credentials_enabled(app)
+            && !ApiKeyManager::as_ref(app)
+                .geap_credentials_state()
+                .requires_admin_action()
+    }
+
     fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
-        let is_usage_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-            && UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx);
         let refresh_credentials_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Refresh", SecondaryTheme)
                 .with_icon(Icon::RefreshCw04)
@@ -9679,29 +9685,22 @@ impl GeminiEnterpriseWidget {
                 })
         });
         refresh_credentials_button.update(ctx, |button, ctx| {
-            button.set_disabled(!is_usage_enabled, ctx);
+            button.set_disabled(!Self::is_refresh_enabled(ctx), ctx);
         });
 
         let refresh_credentials_button_clone = refresh_credentials_button.clone();
-        ctx.subscribe_to_model(
-            &UserWorkspaces::handle(ctx),
-            move |_, workspace, event, ctx| {
-                if matches!(
-                    event,
-                    UserWorkspacesEvent::TeamsChanged
-                        | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
-                ) {
-                    let is_usage_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                        && workspace
-                            .as_ref(ctx)
-                            .is_gemini_enterprise_credentials_enabled(ctx);
-                    refresh_credentials_button_clone.update(ctx, |button, ctx| {
-                        button.set_disabled(!is_usage_enabled, ctx);
-                    });
-                    ctx.notify();
-                }
-            },
-        );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged
+                    | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
+            ) {
+                refresh_credentials_button_clone.update(ctx, |button, ctx| {
+                    button.set_disabled(!Self::is_refresh_enabled(ctx), ctx);
+                });
+                ctx.notify();
+            }
+        });
 
         let refresh_credentials_button_clone = refresh_credentials_button.clone();
         ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
@@ -9710,12 +9709,19 @@ impl GeminiEnterpriseWidget {
                 AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
                     | AISettingsChangedEvent::IsAnyAIEnabled { .. }
             ) {
-                let is_usage_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-                    && UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx);
                 refresh_credentials_button_clone.update(ctx, |button, ctx| {
-                    button.set_disabled(!is_usage_enabled, ctx);
+                    button.set_disabled(!Self::is_refresh_enabled(ctx), ctx);
                 });
                 ctx.notify();
+            }
+        });
+
+        let refresh_credentials_button_clone = refresh_credentials_button.clone();
+        ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), move |_, _, event, ctx| {
+            if matches!(event, ApiKeyManagerEvent::KeysUpdated) {
+                refresh_credentials_button_clone.update(ctx, |button, ctx| {
+                    button.set_disabled(!Self::is_refresh_enabled(ctx), ctx);
+                });
             }
         });
 
