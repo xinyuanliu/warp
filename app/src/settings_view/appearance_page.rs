@@ -503,6 +503,7 @@ pub enum AppearancePageAction {
     },
     SetInputType(InputBoxType),
     SetAppIcon(AppIcon),
+    SetLanguage(warp_core::Language),
     ToggleShowDockIcon,
     SetCursorType(CursorDisplayType),
     SetWorkspaceDecorationVisibility(WorkspaceDecorationVisibility),
@@ -569,6 +570,7 @@ pub struct AppearanceSettingsPageView {
     thin_strokes_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     enforce_min_contrast_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_mode_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    language_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_type_radio_state: RadioButtonStateHandle,
     app_icon_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     workspace_decorations_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
@@ -684,6 +686,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             } => self.set_input_mode(*new_mode, *from_binding, ctx),
             SetInputType(input_type) => self.set_input_type(*input_type, ctx),
             SetAppIcon(new_icon) => self.set_app_icon(*new_icon, ctx),
+            SetLanguage(new_lang) => self.set_language(*new_lang, ctx),
             ToggleShowDockIcon => self.toggle_show_dock_icon(ctx),
             SetCursorType(cursor_display_type) => self.set_cursor_type(*cursor_display_type, ctx),
             OpacitySliderDragged(val) => self.set_opacity(*val, false, ctx),
@@ -1223,6 +1226,35 @@ impl AppearanceSettingsPageView {
             dropdown
         });
 
+        let language_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(INPUT_MODE_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(INPUT_MODE_DROPDOWN_WIDTH, ctx);
+
+            let values = warp_core::Language::ALL.to_vec();
+            let current_value = *crate::settings::LocalizationSettings::as_ref(ctx).language;
+            let selected_index: usize = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or(0);
+
+            dropdown.add_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.display_name(),
+                            AppearancePageAction::SetLanguage(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+
+            dropdown
+        });
+
         let app_icon_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
             dropdown.set_top_bar_max_width(INPUT_MODE_DROPDOWN_WIDTH);
@@ -1332,6 +1364,7 @@ impl AppearanceSettingsPageView {
             font_weight_dropdown,
             thin_strokes_dropdown,
             input_mode_dropdown,
+            language_dropdown,
             input_type_radio_state,
             app_icon_dropdown,
             enforce_min_contrast_dropdown,
@@ -1360,12 +1393,17 @@ impl AppearanceSettingsPageView {
 
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut categories = vec![Category::new(
+            warp_core::t!("Language"),
+            vec![Box::new(LanguageWidget::default())],
+        )];
+
+        categories.push(Category::new(
             "Themes",
             vec![
                 Box::new(CreateCustomThemeWidget::default()),
                 Box::new(ThemeSelectWidget::default()),
             ],
-        )];
+        ));
 
         if AppIconSettings::as_ref(ctx).is_supported_on_current_platform() {
             categories.push(Category::new(
@@ -2379,6 +2417,26 @@ impl AppearanceSettingsPageView {
                 report_if_error!(session_settings
                     .honor_ps1
                     .set_value(new_type == InputBoxType::Classic, ctx));
+            });
+
+            ctx.notify();
+        }
+    }
+
+    fn set_language(&mut self, new_lang: warp_core::Language, ctx: &mut ViewContext<Self>) {
+        let current = *crate::settings::LocalizationSettings::as_ref(ctx).language;
+        if current != new_lang {
+            crate::settings::LocalizationSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(settings.language.set_value(new_lang, ctx));
+            });
+            // Update the runtime i18n cell so `t!()` returns the new language
+            // immediately; `ctx.notify()` below triggers a re-render.
+            warp_core::localization::set_current(new_lang);
+
+            let item_name = new_lang.display_name();
+            self.language_dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_name(item_name, ctx);
+                ctx.notify();
             });
 
             ctx.notify();
@@ -3760,6 +3818,34 @@ impl SettingsWidget for InputModeWidget {
             ),
             None,
             &view.input_mode_dropdown,
+        )
+    }
+}
+
+#[derive(Default)]
+struct LanguageWidget {}
+
+impl SettingsWidget for LanguageWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "language localization i18n chinese english 简体中文 语言"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            warp_core::t!("Language"),
+            None,
+            None,
+            LocalOnlyIconState::Hidden,
+            None,
+            &view.language_dropdown,
         )
     }
 }

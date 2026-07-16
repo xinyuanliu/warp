@@ -21,6 +21,7 @@ mod input_mode;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
 mod local_control;
+mod localization;
 pub mod macros;
 pub mod manager;
 pub mod native_preference;
@@ -57,6 +58,7 @@ pub use input_mode::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use linux::*;
 pub use local_control::*;
+pub use localization::*;
 pub use native_preference::*;
 pub use onboarding::*;
 pub use pane::*;

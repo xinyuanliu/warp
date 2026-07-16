@@ -17,9 +17,9 @@ use super::{
     AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
     BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
     FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
-    InputSettings, LocalControlSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
-    SelectionSettings, SshSettings, ThemeSettings, TuiAutoupdateSettings, VimBannerSettings,
-    WarpDrivePrivacySettings,
+    InputSettings, LocalControlSettings, LocalizationSettings, PaneSettings,
+    SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
+    TuiAutoupdateSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::appearance;
@@ -79,6 +79,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     SelectionSettings::register(ctx);
     InputModeSettings::register(ctx);
     ThemeSettings::register(ctx);
+    LocalizationSettings::register(ctx);
     TuiAutoupdateSettings::register(ctx);
     AccessibilitySettings::register(ctx);
     NativePreferenceSettings::register(ctx);
@@ -122,6 +123,10 @@ pub fn init(
     ctx.add_singleton_model(|_| SettingsInitializer::new());
 
     register_all_settings(ctx);
+
+    // Load the persisted UI language into the runtime i18n cell so that
+    // `t!()` calls during startup render in the user's chosen language.
+    warp_core::localization::set_current(*LocalizationSettings::as_ref(ctx).language);
 
     // One-time migration: copy public settings from the platform-native store
     // into the TOML file so existing users don't lose their customizations

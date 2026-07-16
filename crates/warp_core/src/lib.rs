@@ -7,6 +7,7 @@ pub mod context_flag;
 pub mod execution_mode;
 pub mod features;
 pub mod interval_timer;
+pub mod localization;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod operating_system_info;
@@ -28,6 +29,7 @@ pub mod user_preferences;
 #[doc(hidden)]
 pub use anyhow as __anyhow;
 pub use app_id::AppId;
+pub use localization::Language;
 pub use session_id::SessionId;
 #[doc(hidden)]
 pub use warp_errors as __warp_errors;
