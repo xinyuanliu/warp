@@ -173,6 +173,16 @@ lazy_static! {
     };
 }
 
+/// Like `translate`, but with an explicit Chinese translation supplied inline.
+/// Used by the two-argument `t!("English", "中文")` form so call sites can
+/// carry their own translation without a central table entry.
+pub fn translate_pair(en: &'static str, zh: &'static str) -> &'static str {
+    match current() {
+        Language::English => en,
+        Language::SimplifiedChinese => zh,
+    }
+}
+
 /// Translate a string literal to the current UI language.
 ///
 /// # Example
@@ -184,8 +194,15 @@ lazy_static! {
 /// Falls back to the English literal when no translation exists, so wrapping
 /// is always safe. Only accepts string literals (`&'static str`); for dynamic
 /// strings, call [`translate`] directly or keep them English.
+///
+/// Two-argument form `t!("English", "中文")` carries the translation inline
+/// (preferred for bulk translation — no central table entry needed, and the
+/// diff stays on a single line for easier upstream merges).
 #[macro_export]
 macro_rules! t {
+    ($en:literal, $zh:literal) => {
+        $crate::localization::translate_pair($en, $zh)
+    };
     ($key:literal) => {
         $crate::localization::translate($key)
     };

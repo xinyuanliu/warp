@@ -168,7 +168,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     ];
 
     menu_items.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-        "Preferences",
+        warp_core::t!("Preferences", "偏好设置"),
         |_| (),
         no_updates,
         None,
@@ -189,14 +189,14 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
 
     menu_items.push(MenuItem::Separator);
     menu_items.push(link_menu_item(
-        "Privacy Policy...",
+        warp_core::t!("Privacy Policy...", "隐私政策..."),
         links::PRIVACY_POLICY_URL.into(),
     ));
 
     let debug_menu_items = debug_menu_items();
     if !debug_menu_items.is_empty() {
         menu_items.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-            "Debug",
+            warp_core::t!("Debug", "调试"),
             |_| (),
             no_updates,
             None,
@@ -210,7 +210,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     menu_items.push(MenuItem::Standard(StandardAction::ShowAllApps));
     menu_items.push(MenuItem::Separator);
     menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Set Warp as Default Terminal",
+        warp_core::t!("Set Warp as Default Terminal", "设置 Warp 为默认终端"),
         move |ctx| {
             DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
                 default_terminal.make_warp_default(ctx)
@@ -230,7 +230,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     )));
     menu_items.push(MenuItem::Separator);
     menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Log out",
+        warp_core::t!("Log out", "退出登录"),
         auth::maybe_log_out,
         move |_, ctx| {
             let is_anonymous = AuthStateProvider::handle(ctx)
@@ -254,7 +254,7 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::OpenRepository, ctx),
         MenuItem::Custom(CustomMenuItem::new_with_submenu(
-            "Open Recent",
+            warp_core::t!("Open Recent", "打开最近"),
             |_| (),
             |_props, ctx| {
                 let recent_repos = generate_recent_repos_for_menu(ctx);
@@ -301,7 +301,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
     ];
     let group_5 = vec![
         MenuItem::Custom(CustomMenuItem::new(
-            "Use Warp's Prompt",
+            warp_core::t!("Use Warp's Prompt", "使用 Warp 提示符"),
             move |ctx| ctx.dispatch_global_action("app:toggle_user_ps1", &()),
             move |_props, ctx| MenuItemPropertyChanges {
                 checked: Some(
@@ -314,7 +314,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
             None,
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "Copy on Select within the Terminal",
+            warp_core::t!("Copy on Select within the Terminal", "在终端内选择时复制"),
             move |ctx| {
                 ctx.dispatch_global_action("app:toggle_copy_on_select", &());
             },
@@ -340,7 +340,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
     edit_menu_items.push(MenuItem::Separator);
 
     edit_menu_items.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-        "Synchronize Inputs",
+        warp_core::t!("Synchronize Inputs", "同步输入"),
         |_| (),
         no_updates,
         None,
@@ -392,7 +392,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::Workflows, ctx),
         MenuItem::Separator,
         MenuItem::Custom(CustomMenuItem::new(
-            "Toggle Mouse Reporting",
+            warp_core::t!("Toggle Mouse Reporting", "切换鼠标报告"),
             move |ctx| {
                 ctx.dispatch_global_action("workspace:toggle_mouse_reporting", &());
             },
@@ -409,7 +409,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             None,
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "Toggle Scroll Reporting",
+            warp_core::t!("Toggle Scroll Reporting", "切换滚动报告"),
             move |ctx| {
                 ctx.dispatch_global_action("workspace:toggle_scroll_reporting", &());
             },
@@ -424,7 +424,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             None,
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "Toggle Focus Reporting",
+            warp_core::t!("Toggle Focus Reporting", "切换焦点报告"),
             move |ctx| {
                 ctx.dispatch_global_action("workspace:toggle_focus_reporting", &());
             },
@@ -450,7 +450,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
     items.extend([
         MenuItem::Separator,
         MenuItem::Custom(CustomMenuItem::new(
-            "Compact Mode",
+            warp_core::t!("Compact Mode", "紧凑模式"),
             move |ctx| {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
                     let current_value = *terminal_settings.spacing_mode;
@@ -741,7 +741,7 @@ fn toggle_bootstrap_block_menu_item() -> MenuItem {
 
 fn make_new_window_menu() -> Menu {
     Menu::new(
-        "Window",
+        warp_core::t!("Window", "窗口"),
         vec![
             MenuItem::Standard(StandardAction::Minimize),
             MenuItem::Standard(StandardAction::Zoom),
@@ -852,7 +852,7 @@ fn debug_menu_items() -> Vec<MenuItem> {
         }
 
         debug_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-            "Manually Toggle Network Status",
+            warp_core::t!("Manually Toggle Network Status", "手动切换网络状态"),
             move |ctx| ctx.dispatch_global_action("workspace:toggle_debug_network_status", &()),
             no_updates,
             None,
@@ -886,7 +886,7 @@ fn debug_menu_items() -> Vec<MenuItem> {
         )));
 
         debug_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-            "Create anonymous user",
+            warp_core::t!("Create anonymous user", "创建匿名用户"),
             move |ctx| ctx.dispatch_global_action("workspace:debug_create_anonymous_user", &()),
             no_updates,
             None,
@@ -913,7 +913,7 @@ fn link_menu_item(title: &'static str, link: Cow<'static, str>) -> MenuItem {
 
 fn feedback_menu_item() -> MenuItem {
     MenuItem::Custom(CustomMenuItem::new(
-        "Send Feedback...",
+        warp_core::t!("Send Feedback...", "发送反馈..."),
         move |ctx| {
             // Route through the root-view action so workspace windows can open the
             // guided AI flow, while non-workspace windows still fall back to the
@@ -930,9 +930,9 @@ fn make_new_help_menu() -> Menu {
         "Help",
         vec![
             feedback_menu_item(),
-            link_menu_item("Warp Documentation...", links::USER_DOCS_URL.into()),
-            link_menu_item("GitHub Issues...", links::GITHUB_ISSUES_URL.into()),
-            link_menu_item("Join our Slack community...", links::SLACK_URL.into()),
+            link_menu_item(warp_core::t!("Warp Documentation...", "Warp 文档..."), links::USER_DOCS_URL.into()),
+            link_menu_item(warp_core::t!("GitHub Issues...", "GitHub 问题..."), links::GITHUB_ISSUES_URL.into()),
+            link_menu_item(warp_core::t!("Join our Slack community...", "Warp Slack 社区..."), links::SLACK_URL.into()),
         ],
     )
 }
@@ -966,7 +966,7 @@ fn make_launch_config_menu_items(ctx: &mut AppContext) -> Vec<MenuItem> {
 
     // TODO(vorporeal): use non_updateable_custom_item() here instead
     launch_config_menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Save New...",
+        warp_core::t!("Save New...", "保存新建..."),
         custom_action_dispatcher(CustomAction::SaveCurrentConfig),
         no_updates,
         custom_shortcut(CustomAction::SaveCurrentConfig),
@@ -981,13 +981,13 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
     // shows its dedicated keystroke instead.
     let mut new_elements_menu = vec![
         MenuItem::Custom(CustomMenuItem::new(
-            "New Window",
+            warp_core::t!("New Window", "新建窗口"),
             open_new_window,
             no_updates,
             Some(Keystroke::parse("cmd-n").expect("Valid keystroke")),
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "New Terminal Tab",
+            warp_core::t!("New Terminal Tab", "新建终端标签页"),
             open_new_default_tab_or_window,
             move |_props: &MenuItemProperties, ctx: &mut AppContext| {
                 let mut changes = MenuItemPropertyChanges::default();
@@ -1012,7 +1012,7 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
             Some(Keystroke::parse("cmd-t").expect("Valid keystroke")),
         )),
         MenuItem::Custom(CustomMenuItem::new(
-            "New Agent Tab",
+            warp_core::t!("New Agent Tab", "新建 Agent 标签页"),
             open_new_agent_tab_or_window,
             move |_props: &MenuItemProperties, ctx: &mut AppContext| {
                 let mut changes = MenuItemPropertyChanges::default();
@@ -1048,7 +1048,7 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
     let reopen_session_action_updater =
         custom_action_updater(CustomAction::ReopenClosedSession, Box::new(|_| false));
     new_elements_menu.push(MenuItem::Custom(CustomMenuItem::new(
-        "Reopen closed session",
+        warp_core::t!("Reopen closed session", "重新打开已关闭的会话"),
         |ctx| {
             UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
                 stack.undo_close(ctx);
@@ -1063,7 +1063,7 @@ fn make_new_elements_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
     )));
 
     new_elements_menu.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
-        "Launch Configurations",
+        warp_core::t!("Launch Configurations", "启动配置"),
         |_| (),
         |_props, ctx| MenuItemPropertyChanges {
             submenu: Some(Some(make_launch_config_menu_items(ctx))),

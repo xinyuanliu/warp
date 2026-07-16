@@ -2977,7 +2977,7 @@ impl SettingsWidget for ThemeSelectWidget {
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(render_body_item::<AppearancePageAction>(
-                "Sync with OS".into(),
+                warp_core::t!("Sync with OS", "跟随系统").into(),
                 None,
                 LocalOnlyIconState::for_setting(
                     UseSystemTheme::storage_key(),
@@ -3163,7 +3163,7 @@ impl SettingsWidget for CustomWindowSizeWidget {
         let row_border_color: Option<Fill> =
             (!view.valid_new_window_rows).then(|| themes::theme::Fill::error().into());
         let mut column = Flex::column().with_child(render_body_item::<AppearancePageAction>(
-            "Open new windows with custom size".into(),
+            warp_core::t!("Open new windows with custom size", "以自定义尺寸打开新窗口").into(),
             None,
             LocalOnlyIconState::for_setting(
                 OpenWindowsAtCustomSize::storage_key(),
@@ -3187,7 +3187,7 @@ impl SettingsWidget for CustomWindowSizeWidget {
         if *window_settings.open_windows_at_custom_size.value() {
             column.add_child(
                 Container::new(render_body_item::<AppearancePageAction>(
-                    "Columns".into(),
+                    warp_core::t!("Columns", "列数").into(),
                     None,
                     // We show the local-only icon for this with the toggle, not the individual inputs.
                     LocalOnlyIconState::Hidden,
@@ -3223,7 +3223,7 @@ impl SettingsWidget for CustomWindowSizeWidget {
             );
             column.add_child(
                 Container::new(render_body_item::<AppearancePageAction>(
-                    "Rows".into(),
+                    warp_core::t!("Rows", "行数").into(),
                     None,
                     // We show the local-only icon for this with the toggle, not the individual inputs.
                     LocalOnlyIconState::Hidden,
@@ -3477,7 +3477,7 @@ impl SettingsWidget for WindowBlurTextureWidget {
         let window_settings = WindowSettings::as_ref(app);
         let use_blur_texture = *window_settings.background_blur_texture;
         let mut col = Flex::column().with_child(render_body_item::<AppearancePageAction>(
-            "Use Window Blur (Acrylic texture)".to_string(),
+            warp_core::t!("Use Window Blur (Acrylic texture)", "使用窗口模糊（亚克力纹理）").to_string(),
             None,
             LocalOnlyIconState::for_setting(
                 BackgroundBlurTexture::storage_key(),
@@ -3541,7 +3541,7 @@ impl SettingsWidget for ToolsPanelStateScopeWidget {
         let is_enabled = *window_settings.left_panel_visibility_across_tabs;
 
         render_body_item::<AppearancePageAction>(
-            "Tools panel visibility is consistent across tabs".to_string(),
+            warp_core::t!("Tools panel visibility is consistent across tabs", "工具面板在各标签页中保持一致的显示状态").to_string(),
             None,
             LocalOnlyIconState::for_setting(
                 LeftPanelVisibilityAcrossTabs::storage_key(),
@@ -3778,7 +3778,7 @@ impl SettingsWidget for InputTypeWidget {
             .finish();
 
         render_body_item::<AppearancePageAction>(
-            "Input type".into(),
+            warp_core::t!("Input type", "输入类型").into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -3957,7 +3957,7 @@ impl SettingsWidget for DimInactivePanesWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<AppearancePageAction>(
-            "Dim inactive panes".into(),
+            warp_core::t!("Dim inactive panes", "淡化非活跃面板").into(),
             None,
             LocalOnlyIconState::for_setting(
                 ShouldDimInactivePanes::storage_key(),
@@ -4000,7 +4000,7 @@ impl SettingsWidget for FocusFollowsMouseWidget {
         app: &AppContext,
     ) -> Box<dyn Element> {
         render_body_item::<AppearancePageAction>(
-            "Focus follows mouse".into(),
+            warp_core::t!("Focus follows mouse", "焦点跟随鼠标").into(),
             None,
             LocalOnlyIconState::for_setting(
                 FocusPaneOnHover::storage_key(),
@@ -4048,7 +4048,7 @@ impl SettingsWidget for CompactModeWidget {
         );
 
         render_body_item::<AppearancePageAction>(
-            "Compact mode".into(),
+            warp_core::t!("Compact mode", "紧凑模式").into(),
             None,
             LocalOnlyIconState::for_setting(
                 Spacing::storage_key(),
@@ -4095,7 +4095,7 @@ impl SettingsWidget for JumpToBottomOfBlockWidget {
             .show_jump_to_bottom_of_block_button
             .value();
         render_body_item::<AppearancePageAction>(
-            "Show Jump to Bottom of Block button".into(),
+            warp_core::t!("Show Jump to Bottom of Block button", "显示'跳到块底部'按钮").into(),
             None,
             LocalOnlyIconState::for_setting(
                 ShowJumpToBottomOfBlockButton::storage_key(),
@@ -4142,7 +4142,7 @@ impl SettingsWidget for ShowBlockDividersWidget {
         let block_list_settings = BlockListSettings::as_ref(app);
         let enabled = block_list_settings.show_block_dividers.value();
         render_body_item::<AppearancePageAction>(
-            "Show block dividers".into(),
+            warp_core::t!("Show block dividers", "显示块分隔线").into(),
             None,
             LocalOnlyIconState::for_setting(
                 ShowBlockDividers::storage_key(),
@@ -4188,7 +4188,7 @@ impl SettingsWidget for AIFontWidget {
         let mut ai_font_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         let mut ai_font = Flex::column();
         ai_font.add_child(render_body_item_label::<AppearancePageAction>(
-            "Agent font".to_string(),
+            warp_core::t!("Agent font", "代理字体").to_string(),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -4350,7 +4350,7 @@ impl SettingsWidget for TerminalFontWidget {
         // Terminal Font
         let mut terminal_font = Flex::column();
         terminal_font.add_child(render_body_item_label::<AppearancePageAction>(
-            "Terminal font".to_string(),
+            warp_core::t!("Terminal font", "终端字体").to_string(),
             None,
             None,
             LocalOnlyIconState::for_setting(
@@ -4676,7 +4676,7 @@ impl SettingsWidget for LigaturesWidget {
         let ligature_rendering_enabled = ligature_rendering.value();
 
         render_body_item::<AppearancePageAction>(
-            "Show ligatures in terminal".into(),
+            warp_core::t!("Show ligatures in terminal", "在终端中显示连字").into(),
             Some(AdditionalInfo {
                 mouse_state: self.info_mouse_state.clone(),
                 on_click_action: None,
@@ -4741,7 +4741,7 @@ impl SettingsWidget for CursorTypeWidget {
         let cursor_display_types: Vec<CursorDisplayType> = all::<CursorDisplayType>().collect();
 
         render_body_item::<AppearancePageAction>(
-            "Cursor type".into(),
+            warp_core::t!("Cursor type", "光标类型").into(),
             None,
             LocalOnlyIconState::for_setting(
                 CursorBlinkEnabled::storage_key(),
@@ -4810,7 +4810,7 @@ impl SettingsWidget for BlinkingCursorWidget {
         let settings = AppEditorSettings::as_ref(app);
         let cursor_blink = &settings.cursor_blink;
         render_body_item::<AppearancePageAction>(
-            "Blinking cursor".into(),
+            warp_core::t!("Blinking cursor", "光标闪烁").into(),
             None,
             LocalOnlyIconState::for_setting(
                 CursorBlinkEnabled::storage_key(),
@@ -4888,7 +4888,7 @@ impl SettingsWidget for TabIndicatorWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            "Show tab indicators".into(),
+            warp_core::t!("Show tab indicators", "显示标签指示符").into(),
             None,
             LocalOnlyIconState::for_setting(
                 ShowIndicatorsButton::storage_key(),
@@ -4933,7 +4933,7 @@ impl SettingsWidget for CodeReviewButtonWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            "Show code review button".into(),
+            warp_core::t!("Show code review button", "显示代码审查按钮").into(),
             None,
             LocalOnlyIconState::for_setting(
                 ShowCodeReviewButton::storage_key(),
@@ -5023,7 +5023,7 @@ impl SettingsWidget for VerticalTabsWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            "Use vertical tab layout".into(),
+            warp_core::t!("Use vertical tab layout", "使用垂直标签布局").into(),
             None,
             LocalOnlyIconState::for_setting(
                 UseVerticalTabs::storage_key(),
@@ -5068,7 +5068,7 @@ impl SettingsWidget for ShowVerticalTabPanelInRestoredWindowsWidget {
         let tab_settings = TabSettings::as_ref(app);
 
         render_body_item::<AppearancePageAction>(
-            "Show vertical tabs panel in restored windows".into(),
+            warp_core::t!("Show vertical tabs panel in restored windows", "在还原的窗口中显示垂直标签面板").into(),
             None,
             LocalOnlyIconState::for_setting(
                 ShowVerticalTabPanelInRestoredWindows::storage_key(),
