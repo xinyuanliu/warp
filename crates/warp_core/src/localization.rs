@@ -97,21 +97,30 @@ lazy_static! {
         // ---- Appearance page (settings_view/appearance_page.rs) ----
         m.insert("Appearance", "外观");
         m.insert("Language", "语言");
-        m.insert("Theme", "Theme"); // technical term kept in English
-        m.insert("Themes", "Themes");
+        m.insert("Theme", "主题");
+        m.insert("Themes", "主题");
         m.insert("Window", "窗口");
-        m.insert("Font", "Font"); // technical term
-        m.insert("Cursor", "Cursor"); // technical term
+        m.insert("Font", "字体");
+        m.insert("Cursor", "光标");
         m.insert("Input", "输入");
+        m.insert("Icon", "图标");
+        m.insert("Panes", "面板");
+        m.insert("Text", "文本");
+        m.insert("Tabs", "标签页");
+        m.insert("Tab", "标签页");
+        m.insert("Blocks", "块");
+        m.insert("Block", "块");
+        m.insert("Tools panel", "工具面板");
+        m.insert("Full-screen Apps", "全屏应用");
 
         // ---- Menu bar top-level (app_menus.rs) ----
         m.insert("File", "文件");
         m.insert("Edit", "编辑");
         m.insert("View", "视图");
-        m.insert("Tab", "Tab"); // technical term
-        m.insert("Blocks", "Blocks"); // technical term
-        m.insert("AI", "AI"); // technical term
-        m.insert("Drive", "Drive"); // technical term
+        m.insert("AI", "AI"); // widely used untranslated in Chinese
+        m.insert("Drive", "Drive"); // Warp Drive feature name
+        m.insert("Shell", "Shell"); // widely used untranslated
+        m.insert("SSH", "SSH"); // protocol name
         m.insert("Help", "帮助");
         m.insert("New Window", "新建窗口");
         m.insert("New Tab", "新建标签页");
